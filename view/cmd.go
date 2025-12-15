@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/projectqai/hydra/builtin"
 	"github.com/spf13/cobra"
@@ -61,6 +62,11 @@ var CMD = &cobra.Command{
 }
 
 func init() {
-	CMD.Flags().StringVarP(&port, "port", "p", "8080", "port to serve on")
+	defaultPort := "8080"
+	if p := os.Getenv("PORT"); p != "" {
+		defaultPort = p
+	}
+
+	CMD.Flags().StringVarP(&port, "port", "p", defaultPort, "port to serve on")
 	builtin.CMD.AddCommand(CMD)
 }

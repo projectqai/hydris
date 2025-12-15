@@ -3,6 +3,27 @@
 import { credentials } from '@grpc/grpc-js';
 import { GrpcTransport } from '@protobuf-ts/grpc-transport';
 import { WorldServiceClient } from './generated/world.client';
+import { parseArgs } from 'util';
+
+// Parse command line arguments
+const { values } = parseArgs({
+  args: Bun.argv.slice(2),
+  options: {
+    port: {
+      type: 'string',
+      short: 'p',
+      default: '50051',
+    },
+    host: {
+      type: 'string',
+      short: 'h',
+      default: 'localhost',
+    },
+  },
+});
+
+const SERVER_HOST = values.host;
+const SERVER_PORT = values.port;
 
 // Berlin Brandenburg Airport (BER) coordinates
 const BER_LAT = 52.3667;
@@ -42,9 +63,12 @@ const drone = {
 };
 
 async function pushEntities() {
+  const serverAddress = `${SERVER_HOST}:${SERVER_PORT}`;
+  console.log(`Connecting to ${serverAddress}...\n`);
+
   // Create gRPC transport
   const transport = new GrpcTransport({
-    host: 'localhost:50051',
+    host: serverAddress,
     channelCredentials: credentials.createInsecure(),
   });
 

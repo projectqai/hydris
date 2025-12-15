@@ -5,6 +5,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const DefaultPort = "50051"
+
 var CMD = &cobra.Command{
 	Use:   "hydra",
 	Short: "world state machine",

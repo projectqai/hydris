@@ -146,7 +146,7 @@ func RunEngine(cmd *cobra.Command, args []string) error {
 	})
 
 	httpServer := &http.Server{
-		Addr:    ":50051",
+		Addr:    ":" + Port,
 		Handler: h2c.NewHandler(corsHandler.Handler(mux), &http2.Server{}),
 	}
 
@@ -162,12 +162,12 @@ func RunEngine(cmd *cobra.Command, args []string) error {
 	fmt.Println(" running at:")
 	green.Print("  ➜ ")
 	fmt.Print("Local:   ")
-	cyan.Println("http://localhost:50051")
+	cyan.Printf("http://localhost:%s\n", Port)
 
 	for _, ip := range localIPs {
 		green.Print("  ➜ ")
 		fmt.Print("Network: ")
-		cyan.Printf("http://%s:50051\n", ip)
+		cyan.Printf("http://%s:%s\n", ip, Port)
 	}
 	fmt.Println()
 	if err := httpServer.ListenAndServe(); err != nil {

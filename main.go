@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	_ "github.com/projectqai/hydra/logging"
 
 	"github.com/projectqai/hydra/cmd"
@@ -27,7 +29,7 @@ func init() {
 		}()
 
 		if all || enableView {
-			browser.OpenURL("http://localhost:50051")
+			browser.OpenURL(fmt.Sprintf("http://localhost:%s", engine.Port))
 		}
 
 		err := <-errc

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/projectqai/hydra/builtin"
 	"github.com/projectqai/hydra/cmd"
 	"github.com/projectqai/hydra/goclient"
 	pb "github.com/projectqai/proto/go"
@@ -25,7 +24,7 @@ func init() {
 		Short:             "entity/components client",
 		PersistentPreRunE: connect,
 	}
-	ECCMD.PersistentFlags().StringVar(&serverURL, "server", "localhost:50051", "gRPC server address")
+	ECCMD.PersistentFlags().StringVar(&serverURL, "server", "localhost:"+cmd.DefaultPort, "gRPC server address")
 
 	lsCmd := &cobra.Command{
 		Use:     "ls",
@@ -84,7 +83,7 @@ func runObserve(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	conn, err := goclient.Connect(builtin.ServerURL)
+	conn, err := goclient.Connect(serverURL)
 	if err != nil {
 		return err
 	}
@@ -152,7 +151,7 @@ func printEntitiesTable(entities []*pb.Entity) {
 }
 
 func runDebug(cmd *cobra.Command, args []string) error {
-	conn, err := goclient.Connect(builtin.ServerURL)
+	conn, err := goclient.Connect(serverURL)
 	if err != nil {
 		return err
 	}

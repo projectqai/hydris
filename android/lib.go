@@ -16,6 +16,20 @@ import (
 	"golang.org/x/net/http2/h2c"
 )
 
+// Port is the configurable port for the engine server
+var Port int = 50051
+
+// SetPort sets the port for the engine server. Must be called before StartEngine().
+// Returns an error message if the engine is already running.
+// Using string here instead of go error for easier interoperability with Android/TS.
+func SetPort(p int) string {
+	if globalService != nil {
+		return "Error: cannot change port while engine is running"
+	}
+	Port = p
+	return fmt.Sprintf("port set to %d", p)
+}
+
 type EngineService struct {
 	server     *http.Server
 	engine     *engine.WorldServer
@@ -64,7 +78,7 @@ func StartEngine() string {
 	})
 
 	service.server = &http.Server{
-		Addr:    ":50051",
+		Addr:    fmt.Sprintf(":%d", Port),
 		Handler: h2c.NewHandler(corsHandler.Handler(mux), &http2.Server{}),
 	}
 
@@ -76,7 +90,7 @@ func StartEngine() string {
 
 	time.Sleep(100 * time.Millisecond)
 	globalService = service
-	return "Engine started on :50051"
+	return fmt.Sprintf("Engine started on :%d", Port)
 }
 
 func StopEngine() string {
@@ -105,5 +119,10 @@ func GetEngineStatus() string {
 	if globalService == nil {
 		return "stopped"
 	}
-	return "running on :50051"
+	return fmt.Sprintf("running on :%d", Port)
+}
+
+// GetPort returns the currently configured port.
+func GetPort() int {
+	return Port
 }

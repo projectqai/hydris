@@ -16,6 +16,6 @@ var CMD = &cobra.Command{
 }
 
 func init() {
-	CMD.PersistentFlags().StringVarP(&ServerURL, "server", "s", "localhost:50051", "world server url")
+	CMD.PersistentFlags().StringVarP(&ServerURL, "server", "s", "localhost:"+cmd.DefaultPort, "world server url")
 	cmd.CMD.AddCommand(CMD)
 }
