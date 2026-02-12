@@ -1,0 +1,195 @@
+// reverse engineered meshtastic serial wire protocol from a t-echo
+// this seems to work just fine, but only tested what we need
+//go:generate protoc --go_out=. --go_opt=paths=source_relative mesh.proto
+syntax = "proto3";
+package meshpb;
+option go_package = "github.com/projectqai/hydris/builtin/meshtastic/meshpb";
+
+enum Port {
+  PORT_UNKNOWN       = 0;
+  PORT_TEXT          = 1;
+  PORT_POSITION      = 3;
+  PORT_NODEINFO      = 4;
+  PORT_TELEMETRY     = 67;
+  PORT_TAK           = 72;
+  PORT_TAK_FORWARDER = 257;
+  PORT_HYDRIS        = 78;
+}
+
+message Payload {
+  Port  port    = 1;
+  bytes data    = 2;
+}
+
+message Packet {
+  fixed32 src     = 1;
+  fixed32 dst     = 2;
+  uint32  ch      = 3;
+  oneof body {
+    Payload decoded   = 4;
+    bytes   encrypted = 5;
+  }
+  fixed32 id        = 6;
+  fixed32 rx_time   = 7;
+  float   rx_snr    = 8;
+  uint32  hop_limit = 9;
+  bool    want_ack  = 10;
+  int32   rx_rssi   = 12;
+  uint32  hop_start = 15;
+}
+
+message ToRadio {
+  oneof msg {
+    Packet packet         = 1;
+    uint32 want_config_id = 3;
+  }
+}
+
+message FromRadio {
+  uint32 id = 1;
+  oneof msg {
+    Packet       packet             = 2;
+    NodeSelf     self               = 3;
+    NodeEntry    node               = 4;
+    RadioConfig  config             = 5;
+    Log          log                = 6;
+    uint32       config_complete_id = 7;
+    ModConfig    mod_config         = 9;
+    Chan         channel            = 10;
+    TxQueue      queue              = 11;
+  }
+}
+
+message NodeSelf {
+  uint32 node_num = 1;
+}
+
+message Peer {
+  string id         = 1;
+  string long_name  = 2;
+  string short_name = 3;
+  bytes  mac        = 4;
+  uint32 hw         = 5;
+  uint32 role       = 7;
+}
+
+message Pos {
+  sfixed32 lat_i      = 1;
+  sfixed32 lon_i      = 2;
+  int32    alt        = 3;
+  fixed32  time       = 4;
+  uint32   sats       = 19;
+}
+
+message NodeEntry {
+  uint32 num        = 1;
+  Peer   peer       = 2;
+  Pos    position   = 3;
+  float  snr        = 4;
+  fixed32 last_heard = 5;
+}
+
+message Log {
+  string message = 1;
+  uint32 level   = 4;
+}
+
+message TxQueue {
+  int32  res    = 1;
+  uint32 free   = 2;
+  uint32 maxlen = 3;
+}
+
+message Chan {
+  int32  index    = 1;
+  bytes  settings = 2;
+  uint32 role     = 3;
+}
+
+message RadioConfig {
+  oneof section {
+    bytes device    = 1;
+    bytes position  = 2;
+    bytes power     = 3;
+    bytes network   = 4;
+    bytes display   = 5;
+    bytes lora      = 6;
+    bytes bluetooth = 7;
+    bytes security  = 8;
+  }
+}
+
+message ModConfig {
+  oneof section {
+    bytes mqtt          = 1;
+    bytes serial        = 2;
+    bytes ext_notify    = 3;
+    bytes store_fwd     = 4;
+    bytes range_test    = 5;
+    bytes telemetry     = 6;
+    bytes canned_msg    = 7;
+    bytes audio         = 8;
+    bytes remote_hw     = 9;
+    bytes neighbor_info = 10;
+    bytes ambient_light = 11;
+    bytes detect_sensor = 12;
+    bytes paxcounter    = 13;
+  }
+}
+
+// TAK application layer
+
+message TAKContact {
+  string callsign        = 1;
+  string device_callsign = 2;
+}
+
+message TAKGroup {
+  uint32 role = 1;
+  uint32 team = 2;
+}
+
+message TAKStatus {
+  uint32 battery = 1;
+}
+
+message TAKPLI {
+  sfixed32 lat_i = 1;
+  sfixed32 lon_i = 2;
+  int32    alt   = 3;
+  uint32   speed = 4;
+  uint32   course = 5;
+}
+
+message TAKChat {
+  string message = 1;
+  string to      = 2;
+}
+
+message TAKPacket {
+  bool       compressed = 1;
+  TAKContact contact    = 2;
+  TAKGroup   group      = 3;
+  TAKStatus  status     = 4;
+  oneof body {
+    TAKPLI  pli  = 5;
+    TAKChat chat = 6;
+  }
+}
+
+// Telemetry
+
+message DevMetrics {
+  uint32 battery_level = 1;
+  float  voltage       = 2;
+  float  ch_util       = 3;
+  float  air_util_tx   = 4;
+  uint32 uptime        = 5;
+}
+
+message Telem {
+  fixed32 time = 1;
+  oneof reading {
+    DevMetrics device = 2;
+  }
+}

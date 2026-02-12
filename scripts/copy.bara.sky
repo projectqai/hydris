@@ -1,0 +1,20 @@
+url = "git@github.com:projectqai/hydris.git"
+
+core.workflow(
+    name = "default",
+    origin = git.origin(
+        url = "ORIGIN_URL",
+        ref = "main",
+    ),
+    destination = git.destination(
+        url = url,
+        push = "main",
+        fetch = "copybara_none",
+    ),
+    authoring = authoring.overwrite("Project Q <opensource@project-q.ai>"),
+    origin_files = glob(["**"], exclude = ["copy.bara.sky"]),
+    mode = "SQUASH",
+    transformations = [
+        metadata.replace_message("release"),
+    ],
+)

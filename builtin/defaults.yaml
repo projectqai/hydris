@@ -1,0 +1,10 @@
+---
+id: meshtastic.config.radio1
+config:
+    controller: meshtastic
+    key: meshtastic.usb.v0
+    value:
+        channel: 0
+        hop_limit: 3
+        send_format: hydris
+

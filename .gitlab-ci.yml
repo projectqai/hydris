@@ -1,0 +1,188 @@
+stages:
+  - build
+  - release
+
+variables:
+  GO_VERSION: "1.25.5"
+  PROTOC_VERSION: "28.3"
+
+.go-setup: &go-setup
+  - wget -q https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
+  - sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
+  - export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
+
+.protoc-setup: &protoc-setup
+  - wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip
+  - sudo unzip -o protoc-${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
+  - sudo chmod +x /usr/local/bin/protoc
+
+.go-tools-setup: &go-tools-setup
+  - go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+  - go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+  - go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
+  - go install github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc@latest
+  - go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
+
+.node-setup: &node-setup
+  - wget -q https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-x64.tar.gz
+  - sudo tar -xzf node-v20.18.0-linux-x64.tar.gz -C /usr/local --strip-components=1
+
+.bun-setup: &bun-setup
+  - curl -fsSL https://bun.sh/install | bash
+  - export PATH=$PATH:$HOME/.bun/bin
+
+vet:
+  stage: build
+  image: ubuntu:22.04
+  before_script:
+    - apt-get update && apt-get install -y wget unzip curl sudo git make
+    - *go-setup
+    - *protoc-setup
+    - *go-tools-setup
+    - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+    - go install golang.org/x/vuln/cmd/govulncheck@latest
+  script:
+    - make gen
+    - make vet
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_MERGE_REQUEST_ID
+
+build:
+  stage: build
+  image: ubuntu:22.04
+  before_script:
+    - apt-get update && apt-get install -y wget unzip curl sudo git rsync make
+    - *node-setup
+    - *go-setup
+    - *protoc-setup
+    - *go-tools-setup
+    - *bun-setup
+  script:
+    - (cd view/frontend && bun i)
+    - make
+    - |
+      if [[ -n "$CI_COMMIT_TAG" ]]; then
+        TAG_NAME=$CI_COMMIT_TAG
+      else
+        TAG_NAME=${CI_COMMIT_SHORT_SHA}
+      fi
+    - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o hydris-linux-amd64-${TAG_NAME} .
+    - CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o hydris-linux-arm64-${TAG_NAME} .
+    - CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o hydris-windows-amd64-${TAG_NAME}.exe .
+    - CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o hydris-darwin-amd64-${TAG_NAME} .
+    - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o hydris-darwin-arm64-${TAG_NAME} .
+  artifacts:
+    paths:
+      - hydris-linux-amd64-*
+      - hydris-linux-arm64-*
+      - hydris-windows-amd64-*.exe
+      - hydris-darwin-amd64-*
+      - hydris-darwin-arm64-*
+    expire_in: 7 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+android:
+  stage: build
+  image: ubuntu:22.04
+  variables:
+    ANDROID_SDK_ROOT: "/opt/android-sdk"
+    ANDROID_HOME: "/opt/android-sdk"
+  before_script:
+    - apt-get update && apt-get install -y wget unzip curl sudo git rsync make openjdk-17-jdk
+    - *node-setup
+    - *go-setup
+    - *protoc-setup
+    - *go-tools-setup
+    - *bun-setup
+    # Install Android SDK
+    - mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+    - wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+    - unzip -q cmdline-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
+    - mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
+    - export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools
+    - yes | sdkmanager --licenses || true
+    - sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
+    - export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
+  script:
+    - export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools
+    - export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
+    - make android
+  artifacts:
+    paths:
+      - view/frontend/apps/foss/android/app/build/outputs/apk/release/app-release.apk
+    expire_in: 7 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+docker:
+  stage: build
+  image: docker:24
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - |
+      if [[ -n "$CI_COMMIT_TAG" ]]; then
+        docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG -t $CI_REGISTRY_IMAGE:latest .
+        docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
+        docker push $CI_REGISTRY_IMAGE:latest
+      else
+        docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA -t $CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH .
+        docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+        docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH
+      fi
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: build
+      artifacts: true
+    - job: android
+      artifacts: true
+  script:
+    - echo "Creating release for $CI_COMMIT_TAG"
+  release:
+    tag_name: $CI_COMMIT_TAG
+    name: "Release $CI_COMMIT_TAG"
+    description: |
+      Release $CI_COMMIT_TAG
+
+      ## Downloads
+      - Linux AMD64: hydris-linux-amd64-$CI_COMMIT_TAG
+      - Linux ARM64: hydris-linux-arm64-$CI_COMMIT_TAG
+      - Windows AMD64: hydris-windows-amd64-$CI_COMMIT_TAG.exe
+      - macOS AMD64: hydris-darwin-amd64-$CI_COMMIT_TAG
+      - macOS ARM64: hydris-darwin-arm64-$CI_COMMIT_TAG
+      - Android APK: app-release.apk
+
+      ## Docker Image
+      ```
+      docker run -p 50051:50051 -ti $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
+      ```
+    assets:
+      links:
+        - name: "hydris-linux-amd64-$CI_COMMIT_TAG"
+          url: "${CI_JOB_URL}/artifacts/file/hydris-linux-amd64-${CI_COMMIT_TAG}"
+        - name: "hydris-linux-arm64-$CI_COMMIT_TAG"
+          url: "${CI_JOB_URL}/artifacts/file/hydris-linux-arm64-${CI_COMMIT_TAG}"
+        - name: "hydris-windows-amd64-$CI_COMMIT_TAG.exe"
+          url: "${CI_JOB_URL}/artifacts/file/hydris-windows-amd64-${CI_COMMIT_TAG}.exe"
+        - name: "hydris-darwin-amd64-$CI_COMMIT_TAG"
+          url: "${CI_JOB_URL}/artifacts/file/hydris-darwin-amd64-${CI_COMMIT_TAG}"
+        - name: "hydris-darwin-arm64-$CI_COMMIT_TAG"
+          url: "${CI_JOB_URL}/artifacts/file/hydris-darwin-arm64-${CI_COMMIT_TAG}"
+        - name: "app-release.apk"
+          url: "${CI_JOB_URL}/artifacts/file/view/frontend/apps/foss/android/app/build/outputs/apk/release/app-release.apk"
+  rules:
+    - if: $CI_COMMIT_TAG

@@ -1,0 +1,121 @@
+---
+id: camera-Grimstad-Gjestehavn
+label: Grimstad Gjestehavn
+symbol:
+    milStd2525C: SFGPE-----
+geo:
+    latitude: 58.34116129673865
+    longitude: 8.595235347747805
+camera:
+    cameras:
+        - label: Grimstad Gjestehavn
+          protocol: CameraProtocolMjpeg
+          url: http://213.236.250.78/mjpg/video.mjpg
+---
+id: camera-Hamburg-Strandweg-Port
+label: Hamburg - Strandweg - Port
+symbol:
+    milStd2525C: SFGPE-----
+geo:
+    latitude: 53.557779405425684
+    longitude: 9.795713307927747
+camera:
+    cameras:
+        - label: Hamburg - Strandweg - Port
+          protocol: CameraProtocolImage
+          url: https://www.hafen-hamburg.de/assets/files/wcpath_uuGl4KkwyCyXd39jVZyN4J6jiKQLVz1u/blankenese.jpg
+---
+id: camera-Hirtshals-Harbour
+label: Hirtshals - Harbour
+symbol:
+    milStd2525C: SFGPE-----
+geo:
+    latitude: 57.590181767096595
+    longitude: 9.971230030059814
+camera:
+    cameras:
+        - label: Nordlig retning
+          protocol: CameraProtocolImage
+          url: https://data.portofhirtshals.dk/webcam/webcam.aspx?imgno=2&v=2617
+        - label: Østlig retning
+          protocol: CameraProtocolImage
+          url: https://data.portofhirtshals.dk/webcam/webcam.aspx?imgno=1&v=2620
+---
+id: camera-Kristiansand-Korsvikfjorden
+label: Kristiansand Korsvikfjorden
+symbol:
+    milStd2525C: SFGPE-----
+geo:
+    latitude: 58.148118763061156
+    longitude: 8.0724835395813
+camera:
+    cameras:
+        - label: Kristiansand - Korsvikfjorden
+          protocol: CameraProtocolHls
+          url: https://lon.rtsp.me/ar6PyjiqV9w0wBXoI1cV2A/1767980259/hls/Be5inzdy.m3u8
+---
+id: camera-Kristiansand-Port
+label: Kristiansand Port
+symbol:
+    milStd2525C: SFGPE-----
+geo:
+    latitude: 58.14666929312107
+    longitude: 8.00609350204468
+camera:
+    cameras:
+        - label: Kristiansand Port
+          protocol: CameraProtocolHls
+          url: https://polarislive-lh.akamaized.net/hls/live/2039438/fvn/jqGugHSmKzQwRw5pMerRL/source.m3u8
+---
+id: camera-Vest-Agder-Lindesnes-Lighthouse
+label: Vest-Agder - Lindesnes Lighthouse
+symbol:
+    milStd2525C: SFGPE-----
+geo:
+    latitude: 57.98463738395755
+    longitude: 7.04800844192505
+camera:
+    cameras:
+        - label: Vest-Agder - Lindesnes Lighthouse
+          protocol: CameraProtocolHls
+          url: https://polarislive-lh.akamaized.net/hls/live/2039440/fvn/9wOObU20Nmtsqt8WRITUL/source.m3u8
+---
+id: camera-elbwarte
+label: Hamburg Elbwarte Camera
+symbol:
+    milStd2525C: SFGPE-----
+geo:
+    latitude: 53.54390832338853
+    longitude: 9.91691900456634
+camera:
+    cameras:
+        - label: Altona Ost
+          protocol: CameraProtocolHls
+          url: https://webcam.solutionshosted.de/memfs/152a3e27-17e0-4a83-8552-50fa329f3adf.m3u8
+---
+id: camera-rathausmarkt-hamburg
+label: Rathausmarkt Hamburg
+symbol:
+    milStd2525C: SFGPE-----
+geo:
+    latitude: 53.5502801744295
+    longitude: 9.994284328189677
+camera:
+    cameras:
+        - label: Rathausmarkt Hamburg
+          protocol: CameraProtocolHls
+          url: https://webcam.solutionshosted.de/memfs/f49beef4-ac34-49c2-ae20-ff696814f8c5_output_0.m3u8
+---
+id: camera-wasserturm-wedel
+label: Wasserturm Wedel
+symbol:
+    milStd2525C: SFGPE-----
+geo:
+    latitude: 53.579862183520746
+    longitude: 9.706512664891015
+camera:
+    cameras:
+        - label: Wasserturm Wedel
+          protocol: CameraProtocolHls
+          url: https://webcam.solutionshosted.de/memfs/b423783c-7975-4f18-8351-4f6a0a357e19_output_0.m3u8
+---
