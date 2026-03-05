@@ -8,7 +8,7 @@ import (
 
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestParseEntities_SingleEntity(t *testing.T) {
@@ -172,33 +172,28 @@ func TestEntitiesToYAML_Roundtrip(t *testing.T) {
 	}
 }
 
-func TestShouldPersist(t *testing.T) {
+func TestIsLocal(t *testing.T) {
 	w := testWorld(nil)
+	w.nodeID = "mynode"
 
-	// Normal entity - should persist
-	if !w.shouldPersist(&pb.Entity{Id: "e1"}) {
-		t.Error("plain entity should be persisted")
+	// No controller - not local
+	if w.isLocal(&pb.Entity{Id: "e1"}) {
+		t.Error("entity without controller should not be local")
 	}
 
-	// Has controller with id - skip
-	if w.shouldPersist(&pb.Entity{Id: "e1", Controller: &pb.Controller{Id: proto.String("ctrl")}}) {
-		t.Error("entity with controller should not be persisted")
+	// Controller with matching node - local
+	if !w.isLocal(&pb.Entity{Id: "e1", Controller: &pb.Controller{Node: proto.String("mynode")}}) {
+		t.Error("entity with matching controller.node should be local")
 	}
 
-	// Has lifetime.until - skip
-	if w.shouldPersist(&pb.Entity{
-		Id:       "e1",
-		Lifetime: &pb.Lifetime{Until: timestamppb.Now()},
-	}) {
-		t.Error("entity with lifetime.until should not be persisted")
+	// Controller with different node - not local
+	if w.isLocal(&pb.Entity{Id: "e1", Controller: &pb.Controller{Node: proto.String("other")}}) {
+		t.Error("entity with different controller.node should not be local")
 	}
 
-	// Has lifetime but no until - should persist
-	if !w.shouldPersist(&pb.Entity{
-		Id:       "e1",
-		Lifetime: &pb.Lifetime{From: timestamppb.Now()},
-	}) {
-		t.Error("entity with lifetime.from only should be persisted")
+	// Controller with nil node - not local
+	if w.isLocal(&pb.Entity{Id: "e1", Controller: &pb.Controller{Id: proto.String("ctrl")}}) {
+		t.Error("entity with nil controller.node should not be local")
 	}
 }
 
@@ -266,11 +261,14 @@ func TestFlushToFile_WritesEntities(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "world.yaml")
 
+	configValue, _ := structpb.NewStruct(map[string]interface{}{"key": "val"})
+
 	w := testWorld(map[string]*pb.Entity{
-		"e1": {Id: "e1", Label: ptr("tank")},
-		"e2": {Id: "e2", Label: ptr("plane")},
+		"e1": {Id: "e1", Controller: &pb.Controller{Node: proto.String("n1")}, Config: &pb.ConfigurationComponent{Value: configValue}},
+		"e2": {Id: "e2", Controller: &pb.Controller{Node: proto.String("n1")}, Device: &pb.DeviceComponent{State: pb.DeviceState_DeviceStateActive}},
 	})
 	w.worldFile = path
+	w.nodeID = "n1"
 
 	err := w.FlushToFile()
 	if err != nil {
@@ -287,15 +285,19 @@ func TestFlushToFile_WritesEntities(t *testing.T) {
 	}
 }
 
-func TestFlushToFile_SkipsControlled(t *testing.T) {
+func TestFlushToFile_SkipsNonLocal(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "world.yaml")
 
+	configValue, _ := structpb.NewStruct(map[string]interface{}{"key": "val"})
+
 	w := testWorld(map[string]*pb.Entity{
-		"e1": {Id: "e1", Label: ptr("keep")},
-		"e2": {Id: "e2", Controller: &pb.Controller{Id: proto.String("ctrl")}},
+		"e1": {Id: "e1", Controller: &pb.Controller{Node: proto.String("n1")}, Config: &pb.ConfigurationComponent{Value: configValue}},
+		"e2": {Id: "e2", Controller: &pb.Controller{Node: proto.String("other")}, Config: &pb.ConfigurationComponent{Value: configValue}},
+		"e3": {Id: "e3", Label: ptr("no-controller")},
 	})
 	w.worldFile = path
+	w.nodeID = "n1"
 
 	err := w.FlushToFile()
 	if err != nil {
@@ -308,10 +310,88 @@ func TestFlushToFile_SkipsControlled(t *testing.T) {
 	}
 	s := string(b)
 	if !strings.Contains(s, "e1") {
-		t.Error("e1 should be in file")
+		t.Error("e1 (local) should be in file")
 	}
 	if strings.Contains(s, "e2") {
-		t.Error("e2 (controlled) should not be in file")
+		t.Error("e2 (non-local) should not be in file")
+	}
+	if strings.Contains(s, "e3") {
+		t.Error("e3 (no controller) should not be in file")
+	}
+}
+
+func TestFlushToFile_SkipsNoConfigOrDevice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "world.yaml")
+
+	w := testWorld(map[string]*pb.Entity{
+		"e1": {Id: "e1", Controller: &pb.Controller{Node: proto.String("n1")}, Label: ptr("only-label")},
+	})
+	w.worldFile = path
+	w.nodeID = "n1"
+
+	if err := w.FlushToFile(); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(strings.TrimSpace(string(b))) != 0 {
+		t.Error("entity with no config or device should not be persisted")
+	}
+}
+
+func TestFlushToFile_PersistsConfigAndDevice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "world.yaml")
+
+	configValue, _ := structpb.NewStruct(map[string]interface{}{
+		"channel": float64(5),
+	})
+
+	w := testWorld(map[string]*pb.Entity{
+		"e1": {
+			Id:         "e1",
+			Label:      ptr("device"),
+			Controller: &pb.Controller{Node: proto.String("n1"), Id: proto.String("ctrl")},
+			Config:     &pb.ConfigurationComponent{Value: configValue},
+			Device:     &pb.DeviceComponent{State: pb.DeviceState_DeviceStateActive},
+		},
+	})
+	w.worldFile = path
+	w.nodeID = "n1"
+
+	if err := w.FlushToFile(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Load into a fresh world and verify only id+config+device survived
+	w2 := testWorld(map[string]*pb.Entity{})
+	if err := w2.LoadFromFile(path); err != nil {
+		t.Fatal(err)
+	}
+
+	e := w2.GetHead("e1")
+	if e == nil {
+		t.Fatal("e1 should be in file")
+	}
+	if e.Config == nil || e.Config.Value == nil {
+		t.Fatal("config should survive persistence")
+	}
+	if v, ok := e.Config.Value.Fields["channel"]; !ok || v.GetNumberValue() != 5 {
+		t.Errorf("config value should survive roundtrip, got %v", e.Config.Value.Fields)
+	}
+	if e.Device == nil {
+		t.Error("device should survive persistence")
+	}
+	// Other components should NOT be persisted
+	if e.Controller != nil {
+		t.Error("controller should be stripped from persisted stub")
+	}
+	if e.Label != nil {
+		t.Error("label should be stripped from persisted stub")
 	}
 }
 
@@ -319,13 +399,17 @@ func TestFlushToFile_Roundtrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "world.yaml")
 
+	configA, _ := structpb.NewStruct(map[string]interface{}{"name": "alpha"})
+	configB, _ := structpb.NewStruct(map[string]interface{}{"name": "bravo"})
+
 	original := map[string]*pb.Entity{
-		"e1": {Id: "e1", Label: ptr("alpha")},
-		"e2": {Id: "e2", Label: ptr("bravo")},
+		"e1": {Id: "e1", Controller: &pb.Controller{Node: proto.String("n1")}, Config: &pb.ConfigurationComponent{Value: configA}},
+		"e2": {Id: "e2", Controller: &pb.Controller{Node: proto.String("n1")}, Config: &pb.ConfigurationComponent{Value: configB}},
 	}
 
 	w := testWorld(original)
 	w.worldFile = path
+	w.nodeID = "n1"
 
 	if err := w.FlushToFile(); err != nil {
 		t.Fatal(err)
@@ -341,7 +425,7 @@ func TestFlushToFile_Roundtrip(t *testing.T) {
 		t.Errorf("expected 2 entities after roundtrip, got %d", w2.EntityCount())
 	}
 	e1 := w2.GetHead("e1")
-	if e1 == nil || e1.Label == nil || *e1.Label != "alpha" {
+	if e1 == nil || e1.Config == nil {
 		t.Error("e1 should survive roundtrip")
 	}
 }
@@ -351,10 +435,11 @@ func TestFlushToFile_SortsByID(t *testing.T) {
 	path := filepath.Join(dir, "world.yaml")
 
 	w := testWorld(map[string]*pb.Entity{
-		"z-last":  {Id: "z-last", Label: ptr("z")},
-		"a-first": {Id: "a-first", Label: ptr("a")},
+		"z-last":  {Id: "z-last", Controller: &pb.Controller{Node: proto.String("n1")}, Device: &pb.DeviceComponent{State: pb.DeviceState_DeviceStateActive}},
+		"a-first": {Id: "a-first", Controller: &pb.Controller{Node: proto.String("n1")}, Device: &pb.DeviceComponent{State: pb.DeviceState_DeviceStateActive}},
 	})
 	w.worldFile = path
+	w.nodeID = "n1"
 
 	if err := w.FlushToFile(); err != nil {
 		t.Fatal(err)

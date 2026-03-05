@@ -1,8 +1,9 @@
-import type { Camera, Entity } from "@projectqai/proto/world";
+import type { Entity, MediaStream } from "@projectqai/proto/world";
 import type { ReactNode } from "react";
 import { createContext, useContext, useState } from "react";
 
-import { toVideoProtocol, type VideoProtocol } from "./components/video-stream/types";
+import { resolveStreamUrl } from "./components/video-stream/resolve-stream-url";
+import type { VideoProtocol } from "./components/video-stream/types";
 
 type PIPWindow = {
   id: string;
@@ -18,7 +19,7 @@ type PIPState = {
 };
 
 type PIPContextValue = PIPState & {
-  openPIP: (entity: Entity, camera: Camera) => void;
+  openPIP: (entity: Entity, stream: MediaStream, streamIndex: number) => void;
   closePIP: (id: string) => void;
   closeAllPIP: () => void;
   isInPIP: (entityId: string, cameraUrl: string) => boolean;
@@ -67,10 +68,11 @@ const INITIAL_STATE: PIPState = {
 export function PIPProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<PIPState>(INITIAL_STATE);
 
-  const openPIP = (entity: Entity, camera: Camera) => {
+  const openPIP = (entity: Entity, stream: MediaStream, streamIndex: number) => {
     setState((prev) => {
+      const resolved = resolveStreamUrl(stream, entity.id, streamIndex);
       const exists = prev.windows.some(
-        (w) => w.entityId === entity.id && w.cameraUrl === camera.url,
+        (w) => w.entityId === entity.id && w.cameraUrl === resolved.url,
       );
       if (exists) return prev;
 
@@ -78,9 +80,9 @@ export function PIPProvider({ children }: { children: ReactNode }) {
         id: generateWindowId(),
         entityId: entity.id,
         entityName: entity.label || null,
-        cameraUrl: camera.url,
-        cameraLabel: camera.label,
-        cameraProtocol: toVideoProtocol(camera.protocol),
+        cameraUrl: resolved.url,
+        cameraLabel: stream.label,
+        cameraProtocol: resolved.protocol,
       };
 
       return {

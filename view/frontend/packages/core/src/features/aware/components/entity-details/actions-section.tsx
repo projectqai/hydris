@@ -1,6 +1,8 @@
+import { Code, ConnectError } from "@connectrpc/connect";
+import { ControlButton } from "@hydris/ui/controls";
 import type { Entity } from "@projectqai/proto/world";
 import { Zap } from "lucide-react-native";
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { View } from "react-native";
 import { toast } from "sonner-native";
 import { useShallow } from "zustand/react/shallow";
 
@@ -29,27 +31,28 @@ function TaskableButton({ taskable }: { taskable: Entity }) {
     try {
       await runTask(taskable.id);
     } catch (err) {
+      if (err instanceof ConnectError && err.code === Code.AlreadyExists) {
+        toast("Task already running");
+        return;
+      }
       toast.error(err instanceof Error ? err.message : "Task failed");
     }
   };
 
   return (
-    <Pressable
+    <ControlButton
       onPress={handlePress}
       disabled={isPending}
-      className="border-foreground/10 bg-foreground/5 hover:bg-foreground/10 active:bg-foreground/10 flex-1 flex-row items-center justify-center gap-1.5 rounded-md border py-2.5 select-none disabled:opacity-50"
-    >
-      {isPending ? (
-        <View className="h-3.5 w-3.5 items-center justify-center">
-          <ActivityIndicator size={14} color="rgba(255, 255, 255, 0.7)" />
-        </View>
-      ) : (
-        <>
-          <Zap size={14} color="rgba(255, 255, 255, 0.7)" strokeWidth={2} />
-          <Text className="font-sans-medium text-foreground/80 text-xs leading-none">{label}</Text>
-        </>
-      )}
-    </Pressable>
+      loading={isPending}
+      icon={Zap}
+      iconSize={14}
+      iconStrokeWidth={2}
+      label={label}
+      labelClassName="text-xs leading-none"
+      size="md"
+      fullWidth
+      accessibilityLabel={`Run ${label}`}
+    />
   );
 }
 
@@ -70,15 +73,7 @@ export function ActionsSection() {
 
   if (!selectedEntityId) return null;
 
-  if (taskables.length === 0) {
-    return (
-      <View className="py-2">
-        <Text className="text-foreground/40 text-center font-sans text-xs">
-          No actions available
-        </Text>
-      </View>
-    );
-  }
+  if (taskables.length === 0) return null;
 
   return (
     <View className="gap-1.5">

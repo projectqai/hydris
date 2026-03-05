@@ -1,0 +1,16 @@
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl {
+  margin-bottom: 6px;
+}
+
+.maplibregl-ctrl-scale {
+  background-color: rgba(0, 0, 0, 0.55);
+  border-color: rgba(255, 255, 255, 0.88);
+  border-top: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 10px;
+  line-height: 1;
+  padding: 1px 4px 2px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  border-radius: 2px;
+}

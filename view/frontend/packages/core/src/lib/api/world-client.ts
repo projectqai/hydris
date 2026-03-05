@@ -17,7 +17,7 @@ function getBaseUrl() {
   return "http://localhost:50051";
 }
 
-const baseUrl = getBaseUrl();
+export const baseUrl = getBaseUrl();
 
 const transport = createConnectTransport({
   baseUrl,

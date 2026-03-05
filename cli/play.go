@@ -12,7 +12,6 @@ import (
 	"github.com/at-wat/ebml-go/webm"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/projectqai/hydris/cmd"
 	pb "github.com/projectqai/proto/go"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
@@ -35,7 +34,7 @@ func init() {
 
 	AddConnectionFlags(playCmd)
 
-	cmd.CMD.AddCommand(playCmd)
+	CMD.AddCommand(playCmd)
 }
 
 func runPlayCommand(cmd *cobra.Command, args []string) error {

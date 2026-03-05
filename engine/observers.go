@@ -3,15 +3,13 @@ package engine
 import (
 	"context"
 
-	"github.com/projectqai/hydris/policy"
 	pb "github.com/projectqai/proto/go"
 
 	"connectrpc.com/connect"
 )
 
 func (s *WorldServer) WatchEntities(ctx context.Context, req *connect.Request[pb.ListEntitiesRequest], stream *connect.ServerStream[pb.EntityChangeEvent]) error {
-	ability := policy.For(s.policy, req.Peer().Addr)
-	consumer := NewConsumer(s, ability, req.Msg.Behaviour, req.Msg.Filter)
+	consumer := NewConsumer(s, req.Msg.Behaviour, req.Msg.Filter)
 	s.bus.Register(consumer)
 	defer s.bus.Unregister(consumer)
 

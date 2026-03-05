@@ -1,30 +1,7 @@
 import { format } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
 import { useEffect, useState } from "react";
-import { Text, type TextStyle, View } from "react-native";
-
-type TimeDisplayProps = {
-  label: string;
-  time: string;
-  subtitle: string;
-};
-
-function TimeDisplay({ label, time, subtitle }: TimeDisplayProps) {
-  return (
-    <View>
-      <Text className="text-muted-foreground font-sans-medium text-[10px] leading-tight">
-        {label}
-      </Text>
-      <Text
-        className="text-foreground font-mono text-xs leading-tight"
-        style={{ fontVariantNumeric: "tabular-nums" } as TextStyle}
-      >
-        {time}
-      </Text>
-      <Text className="text-muted-foreground font-sans text-[10px]">{subtitle}</Text>
-    </View>
-  );
-}
+import { Text, View } from "react-native";
 
 export function TimeWidget() {
   const [time, setTime] = useState<Date | null>(null);
@@ -35,23 +12,54 @@ export function TimeWidget() {
     return () => clearInterval(interval);
   }, []);
 
-  if (!time) {
-    return (
-      <View className="android:pl-2 h-11 flex-row gap-8">
-        <TimeDisplay label="Local Time" time="--:--:--" subtitle="Loading..." />
-        <TimeDisplay label="UTC Time" time="--:--:--" subtitle="Coordinated Universal Time" />
-      </View>
-    );
-  }
-
-  const localTime = format(time, "HH:mm:ss");
-  const localDate = format(time, "EEEE, MMMM d, yyyy");
-  const utcTime = formatInTimeZone(time, "UTC", "HH:mm:ss");
+  const localTime = time ? format(time, "HH:mm:ss") : "--:--:--";
+  const localDate = time ? format(time, "dd MMM") : "--";
+  const utcTime = time ? formatInTimeZone(time, "UTC", "HH:mm:ss") : "--:--:--";
+  const utcDate = time ? formatInTimeZone(time, "UTC", "dd MMM") : "--";
 
   return (
-    <View className="android:pl-2 h-11 flex-row gap-8">
-      <TimeDisplay label="Local Time" time={localTime} subtitle={localDate} />
-      <TimeDisplay label="UTC Time" time={utcTime} subtitle="Coordinated Universal Time" />
-    </View>
+    <>
+      <View className="flex gap-px lg:hidden">
+        <View className="flex-row items-baseline gap-1">
+          <Text className="text-foreground/75 text-9 font-mono tracking-wide">LOCAL</Text>
+          <Text className="text-foreground/80 text-11 font-mono tracking-tight tabular-nums">
+            {localTime}
+          </Text>
+          <Text className="text-foreground/75 text-9 font-mono tracking-wide uppercase">
+            {localDate}
+          </Text>
+        </View>
+        <View className="flex-row items-baseline gap-1">
+          <Text className="text-foreground/75 text-9 font-mono tracking-wide">ZULU</Text>
+          <Text className="text-foreground/75 text-11 font-mono tracking-tight tabular-nums">
+            {utcTime}
+          </Text>
+          <Text className="text-foreground/75 text-9 font-mono tracking-wide uppercase">
+            {utcDate}
+          </Text>
+        </View>
+      </View>
+
+      <View className="hidden flex-row items-baseline gap-4 lg:flex">
+        <View className="flex-row items-baseline gap-1.5">
+          <Text className="text-foreground/75 text-10 font-mono tracking-wider">LOCAL</Text>
+          <Text className="text-foreground/80 text-13 font-mono tracking-tight tabular-nums">
+            {localTime}
+          </Text>
+          <Text className="text-foreground/75 text-10 font-mono tracking-wide uppercase">
+            {localDate}
+          </Text>
+        </View>
+        <View className="flex-row items-baseline gap-1.5">
+          <Text className="text-foreground/75 text-10 font-mono tracking-wider">ZULU</Text>
+          <Text className="text-foreground/75 text-13 font-mono tracking-tight tabular-nums">
+            {utcTime}
+          </Text>
+          <Text className="text-foreground/75 text-10 font-mono tracking-wide uppercase">
+            {utcDate}
+          </Text>
+        </View>
+      </View>
+    </>
   );
 }

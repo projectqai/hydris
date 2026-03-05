@@ -1,28 +1,56 @@
-import { ScatterplotLayer } from "@deck.gl/layers";
+import { GeoJsonLayer } from "@deck.gl/layers";
 
-import type { EntityData } from "../types";
+import type { Affiliation, BaseLayer, ShapeFeature, ShapeProperties } from "../types";
 
-const COVERAGE_FILL: [number, number, number, number] = [59, 130, 246, 10];
-const COVERAGE_STROKE: [number, number, number, number] = [59, 130, 246, 51];
-const DEFAULT_RADIUS = 250;
+type RGBA = [number, number, number, number];
 
-export type CoverageLayerProps = {
-  data: EntityData[];
-  visible: boolean;
+const FILL_DARK: Record<Affiliation, RGBA> = {
+  blue: [59, 130, 246, 40],
+  red: [205, 24, 24, 40],
+  neutral: [61, 141, 122, 40],
+  unknown: [247, 239, 129, 40],
 };
 
-export function createCoverageLayer({ data, visible }: CoverageLayerProps) {
-  return new ScatterplotLayer<EntityData>({
+const STROKE_DARK: Record<Affiliation, RGBA> = {
+  blue: [59, 130, 246, 120],
+  red: [205, 24, 24, 120],
+  neutral: [61, 141, 122, 120],
+  unknown: [247, 239, 129, 120],
+};
+
+const FILL_SAT: Record<Affiliation, RGBA> = {
+  blue: [59, 130, 246, 80],
+  red: [205, 24, 24, 80],
+  neutral: [61, 141, 122, 80],
+  unknown: [247, 239, 129, 80],
+};
+
+const STROKE_SAT: Record<Affiliation, RGBA> = {
+  blue: [59, 130, 246, 180],
+  red: [205, 24, 24, 180],
+  neutral: [61, 141, 122, 180],
+  unknown: [247, 239, 129, 180],
+};
+
+type CoverageLayerProps = {
+  data: ShapeFeature[];
+  visible: boolean;
+  baseLayer?: BaseLayer;
+};
+
+export function createCoverageLayer({ data, visible, baseLayer = "dark" }: CoverageLayerProps) {
+  const isSatellite = baseLayer === "satellite";
+  const fill = isSatellite ? FILL_SAT : FILL_DARK;
+  const stroke = isSatellite ? STROKE_SAT : STROKE_DARK;
+  return new GeoJsonLayer<ShapeProperties>({
     id: "coverage",
     data,
     visible: visible && data.length > 0,
-    getPosition: (d) => [d.position.lng, d.position.lat],
-    getRadius: (d) => d.coverageRadius ?? DEFAULT_RADIUS,
-    radiusUnits: "meters",
-    getFillColor: COVERAGE_FILL,
-    getLineColor: COVERAGE_STROKE,
+    filled: true,
     stroked: true,
-    lineWidthMinPixels: 1,
+    getFillColor: (f) => fill[f.properties.affiliation],
+    getLineColor: (f) => stroke[f.properties.affiliation],
+    lineWidthMinPixels: isSatellite ? 2 : 1,
     pickable: false,
   });
 }

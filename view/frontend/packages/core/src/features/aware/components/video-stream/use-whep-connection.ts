@@ -4,7 +4,7 @@ import { RTCPeerConnection, RTCSessionDescription } from "./rtc";
 import type { ConnectionState } from "./types";
 
 // When bundled behind a proxy that serves frontend + backend, camera URLs
-// may be relative (e.g., "/whep/camera1"). Resolve them using the origin.
+// may be relative (e.g., "/media/whep/camera1"). Resolve them using the origin.
 // On native, there's no origin concept so we assume localhost.
 function resolveUrl(url: string): string {
   const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost";

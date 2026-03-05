@@ -2,7 +2,7 @@
 
 import type { MapActions } from "@hydris/map-engine/adapters/maplibre";
 import { MapView as MapAdapter } from "@hydris/map-engine/adapters/maplibre";
-import type { BaseLayer, EntityFilter } from "@hydris/map-engine/types";
+import type { BaseLayer, EntityFilter, GeoPosition } from "@hydris/map-engine/types";
 import type { EntityData } from "@hydris/map-engine/types";
 import type { DOMProps } from "expo/dom";
 import { type DOMImperativeFactory, useDOMImperativeHandle } from "expo/dom";
@@ -25,10 +25,19 @@ export interface MapViewRef {
     filterJson: string,
     coverageVisible: boolean,
     shapesVisible: boolean,
+    trackHistoryVisible: boolean,
   ) => void;
+  pushRangeRing: (centerJson: string | null, active: boolean) => void;
 }
 
-type FlyToTarget = string | null;
+type FlyToTarget = {
+  lat: number;
+  lng: number;
+  alt?: number;
+  duration?: number;
+  zoom?: number;
+  commandId: number;
+} | null;
 type ZoomCommand = string | null;
 
 type MapViewProps = {
@@ -37,10 +46,17 @@ type MapViewProps = {
   flyToTarget?: FlyToTarget;
   zoomCommand?: ZoomCommand;
   baseLayer?: BaseLayer;
+  colorScheme?: "dark" | "light";
+  bgColor?: string;
+  initialLat?: number;
+  initialLng?: number;
+  initialZoom?: number;
   coverageVisible?: boolean;
   shapesVisible?: boolean;
+  trackHistoryVisible?: boolean;
   onReady?: () => Promise<void>;
   onEntityClick?: (id: string | null) => Promise<void>;
+  onMapClick?: (lat: number, lng: number) => Promise<void>;
   onTrackingLost?: () => Promise<void>;
   onViewChange?: (lat: number, lng: number, zoom: number) => Promise<void>;
   dom?: DOMProps;
@@ -51,17 +67,28 @@ export default function MapView({
   filterJson,
   flyToTarget,
   zoomCommand,
-  baseLayer = "dark",
+  baseLayer = "satellite",
+  colorScheme = "dark",
+  bgColor = "rgb(22, 22, 22)",
+  initialLat,
+  initialLng,
+  initialZoom,
   coverageVisible = false,
   shapesVisible = true,
+  trackHistoryVisible = false,
   onReady,
   onEntityClick,
+  onMapClick,
   onTrackingLost,
   onViewChange,
 }: MapViewProps) {
+  const initialView =
+    initialLat != null && initialLng != null && initialZoom != null
+      ? { lat: initialLat, lng: initialLng, zoom: initialZoom }
+      : undefined;
   const mapActionsRef = useRef<MapActions | null>(null);
   const [actionsReady, setActionsReady] = useState(false);
-  const lastFlyToCommandRef = useRef<string | null>(null);
+  const lastFlyToCommandIdRef = useRef(-1);
   const lastZoomCommandRef = useRef<string | null>(null);
   const pendingFlyToRef = useRef<{
     lat: number;
@@ -88,6 +115,9 @@ export default function MapView({
   const [pushedFilterJson, setPushedFilterJson] = useState<string>(filterJson ?? "");
   const [pushedCoverageVisible, setPushedCoverageVisible] = useState(coverageVisible);
   const [pushedShapesVisible, setPushedShapesVisible] = useState(shapesVisible);
+  const [pushedTrackHistoryVisible, setPushedTrackHistoryVisible] = useState(trackHistoryVisible);
+  const [pushedRangeRingCenter, setPushedRangeRingCenter] = useState<GeoPosition | null>(null);
+  const [pushedRangeRingsActive, setPushedRangeRingsActive] = useState(false);
 
   const pendingGeoRef = useRef(false);
   const pendingIdsRef = useRef(new Set<string>());
@@ -221,11 +251,17 @@ export default function MapView({
           filterJson: string,
           coverageVisible: boolean,
           shapesVisible: boolean,
+          trackHistoryVisible: boolean,
         ) => {
           setPushedBaseLayer(baseLayer as BaseLayer);
           setPushedFilterJson(filterJson);
           setPushedCoverageVisible(coverageVisible);
           setPushedShapesVisible(shapesVisible);
+          setPushedTrackHistoryVisible(trackHistoryVisible);
+        },
+        pushRangeRing: (centerJson: string | null, active: boolean) => {
+          setPushedRangeRingCenter(centerJson ? JSON.parse(centerJson) : null);
+          setPushedRangeRingsActive(active);
         },
       }) as DOMImperativeFactory,
     [],
@@ -233,16 +269,13 @@ export default function MapView({
 
   useEffect(() => {
     if (!flyToTarget || !actionsReady || !mapActionsRef.current) return;
-    if (flyToTarget === lastFlyToCommandRef.current) return;
+    if (flyToTarget.commandId === lastFlyToCommandIdRef.current) return;
 
-    lastFlyToCommandRef.current = flyToTarget;
-    const parts = flyToTarget.split(",");
-    const lat = parseFloat(parts[0] ?? "0");
-    const lng = parseFloat(parts[1] ?? "0");
-    const duration = parts[3] ? parseFloat(parts[3]) : 1.5;
-    const zoom = parts[4] ? parseFloat(parts[4]) : undefined;
-
-    mapActionsRef.current.flyTo({ lat, lng }, { duration, zoom });
+    lastFlyToCommandIdRef.current = flyToTarget.commandId;
+    mapActionsRef.current.flyTo(
+      { lat: flyToTarget.lat, lng: flyToTarget.lng },
+      { duration: flyToTarget.duration ?? 1.5, zoom: flyToTarget.zoom },
+    );
   }, [flyToTarget, actionsReady]);
 
   useEffect(() => {
@@ -276,7 +309,7 @@ export default function MapView({
       height: 100%;
       margin: 0;
       padding: 0;
-      background-color: #161616;
+      background-color: ${bgColor};
     }
   `;
 
@@ -285,7 +318,7 @@ export default function MapView({
       style={{
         width: "100%",
         height: "100%",
-        background: "#161616",
+        background: bgColor,
         position: "relative",
         zIndex: 0,
       }}
@@ -298,9 +331,15 @@ export default function MapView({
         selectedId={pushedSelectedId}
         trackedId={pushedTrackedId}
         baseLayer={pushedBaseLayer}
+        colorScheme={colorScheme}
+        initialView={initialView}
         coverageVisible={pushedCoverageVisible}
         shapesVisible={pushedShapesVisible}
+        trackHistoryVisible={pushedTrackHistoryVisible}
+        rangeRingCenter={pushedRangeRingCenter}
+        rangeRingsActive={pushedRangeRingsActive}
         onEntityClick={async (id) => await onEntityClick?.(id)}
+        onMapClick={async (lat, lng) => await onMapClick?.(lat, lng)}
         onReady={async () => await onReady?.()}
         onTrackingLost={async () => await onTrackingLost?.()}
         onViewChange={async (lat, lng, zoom) => await onViewChange?.(lat, lng, zoom)}

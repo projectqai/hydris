@@ -54,7 +54,7 @@ func TestGC_BroadcastsExpiry(t *testing.T) {
 		"e1": expired,
 	})
 
-	c := NewConsumer(w, nil, nil, nil)
+	c := NewConsumer(w, nil, nil)
 	w.bus.Register(c)
 	defer w.bus.Unregister(c)
 

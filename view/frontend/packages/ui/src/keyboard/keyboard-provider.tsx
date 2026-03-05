@@ -14,8 +14,16 @@ type WebKeyboardEvent = {
 
 declare const window:
   | {
-      addEventListener: (event: string, handler: (e: WebKeyboardEvent) => void) => void;
-      removeEventListener: (event: string, handler: (e: WebKeyboardEvent) => void) => void;
+      addEventListener: (
+        event: string,
+        handler: (e: WebKeyboardEvent) => void,
+        capture?: boolean,
+      ) => void;
+      removeEventListener: (
+        event: string,
+        handler: (e: WebKeyboardEvent) => void,
+        capture?: boolean,
+      ) => void;
     }
   | undefined;
 
@@ -47,8 +55,8 @@ export function KeyboardProvider({ children }: KeyboardProviderProps) {
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, []);
 
   return <KeyboardContext.Provider value={{ register }}>{children}</KeyboardContext.Provider>;

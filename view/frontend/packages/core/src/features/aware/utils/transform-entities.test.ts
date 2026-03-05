@@ -1,7 +1,7 @@
 import type { Entity } from "@projectqai/proto/world";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { ChangeSet } from "../store/entity-store";
+import type { ChangeSet } from "./transform-entities";
 import { accumulateChanges, buildDelta, resetDeltaState } from "./transform-entities";
 
 function createEntity(id: string, lat = 0, lng = 0): Entity {
@@ -207,9 +207,15 @@ describe("accumulateChanges", () => {
       ["e1", createEntity("e1")],
       ["e2", createEntity("e2")],
     ]);
-    buildDelta(entities2, new Set());
+    const delta2 = buildDelta(entities2, new Set());
+    expect(delta2.entities).toHaveLength(1);
 
-    // Second build with no new changes should produce empty delta
+    // Same version with no new accumulation returns cached result
+    const cachedDelta = buildDelta(entities2, new Set());
+    expect(cachedDelta).toBe(delta2);
+
+    // After a new version with no actual changes, delta should be empty
+    accumulateChanges(createChangeSet(3, []));
     const emptyDelta = buildDelta(entities2, new Set());
     expect(emptyDelta.entities).toHaveLength(0);
     expect(emptyDelta.removed).toHaveLength(0);

@@ -1,3 +1,4 @@
+import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import { AlertCircle, WifiOff } from "lucide-react-native";
 import { Pressable, Text, View } from "react-native";
@@ -11,6 +12,7 @@ type ConnectionOverlayProps = {
 };
 
 export function ConnectionOverlay({ state, error, onRetry }: ConnectionOverlayProps) {
+  const t = useThemeColors();
   if (state === "connected") return null;
 
   const isLoading = state === "idle" || state === "connecting" || state === "reconnecting";
@@ -26,7 +28,7 @@ export function ConnectionOverlay({ state, error, onRetry }: ConnectionOverlayPr
       )}
     >
       {isLoading && (
-        <Text className="text-foreground/70 font-mono text-xs">
+        <Text className="text-foreground/75 font-mono text-xs">
           {state === "reconnecting" ? "Reconnecting..." : "Connecting..."}
         </Text>
       )}
@@ -34,18 +36,20 @@ export function ConnectionOverlay({ state, error, onRetry }: ConnectionOverlayPr
       {isFailed && (
         <>
           {isNetworkError ? (
-            <WifiOff size={20} color="rgba(255, 255, 255, 0.5)" />
+            <WifiOff size={20} color={t.iconMuted} />
           ) : (
-            <AlertCircle size={20} color="rgba(255, 255, 255, 0.5)" />
+            <AlertCircle size={20} color={t.iconMuted} />
           )}
-          <Text className="text-foreground/50 mt-2 font-mono text-xs">
+          <Text className="text-foreground/75 mt-2 font-mono text-xs">
             {error || "Connection failed"}
           </Text>
           <Pressable
             onPress={onRetry}
-            className="border-foreground/20 active:bg-foreground/10 mt-3 rounded border px-3 py-1.5"
+            accessibilityLabel="Retry connection"
+            accessibilityRole="button"
+            className="border-foreground/20 hover:bg-foreground/8 active:bg-foreground/10 mt-3 rounded border px-3 py-2.5"
           >
-            <Text className="font-sans-medium text-foreground/70 text-xs">Retry</Text>
+            <Text className="font-sans-medium text-foreground/75 text-xs">Retry</Text>
           </Pressable>
         </>
       )}

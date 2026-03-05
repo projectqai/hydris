@@ -1,19 +1,14 @@
+import { EmptyState } from "@hydris/ui/empty-state";
+import { useThemeColors } from "@hydris/ui/lib/theme";
 import { SegmentedControl } from "@hydris/ui/segmented-control";
 import type { Entity } from "@projectqai/proto/world";
 import { FlashList } from "@shopify/flash-list";
-import { AlertTriangle, Crosshair, MapPin } from "lucide-react-native";
-import { useRef, useState } from "react";
+import { AlertTriangle, MapPin } from "lucide-react-native";
+import { useMemo, useRef, useState } from "react";
 import { Text, View } from "react-native";
 
-import {
-  formatAltitude,
-  formatTime,
-  getEntityName,
-  getTrackStatus,
-  isAsset,
-} from "../../lib/api/use-track-utils";
-import { useUrlParams } from "../../lib/use-url-params";
-import { EntityAssetCard, EntityTrackCard } from "./entity-track-card";
+import { ENTITY_NAV_PARAMS, useUrlParams } from "../../lib/use-url-params";
+import { EntityCard } from "./entity-track-card";
 import {
   selectAssetCount,
   selectAssets,
@@ -26,50 +21,28 @@ import { useMapEngine } from "./store/map-engine-store";
 import { useSelectionStore } from "./store/selection-store";
 
 export function CollapsedStats() {
+  const t = useThemeColors();
   const listMode = useLeftPanelStore((s) => s.listMode);
   const trackCount = useEntityStore(selectTrackCount);
   const assetCount = useEntityStore(selectAssetCount);
   const count = listMode === "tracks" ? trackCount : assetCount;
   const alertCount = 0;
 
-  const Icon = listMode === "tracks" ? Crosshair : MapPin;
   const label = listMode === "tracks" ? "Tracks" : "Assets";
 
   return (
     <View className="flex-row items-center gap-3">
       <View className="flex-row items-center gap-1.5">
-        <AlertTriangle size={15} color="rgba(255, 255, 255, 0.5)" strokeWidth={2} />
+        <AlertTriangle size={15} color={t.iconSubtle} strokeWidth={2} />
         <Text className="font-sans-semibold text-foreground/80 text-xs">{alertCount} Alerts</Text>
       </View>
 
-      <Text className="text-foreground/40 text-xl leading-none">•</Text>
+      <Text className="text-foreground/80 text-xl leading-none">•</Text>
 
       <View className="flex-row items-center gap-1.5">
-        <Icon size={15} color="white" opacity={0.5} strokeWidth={2} />
+        <MapPin size={15} color={t.iconSubtle} strokeWidth={2} />
         <Text className="font-sans-semibold text-foreground/80 text-xs">
           {count} {label}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-function EmptyState({ mode }: { mode: "tracks" | "assets" }) {
-  const Icon = mode === "tracks" ? Crosshair : MapPin;
-  const title = mode === "tracks" ? "No tracks detected" : "No assets available";
-  const subtitle = mode === "tracks" ? "Waiting for tracked objects" : "No static assets on map";
-
-  return (
-    <View className="flex-1 px-6 pt-16 select-none">
-      <View className="items-center">
-        <View className="opacity-30">
-          <Icon size={28} color="rgba(255, 255, 255)" strokeWidth={1.5} />
-        </View>
-        <Text className="font-sans-medium text-foreground/50 mt-2 text-center text-sm">
-          {title}
-        </Text>
-        <Text className="text-foreground/30 text-center font-sans text-xs leading-relaxed">
-          {subtitle}
         </Text>
       </View>
     </View>
@@ -97,13 +70,15 @@ export function LeftPanelContent() {
   const listRef = useRef<any>(null);
 
   const onTabChange = (mode: ListMode) => {
-    listRef.current?.scrollToOffset({ offset: 0, animated: false });
     setDisplayCount(PAGE_SIZE);
     setListMode(mode);
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToOffset({ offset: 0, animated: false });
+    });
   };
 
   const handleItemPress = (entity: Entity) => {
-    clearParams(["entityId", "lat", "lng", "alt", "zoom", "tab"]);
+    clearParams(ENTITY_NAV_PARAMS);
 
     if (selectedEntityId === entity.id) {
       select(null);
@@ -128,37 +103,35 @@ export function LeftPanelContent() {
   };
 
   const entities = listMode === "tracks" ? tracks : assets;
-  const displayedEntities = entities.slice(0, displayCount);
+  const displayedEntities = useMemo(
+    () => entities.slice(0, displayCount),
+    [entities, displayCount],
+  );
   const hasMore = displayedEntities.length < entities.length;
 
   return (
-    <View className="flex-1">
+    <View className="flex-1 select-none">
       <SegmentedControl tabs={TABS} activeTab={listMode} onTabChange={onTabChange} />
       {displayedEntities.length === 0 ? (
-        <EmptyState mode={listMode} />
+        <EmptyState
+          icon={MapPin}
+          title={listMode === "tracks" ? "No tracks detected" : "No assets available"}
+          subtitle={
+            listMode === "tracks" ? "Waiting for tracked objects" : "No static assets on map"
+          }
+        />
       ) : (
         <FlashList
           ref={listRef}
           data={displayedEntities}
           extraData={selectedEntityId}
-          renderItem={({ item }) =>
-            isAsset(item) ? (
-              <EntityAssetCard
-                name={getEntityName(item)}
-                time={formatTime(item.lifetime?.from || item.detection?.lastMeasured)}
-                altitude={formatAltitude(item.geo?.altitude)}
-                status={getTrackStatus(item.symbol?.milStd2525C || "")}
-                isSelected={selectedEntityId === item.id}
-                onPress={() => handleItemPress(item)}
-              />
-            ) : (
-              <EntityTrackCard
-                entity={item}
-                isSelected={selectedEntityId === item.id}
-                onPress={() => handleItemPress(item)}
-              />
-            )
-          }
+          renderItem={({ item }) => (
+            <EntityCard
+              entity={item}
+              isSelected={selectedEntityId === item.id}
+              onPress={() => handleItemPress(item)}
+            />
+          )}
           keyExtractor={(item) => item.id}
           drawDistance={500}
           contentContainerStyle={{ paddingVertical: 8, paddingLeft: 12, paddingRight: 4 }}

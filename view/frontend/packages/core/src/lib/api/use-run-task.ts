@@ -18,6 +18,10 @@ export function useRunTask() {
         throw new Error(response.humanReadableReason || "Task failed");
       }
 
+      if (response.status === TaskStatus.TaskStatusInvalid) {
+        throw new Error("Invalid task request");
+      }
+
       return response;
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));

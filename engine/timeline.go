@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/projectqai/hydris/policy"
 	pb "github.com/projectqai/proto/go"
 
 	"connectrpc.com/connect"
@@ -13,10 +12,6 @@ import (
 )
 
 func (s *WorldServer) GetTimeline(ctx context.Context, req *connect.Request[pb.GetTimelineRequest], stream *connect.ServerStream[pb.GetTimelineResponse]) error {
-	if err := policy.For(s.policy, req.Peer().Addr).AuthorizeTimeline(ctx); err != nil {
-		return err
-	}
-
 	min, max := s.store.GetTimeline()
 	frozen := s.frozen.Load()
 	frozenAt := s.frozenAt
@@ -58,10 +53,6 @@ func (s *WorldServer) GetTimeline(ctx context.Context, req *connect.Request[pb.G
 }
 
 func (s *WorldServer) MoveTimeline(ctx context.Context, req *connect.Request[pb.MoveTimelineRequest]) (*connect.Response[pb.MoveTimelineResponse], error) {
-	if err := policy.For(s.policy, req.Peer().Addr).AuthorizeTimeline(ctx); err != nil {
-		return nil, err
-	}
-
 	min, max := s.store.GetTimeline()
 	slog.Info("TIMEWARP", "freeze", req.Msg.Freeze, "at", req.Msg.At.AsTime(), "min", min, "max", max)
 

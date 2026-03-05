@@ -68,6 +68,109 @@ func TestMergeEntity_EmptySrc(t *testing.T) {
 	}
 }
 
+func TestIsNewer(t *testing.T) {
+	t1 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		incoming *pb.Lifetime
+		existing *pb.Lifetime
+		want     bool
+	}{
+		{"both nil", nil, nil, true},
+		{"existing nil", &pb.Lifetime{From: timestamppb.New(t1)}, nil, true},
+		{"incoming nil", nil, &pb.Lifetime{From: timestamppb.New(t1)}, true},
+		{"incoming newer by From", &pb.Lifetime{From: timestamppb.New(t2)}, &pb.Lifetime{From: timestamppb.New(t1)}, true},
+		{"incoming older by From", &pb.Lifetime{From: timestamppb.New(t1)}, &pb.Lifetime{From: timestamppb.New(t2)}, false},
+		{"equal From", &pb.Lifetime{From: timestamppb.New(t1)}, &pb.Lifetime{From: timestamppb.New(t1)}, true},
+		{"fresh beats from", &pb.Lifetime{Fresh: timestamppb.New(t2)}, &pb.Lifetime{From: timestamppb.New(t1)}, true},
+		{"fresh older than existing fresh", &pb.Lifetime{Fresh: timestamppb.New(t1)}, &pb.Lifetime{Fresh: timestamppb.New(t2)}, false},
+		{"fresh preferred over from", &pb.Lifetime{Fresh: timestamppb.New(t1), From: timestamppb.New(t2)}, &pb.Lifetime{Fresh: timestamppb.New(t2)}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isNewer(tt.incoming, tt.existing); got != tt.want {
+				t.Errorf("isNewer() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPush_LWW_RejectsOlder(t *testing.T) {
+	t1 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	w := testWorld(map[string]*pb.Entity{
+		"e1": {Id: "e1", Label: ptr("newer"), Lifetime: &pb.Lifetime{From: timestamppb.New(t2)}},
+	})
+
+	ctx := context.Background()
+	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{
+			{Id: "e1", Label: ptr("older"), Lifetime: &pb.Lifetime{From: timestamppb.New(t1)}},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := w.GetHead("e1")
+	if e.Label == nil || *e.Label != "newer" {
+		t.Error("older push should not overwrite newer entity")
+	}
+}
+
+func TestPush_LWW_AcceptsNewer(t *testing.T) {
+	t1 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	w := testWorld(map[string]*pb.Entity{
+		"e1": {Id: "e1", Label: ptr("old"), Lifetime: &pb.Lifetime{From: timestamppb.New(t1)}},
+	})
+
+	ctx := context.Background()
+	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{
+			{Id: "e1", Label: ptr("new"), Lifetime: &pb.Lifetime{From: timestamppb.New(t2)}},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := w.GetHead("e1")
+	if e.Label == nil || *e.Label != "new" {
+		t.Error("newer push should overwrite older entity")
+	}
+}
+
+func TestPush_LWW_FreshTakesPrecedence(t *testing.T) {
+	t1 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
+
+	// Existing has newer From but older Fresh
+	w := testWorld(map[string]*pb.Entity{
+		"e1": {Id: "e1", Label: ptr("old"), Lifetime: &pb.Lifetime{From: timestamppb.New(t2), Fresh: timestamppb.New(t1)}},
+	})
+
+	ctx := context.Background()
+	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{
+			{Id: "e1", Label: ptr("new"), Lifetime: &pb.Lifetime{From: timestamppb.New(t1), Fresh: timestamppb.New(t2)}},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := w.GetHead("e1")
+	if e.Label == nil || *e.Label != "new" {
+		t.Error("Fresh should take precedence over From for LWW comparison")
+	}
+}
+
 func TestGetHead(t *testing.T) {
 	w := testWorld(map[string]*pb.Entity{
 		"e1": {Id: "e1", Label: ptr("tank")},
@@ -257,6 +360,33 @@ func TestPush_MergesExisting(t *testing.T) {
 	}
 	if e.Geo == nil || e.Geo.Latitude != 1.0 {
 		t.Error("Geo should be preserved from original")
+	}
+}
+
+func TestPush_ReplacementSwapsEntity(t *testing.T) {
+	w := testWorld(map[string]*pb.Entity{
+		"e1": {Id: "e1", Label: ptr("original"), Geo: &pb.GeoSpatialComponent{Latitude: 1.0}, Track: &pb.TrackComponent{Tracker: proto.String("t1")}},
+	})
+
+	ctx := context.Background()
+	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Replacements: []*pb.Entity{
+			{Id: "e1", Label: ptr("replaced")},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := w.GetHead("e1")
+	if e.Label == nil || *e.Label != "replaced" {
+		t.Error("label should be replaced")
+	}
+	if e.Geo != nil {
+		t.Error("Geo should be gone after replacement")
+	}
+	if e.Track != nil {
+		t.Error("Track should be gone after replacement")
 	}
 }
 

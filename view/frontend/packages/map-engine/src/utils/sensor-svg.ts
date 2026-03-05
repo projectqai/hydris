@@ -1,9 +1,24 @@
 import { SensorSectors } from "../constants";
 import type { ActiveSensorSectors } from "../types";
 
-const INACTIVE_FILL = "rgba(33, 33, 33, 0.85)";
-const ACTIVE_FILL = "rgba(205, 24, 24, 0.9)";
-const STROKE_COLOR = "rgba(60, 60, 60, 0.9)";
+type SvgTheme = {
+  inactiveFill: string;
+  activeFill: string;
+  stroke: string;
+};
+
+export const DARK_SVG_THEME: SvgTheme = {
+  inactiveFill: "rgba(33, 33, 33, 0.85)",
+  activeFill: "rgba(205, 24, 24, 0.9)",
+  stroke: "rgba(60, 60, 60, 0.9)",
+};
+
+export const LIGHT_SVG_THEME: SvgTheme = {
+  inactiveFill: "rgba(210, 210, 210, 0.85)",
+  activeFill: "rgba(205, 24, 24, 0.9)",
+  stroke: "rgba(160, 160, 160, 0.9)",
+};
+
 const STROKE_WIDTH = 1.5;
 
 const SIZE = 230;
@@ -41,28 +56,31 @@ function generateArcPath(startDeg: number, endDeg: number): string {
 
 const svgDataUriCache = new Map<string, string>();
 
-function sectorSetToKey(sectors: ActiveSensorSectors): string {
-  return Array.from(sectors).sort().join(",");
+function cacheKey(sectors: ActiveSensorSectors, theme: SvgTheme): string {
+  return `${theme.inactiveFill}|${Array.from(sectors).sort().join(",")}`;
 }
 
-function generateSvgMarkup(activeSectors: ActiveSensorSectors): string {
+function generateSvgMarkup(activeSectors: ActiveSensorSectors, theme: SvgTheme): string {
   const paths = SensorSectors.map((sector) => {
-    const fill = activeSectors.has(sector.label) ? ACTIVE_FILL : INACTIVE_FILL;
+    const fill = activeSectors.has(sector.label) ? theme.activeFill : theme.inactiveFill;
     const d = generateArcPath(sector.start, sector.end);
-    return `<path d="${d}" fill="${fill}" stroke="${STROKE_COLOR}" stroke-width="${STROKE_WIDTH}"/>`;
+    return `<path d="${d}" fill="${fill}" stroke="${theme.stroke}" stroke-width="${STROKE_WIDTH}"/>`;
   }).join("");
 
   return `<svg width="${SIZE}" height="${SIZE}" viewBox="0 0 ${SIZE} ${SIZE}" fill="none" xmlns="http://www.w3.org/2000/svg">${paths}</svg>`;
 }
 
-export function getSectorSvgDataUri(activeSectors: ActiveSensorSectors): string {
-  const stateKey = sectorSetToKey(activeSectors);
-  let dataUri = svgDataUriCache.get(stateKey);
+export function getSectorSvgDataUri(
+  activeSectors: ActiveSensorSectors,
+  theme: SvgTheme = DARK_SVG_THEME,
+): string {
+  const key = cacheKey(activeSectors, theme);
+  let dataUri = svgDataUriCache.get(key);
 
   if (!dataUri) {
-    const svg = generateSvgMarkup(activeSectors);
+    const svg = generateSvgMarkup(activeSectors, theme);
     dataUri = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-    svgDataUriCache.set(stateKey, dataUri);
+    svgDataUriCache.set(key, dataUri);
   }
 
   return dataUri;

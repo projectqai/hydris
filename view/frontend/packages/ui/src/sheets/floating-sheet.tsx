@@ -4,7 +4,7 @@ import { ChevronRight, Search, X } from "lucide-react-native";
 import { useState } from "react";
 import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
-import { GRADIENT_PROPS } from "../lib/theme";
+import { GRADIENT_PROPS, useThemeColors } from "../lib/theme";
 import type { FloatingSheetProps, NestedSheetConfig, SheetOption } from "./types";
 
 function SheetBackdrop({ onPress }: { readonly onPress: () => void }) {
@@ -19,6 +19,7 @@ function SheetBackdrop({ onPress }: { readonly onPress: () => void }) {
 }
 
 function SheetContainer({ children }: { readonly children: React.ReactNode }) {
+  const t = useThemeColors();
   return (
     <View
       className="absolute inset-0 items-center justify-center px-4"
@@ -27,9 +28,8 @@ function SheetContainer({ children }: { readonly children: React.ReactNode }) {
     >
       <View className="w-full max-w-md" onStartShouldSetResponder={() => true}>
         <LinearGradient
-          colors={["rgba(19, 19, 19, 0.98)", "rgba(24, 24, 24, 0.98)", "rgba(31, 31, 31, 0.98)"]}
-          start={GRADIENT_PROPS.start}
-          end={GRADIENT_PROPS.end}
+          colors={t.gradients.card}
+          {...GRADIENT_PROPS}
           className="border-border/60 overflow-hidden rounded-2xl border"
         >
           {children}
@@ -48,11 +48,17 @@ function SheetHeader({
   readonly onClose: () => void;
   readonly onBack?: () => void;
 }) {
+  const t = useThemeColors();
   return (
     <View className="border-border/30 flex-row items-center justify-between border-b px-4 py-3">
       {onBack ? (
-        <Pressable onPress={onBack} className="mr-2 p-1 focus:outline-none">
-          <ChevronRight size={20} color="rgb(161 161 170)" className="rotate-180" />
+        <Pressable
+          onPress={onBack}
+          accessibilityLabel="Go back"
+          accessibilityRole="button"
+          className="mr-2 p-2.5 focus:outline-none"
+        >
+          <ChevronRight size={20} color={t.iconMuted} className="rotate-180" />
         </Pressable>
       ) : (
         <View className="w-6" />
@@ -60,8 +66,13 @@ function SheetHeader({
       <Text className="font-sans-semibold text-foreground flex-1 text-center text-base">
         {title}
       </Text>
-      <Pressable onPress={onClose} className="p-1 focus:outline-none">
-        <X size={20} color="rgb(161 161 170)" />
+      <Pressable
+        onPress={onClose}
+        accessibilityLabel="Close"
+        accessibilityRole="button"
+        className="p-2.5 focus:outline-none"
+      >
+        <X size={20} color={t.iconMuted} />
       </Pressable>
     </View>
   );
@@ -74,16 +85,17 @@ function SheetOptionItem({
   readonly option: SheetOption;
   readonly onPress: () => void;
 }) {
+  const t = useThemeColors();
   const Icon = option.icon as LucideIcon | undefined;
 
   return (
     <Pressable
       onPress={onPress}
-      className="border-border/20 flex-row items-center gap-3 border-b px-4 py-3.5 focus:outline-none active:bg-white/5"
+      className="border-border/20 active:bg-surface-overlay/5 flex-row items-center gap-3 border-b px-4 py-3.5 focus:outline-none"
     >
       {Icon && (
-        <View className="size-10 items-center justify-center rounded-xl bg-white/5">
-          <Icon size={20} color="rgb(255 255 255 / 0.9)" />
+        <View className="bg-surface-overlay/5 size-10 items-center justify-center rounded-xl">
+          <Icon size={20} color={t.iconStrong} />
         </View>
       )}
       <View className="flex-1">
@@ -92,7 +104,7 @@ function SheetOptionItem({
           <Text className="text-muted-foreground font-sans text-xs">{option.subtitle}</Text>
         )}
       </View>
-      {option.hasNested && <ChevronRight size={18} color="rgb(161 161 170)" />}
+      {option.hasNested && <ChevronRight size={18} color={t.iconMuted} />}
     </Pressable>
   );
 }
@@ -106,15 +118,16 @@ function SheetSearch({
   readonly onChangeText: (text: string) => void;
   readonly placeholder?: string;
 }) {
+  const t = useThemeColors();
   return (
     <View className="border-border/30 border-b px-4 py-3">
-      <View className="flex-row items-center gap-2 rounded-lg bg-white/5 px-3 py-2">
-        <Search size={16} color="rgb(161 161 170)" />
+      <View className="bg-surface-overlay/5 flex-row items-center gap-2 rounded-lg px-3 py-2">
+        <Search size={16} color={t.iconMuted} />
         <TextInput
           value={value}
           onChangeText={onChangeText}
           placeholder={placeholder ?? "Search..."}
-          placeholderTextColor="rgb(161 161 170)"
+          placeholderTextColor={t.placeholder}
           className="text-foreground flex-1 font-sans text-sm"
         />
       </View>
@@ -165,7 +178,7 @@ function NestedSheetContent<T>({
             <Pressable
               key={index}
               onPress={() => onSelect(value)}
-              className="items-center justify-center rounded-lg bg-white/5 p-3 focus:outline-none active:bg-white/10"
+              className="bg-surface-overlay/5 active:bg-surface-overlay/10 items-center justify-center rounded-lg p-3 focus:outline-none"
               style={{ width: `${100 / itemsPerRow - 2}%` }}
             >
               <Text className="font-sans-medium text-foreground text-center text-sm">{label}</Text>

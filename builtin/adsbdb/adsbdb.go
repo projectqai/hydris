@@ -16,6 +16,7 @@ import (
 	"github.com/projectqai/hydris/builtin/controller"
 	"github.com/projectqai/hydris/goclient"
 	pb "github.com/projectqai/proto/go"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -88,20 +89,43 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	schema, _ := structpb.NewStruct(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"url": map[string]any{"type": "string", "description": "URL to basic-ac-db.json.gz"},
+			"url": map[string]any{
+				"type":           "string",
+				"title":          "Custom Database URL",
+				"description":    "Change the URL where to download basic-ac-db.json.gz",
+				"ui:placeholder": "https://downloads.adsbexchange.com/downloads/basic-ac-db.json.gz",
+			},
 		},
 	})
 
-	if err := controller.PublishDevice(ctx, controllerName+".service", controllerName, []*pb.Configurable{
-		{Key: "adsbdb.enrich.v0", Schema: schema},
-	}, nil, nil); err != nil {
+	entityID := controllerName + ".service"
+
+	if err := controller.Push(ctx,
+		&pb.Entity{
+			Id:    entityID,
+			Label: proto.String("ADS-B Database"),
+			Controller: &pb.Controller{
+				Id: &controllerName,
+			},
+			Device: &pb.DeviceComponent{
+				Category: proto.String("Feeds"),
+			},
+			Configurable: &pb.ConfigurableComponent{
+				Schema: schema,
+			},
+			Interactivity: &pb.InteractivityComponent{
+				Icon: proto.String("database"),
+			},
+		},
+	); err != nil {
 		return fmt.Errorf("publish device: %w", err)
 	}
 
-	return controller.Run1to1(ctx, controllerName, func(ctx context.Context, config *pb.Entity, _ *pb.Entity) error {
+	return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+		ready()
 		url := defaultDBURL
-		if config.Config != nil && config.Config.Value != nil && config.Config.Value.Fields != nil {
-			if v, ok := config.Config.Value.Fields["url"]; ok && v.GetStringValue() != "" {
+		if entity.Config != nil && entity.Config.Value != nil && entity.Config.Value.Fields != nil {
+			if v, ok := entity.Config.Value.Fields["url"]; ok && v.GetStringValue() != "" {
 				url = v.GetStringValue()
 			}
 		}
@@ -110,10 +134,15 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 }
 
 func runEnricher(ctx context.Context, logger *slog.Logger, url string) error {
+	var seenCount, enrichedCount uint64
+	var downloadLatencyMs float32
+
+	downloadStart := time.Now()
 	db, err := downloadDB(ctx, logger, url)
 	if err != nil {
 		return fmt.Errorf("download database: %w", err)
 	}
+	downloadLatencyMs = float32(time.Since(downloadStart).Milliseconds())
 
 	grpcConn, err := builtin.BuiltinClientConn()
 	if err != nil {
@@ -135,7 +164,21 @@ func runEnricher(ctx context.Context, logger *slog.Logger, url string) error {
 		return fmt.Errorf("watch: %w", err)
 	}
 
+	pushMetrics := func() {
+		_, _ = worldClient.Push(ctx, &pb.EntityChangeRequest{
+			Changes: []*pb.Entity{{
+				Id: "adsbdb.service",
+				Metric: &pb.MetricComponent{Metrics: []*pb.Metric{
+					{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("database records"), Id: proto.Uint32(1), Val: &pb.Metric_Uint64{Uint64: uint64(len(db))}},
+					{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("entities enriched"), Id: proto.Uint32(2), Val: &pb.Metric_Uint64{Uint64: enrichedCount}},
+					{Kind: pb.MetricKind_MetricKindLatency.Enum(), Unit: pb.MetricUnit_MetricUnitMillisecond, Label: proto.String("download latency"), Id: proto.Uint32(3), Val: &pb.Metric_Float{Float: downloadLatencyMs}},
+				}},
+			}},
+		})
+	}
+
 	logger.Info("watching for transponder entities")
+	pushMetrics()
 
 	for {
 		event, err := stream.Recv()
@@ -148,6 +191,8 @@ func runEnricher(ctx context.Context, logger *slog.Logger, url string) error {
 		}
 
 		entity := event.Entity
+		seenCount++
+
 		if entity.Transponder == nil || entity.Transponder.Adsb == nil || entity.Transponder.Adsb.IcaoAddress == nil {
 			continue
 		}
@@ -198,6 +243,8 @@ func runEnricher(ctx context.Context, logger *slog.Logger, url string) error {
 			continue
 		}
 
+		enrichedCount++
+		pushMetrics()
 		logger.Debug("enriched entity", "entityID", entity.Id, "icao", icaoHex, "reg", rec.Registration)
 	}
 }

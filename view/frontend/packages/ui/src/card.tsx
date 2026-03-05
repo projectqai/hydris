@@ -1,11 +1,18 @@
 import type { ComponentProps } from "react";
 import { View } from "react-native";
 
+import { useThemeColors } from "./lib/theme";
 import { cn } from "./lib/utils";
 
-function Card({ className, ...props }: ComponentProps<typeof View>) {
+function Card({ className, style, ...props }: ComponentProps<typeof View>) {
+  const t = useThemeColors();
   return (
-    <View className={cn("border-border/40 bg-card rounded-lg border p-3", className)} {...props} />
+    <View
+      className={cn("border-border/40 bg-card rounded-lg border p-3", className)}
+      // @ts-ignore react-native-web CSS property
+      style={[{ boxShadow: t.cardShadow }, style]}
+      {...props}
+    />
   );
 }
 

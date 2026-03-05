@@ -1,12 +1,13 @@
 import { Badge } from "@hydris/ui/badge";
-import { truncateMiddle } from "@hydris/ui/lib/utils";
+import { useThemeColors } from "@hydris/ui/lib/theme";
+import { MiddleTruncateText } from "@hydris/ui/middle-truncate-text";
 import { Tab, Tabs } from "@hydris/ui/tabs";
 import type { Entity } from "@projectqai/proto/world";
 import * as Clipboard from "expo-clipboard";
-import { Copy, Eye, Info, MapPin, Settings, SquareStack } from "lucide-react-native";
+import { Copy, Eye, Info, MapPin, SquareStack } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { createContext, useContext, useEffect, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, View } from "react-native";
 import { toast } from "sonner-native";
 
 import {
@@ -17,7 +18,6 @@ import {
 import { useUrlParams } from "../../../../lib/use-url-params";
 import { useTabStore } from "../../store/tab-store";
 import { ComponentsTab } from "./components-tab";
-import { ConfigTab } from "./config-tab";
 import { InfoTab } from "./info-tab";
 import { LocationTab } from "./location-tab";
 import { OverviewTab } from "./overview-tab";
@@ -25,7 +25,7 @@ import { OverviewTab } from "./overview-tab";
 type EntityDetailsContextValue = {
   entity: Entity;
   entityName: string;
-  status: "Blue" | "Red" | "Neutral" | "Unknown" | null;
+  status: "Blue" | "Red" | "Neutral" | "Unknown";
 };
 
 const EntityDetailsContext = createContext<EntityDetailsContextValue | null>(null);
@@ -37,17 +37,18 @@ function useEntityDetails() {
 }
 
 function Root({ entity, children }: { entity: Entity; children: ReactNode }) {
-  const status = entity.symbol?.milStd2525C ? getTrackStatus(entity.symbol.milStd2525C) : null;
+  const status = getTrackStatus(entity);
   const entityName = getEntityName(entity);
 
   return (
     <EntityDetailsContext.Provider value={{ entity, entityName, status }}>
-      <View className="flex-1">{children}</View>
+      <View className="flex-1 select-none">{children}</View>
     </EntityDetailsContext.Provider>
   );
 }
 
 function Header({ children }: { children?: ReactNode }) {
+  const t = useThemeColors();
   const { entity, entityName, status } = useEntityDetails();
 
   const copyToClipboard = async (text: string) => {
@@ -56,13 +57,24 @@ function Header({ children }: { children?: ReactNode }) {
   };
 
   return (
-    <View className="border-foreground/5 border-b px-3 pt-2 pb-2.5">
-      <View className="flex-row items-center justify-between">
-        <Text className="font-sans-semibold text-foreground text-[15px]">{entityName}</Text>
+    <View
+      // @ts-expect-error dataSet is a React Native Web prop
+      dataSet={process.env.EXPO_OS === "web" ? { detailHeader: "" } : undefined}
+      className="border-foreground/5 border-b px-3 pt-2 pb-2.5"
+    >
+      <View className="flex-row items-center justify-between gap-2">
+        <View className="min-w-0 flex-1">
+          <MiddleTruncateText
+            text={entityName}
+            className="font-sans-semibold text-foreground text-15"
+          />
+        </View>
         {status && (
-          <Badge variant={getStatusBadgeVariant(status)} size="sm">
-            {status}
-          </Badge>
+          <View className="shrink-0">
+            <Badge variant={getStatusBadgeVariant(status)} size="sm">
+              {status}
+            </Badge>
+          </View>
         )}
       </View>
 
@@ -70,11 +82,13 @@ function Header({ children }: { children?: ReactNode }) {
         onPress={() => copyToClipboard(entity.id)}
         className="mt-3 mb-2.5 flex-row items-center gap-1.5 active:opacity-70"
         hitSlop={8}
+        accessibilityLabel="Copy entity ID"
+        accessibilityRole="button"
       >
-        <Text className="text-foreground/50 flex-1 font-mono text-xs">
-          {truncateMiddle(entity.id)}
-        </Text>
-        <Copy size={12} color="rgba(255, 255, 255, 0.4)" strokeWidth={2} />
+        <View className="min-w-0 flex-1">
+          <MiddleTruncateText text={entity.id} className="text-foreground/75 font-mono text-xs" />
+        </View>
+        <Copy size={12} color={t.iconMuted} strokeWidth={2} />
       </Pressable>
 
       {children}
@@ -90,17 +104,18 @@ function DetailTabs() {
 
   const hasLocationTab = !!(entity.bearing || entity.geo?.covariance);
   const hasInfoTab = !!(entity.symbol || entity.lifetime);
-  const hasConfigTab = !!entity.config;
   const availableTabs = [
     "overview",
     ...(hasLocationTab ? ["location"] : []),
     ...(hasInfoTab ? ["info"] : []),
-    ...(hasConfigTab ? ["config"] : []),
     "components",
   ];
 
   const initialTab = params.tab ?? storedTab ?? "overview";
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const [activeTab, setActiveTab] = useState(() => {
+    useTabStore.setState({ activeDetailTab: initialTab });
+    return initialTab;
+  });
 
   useEffect(() => {
     if (storedTab) clearInitialTab();
@@ -114,10 +129,11 @@ function DetailTabs() {
 
   const handleTabChange = (tabName: string) => {
     setActiveTab(tabName);
+    useTabStore.setState({ activeDetailTab: tabName });
   };
 
   return (
-    <Tabs currentTab={activeTab} onTabChange={handleTabChange}>
+    <Tabs currentTab={activeTab} onTabChange={handleTabChange} disableHover>
       <Tab name="overview" title="Overview" subtitle="Overview" icon={Eye}>
         <OverviewTab entity={entity} />
       </Tab>
@@ -129,11 +145,6 @@ function DetailTabs() {
       {hasInfoTab && (
         <Tab name="info" title="Info" subtitle="Info" icon={Info}>
           <InfoTab entity={entity} />
-        </Tab>
-      )}
-      {hasConfigTab && (
-        <Tab name="config" title="Config" subtitle="Config" icon={Settings}>
-          <ConfigTab entity={entity} />
         </Tab>
       )}
       <Tab name="components" title="Components" subtitle="Components" icon={SquareStack}>

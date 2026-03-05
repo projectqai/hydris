@@ -5,11 +5,21 @@ import type {
   GeoPosition,
   ShapeGeometry,
 } from "@hydris/map-engine/types";
-import type { Entity, PlanarPolygon, PlanarRing } from "@projectqai/proto/world";
+import { circleToPolygon } from "@hydris/map-engine/utils/geodesic-circle";
+import type { PlanarCircle, PlanarPolygon, PlanarRing } from "@projectqai/proto/geometry";
+import type { Entity } from "@projectqai/proto/world";
 
-import { isExpired } from "../../../lib/api/use-track-utils";
-import type { ChangeSet } from "../store/entity-store";
+import type { TrackStatus } from "../../../lib/api/use-track-utils";
+import { getTrackStatus, isExpired } from "../../../lib/api/use-track-utils";
 import { degreesToSectors } from "./sensors";
+
+export type ChangeSet = {
+  version: number;
+  updatedIds: Set<string>;
+  deletedIds: Set<string>;
+  geoChanged: boolean;
+  fullClear?: boolean;
+};
 
 export type SerializedEntityData = Omit<EntityData, "activeSectors"> & {
   activeSectors?: string[];
@@ -23,12 +33,15 @@ export type SerializedDelta = {
   fullRebuild?: boolean;
 };
 
-function getAffiliation(sidc?: string): Affiliation {
-  const code = sidc?.[1]?.toUpperCase();
-  if (code === "F") return "blue";
-  if (code === "H") return "red";
-  if (code === "N") return "neutral";
-  return "unknown";
+const AFFILIATION: Record<TrackStatus, Affiliation> = {
+  Blue: "blue",
+  Red: "red",
+  Neutral: "neutral",
+  Unknown: "unknown",
+};
+
+function getAffiliation(entity: Entity): Affiliation {
+  return AFFILIATION[getTrackStatus(entity)];
 }
 
 function hasGeo(entity: Entity): entity is Entity & { geo: NonNullable<Entity["geo"]> } {
@@ -74,6 +87,12 @@ function extractShape(entity: Entity): ShapeGeometry | undefined {
     }
     case "line":
       return { type: "polyline", points: ringToPositions(plane.value as PlanarRing) };
+    case "circle": {
+      const circle = plane.value as PlanarCircle;
+      if (!circle.center || !circle.radiusM) return undefined;
+      const center: GeoPosition = { lat: circle.center.latitude, lng: circle.center.longitude };
+      return circleToPolygon(center, circle.radiusM, circle.innerRadiusM);
+    }
     case "point": {
       const pt = plane.value as { latitude: number; longitude: number; altitude?: number };
       return { type: "point", position: { lat: pt.latitude, lng: pt.longitude, alt: pt.altitude } };
@@ -105,14 +124,19 @@ function transformEntity(entity: Entity): Omit<EntityData, "activeSectors"> | nu
     position = computeCentroid(pts);
   }
 
+  const coverageIds = entity.sensor?.coverage;
+
   return {
     id: entity.id,
     position,
     shape,
     symbol: entity.symbol?.milStd2525C,
-    label: entity.label || entity.id,
-    affiliation: getAffiliation(entity.symbol?.milStd2525C),
+    label: entity.label || undefined,
+    affiliation: getAffiliation(entity),
     ellipseRadius: hasEllipse(entity) ? 250 : undefined,
+    trackHistoryId: entity.track?.history,
+    trackPredictionId: entity.track?.prediction,
+    coverageEntityIds: coverageIds?.length ? coverageIds : undefined,
   };
 }
 
@@ -174,6 +198,8 @@ const accumulatedDeletedIds = new Set<string>();
 let accumulatedGeoChanged = false;
 let accumulatedVersion = 0;
 let accumulatedFullClear = false;
+let cachedDelta: SerializedDelta | null = null;
+let cachedVersion = -1;
 
 export function accumulateChanges(change: ChangeSet): void {
   if (change.fullClear) {
@@ -201,91 +227,74 @@ export function buildDelta(
   entities: Map<string, Entity>,
   detectionEntityIds: Set<string>,
 ): SerializedDelta {
-  const detectorSectors = computeDetectorSectors(entities, detectionEntityIds);
-
-  if (isFirstBuild) {
-    isFirstBuild = false;
-    accumulatedUpdatedIds.clear();
-    accumulatedDeletedIds.clear();
-    accumulatedGeoChanged = false;
-
-    const result: SerializedEntityData[] = [];
-    for (const entity of entities.values()) {
-      const transformed = transformEntity(entity);
-      if (transformed) {
-        result.push(serializeEntity(transformed, detectorSectors.get(entity.id)));
-      }
-    }
-    return {
-      version: accumulatedVersion,
-      geoChanged: true,
-      entities: result,
-      removed: [],
-      fullRebuild: true,
-    };
+  if (cachedDelta && cachedVersion === accumulatedVersion) {
+    return cachedDelta;
   }
 
-  if (accumulatedFullClear) {
+  const detectorSectors = computeDetectorSectors(entities, detectionEntityIds);
+  let result: SerializedDelta;
+
+  if (isFirstBuild || accumulatedFullClear) {
+    isFirstBuild = false;
+    accumulatedFullClear = false;
     const version = accumulatedVersion;
     accumulatedUpdatedIds.clear();
     accumulatedDeletedIds.clear();
     accumulatedGeoChanged = false;
-    accumulatedFullClear = false;
 
-    const result: SerializedEntityData[] = [];
+    const serialized: SerializedEntityData[] = [];
     for (const entity of entities.values()) {
       const transformed = transformEntity(entity);
       if (transformed) {
-        result.push(serializeEntity(transformed, detectorSectors.get(entity.id)));
+        serialized.push(serializeEntity(transformed, detectorSectors.get(entity.id)));
       }
     }
-    return {
+    result = {
       version,
       geoChanged: true,
-      entities: result,
+      entities: serialized,
       removed: [],
       fullRebuild: true,
     };
-  }
+  } else {
+    const changed: SerializedEntityData[] = [];
+    const removed: string[] = Array.from(accumulatedDeletedIds);
 
-  const changed: SerializedEntityData[] = [];
-  const removed: string[] = Array.from(accumulatedDeletedIds);
+    const affectedDetectorIds = new Set<string>();
+    for (const [detectorId] of detectorSectors) {
+      affectedDetectorIds.add(detectorId);
+    }
 
-  const affectedDetectorIds = new Set<string>();
-  for (const [detectorId] of detectorSectors) {
-    affectedDetectorIds.add(detectorId);
-  }
+    const idsToProcess = new Set(accumulatedUpdatedIds);
+    for (const detectorId of affectedDetectorIds) {
+      idsToProcess.add(detectorId);
+    }
 
-  const idsToProcess = new Set(accumulatedUpdatedIds);
-  for (const detectorId of affectedDetectorIds) {
-    idsToProcess.add(detectorId);
-  }
-
-  for (const id of idsToProcess) {
-    const entity = entities.get(id);
-    if (entity) {
-      const transformed = transformEntity(entity);
-      if (transformed) {
-        changed.push(serializeEntity(transformed, detectorSectors.get(id)));
-      } else if (accumulatedUpdatedIds.has(id)) {
-        removed.push(id);
+    for (const id of idsToProcess) {
+      const entity = entities.get(id);
+      if (entity) {
+        const transformed = transformEntity(entity);
+        if (transformed) {
+          changed.push(serializeEntity(transformed, detectorSectors.get(id)));
+        } else if (accumulatedUpdatedIds.has(id)) {
+          removed.push(id);
+        }
       }
     }
+
+    const geoChanged = accumulatedGeoChanged || removed.length > 0;
+    const version = accumulatedVersion;
+
+    accumulatedUpdatedIds.clear();
+    accumulatedDeletedIds.clear();
+    accumulatedGeoChanged = false;
+
+    result = { version, geoChanged, entities: changed, removed };
   }
 
-  const geoChanged = accumulatedGeoChanged || removed.length > 0;
-  const version = accumulatedVersion;
-
-  accumulatedUpdatedIds.clear();
-  accumulatedDeletedIds.clear();
-  accumulatedGeoChanged = false;
-
-  return {
-    version,
-    geoChanged,
-    entities: changed,
-    removed,
-  };
+  cachedDelta = result;
+  cachedVersion = result.version;
+  return result;
 }
 
 export function* buildDeltaChunked(
@@ -293,51 +302,22 @@ export function* buildDeltaChunked(
   detectionEntityIds: Set<string>,
   chunkSize: number,
 ): Generator<SerializedDelta> {
-  const detectorSectors = computeDetectorSectors(entities, detectionEntityIds);
-  const version = accumulatedVersion;
-  const needsFullRebuild = isFirstBuild || accumulatedFullClear;
+  const delta = buildDelta(entities, detectionEntityIds);
 
-  if (needsFullRebuild) {
-    isFirstBuild = false;
-    accumulatedUpdatedIds.clear();
-    accumulatedDeletedIds.clear();
-    accumulatedGeoChanged = false;
-    accumulatedFullClear = false;
-
-    let chunk: SerializedEntityData[] = [];
-    let isFirst = true;
-
-    for (const entity of entities.values()) {
-      const transformed = transformEntity(entity);
-      if (!transformed) continue;
-      chunk.push(serializeEntity(transformed, detectorSectors.get(entity.id)));
-
-      if (chunk.length >= chunkSize) {
-        yield {
-          version,
-          geoChanged: true,
-          entities: chunk,
-          removed: [],
-          fullRebuild: isFirst || undefined,
-        };
-        chunk = [];
-        isFirst = false;
-      }
-    }
-
-    if (chunk.length > 0 || isFirst) {
-      yield {
-        version,
-        geoChanged: true,
-        entities: chunk,
-        removed: [],
-        fullRebuild: isFirst || undefined,
-      };
-    }
+  if (delta.entities.length <= chunkSize) {
+    yield delta;
     return;
   }
 
-  yield buildDelta(entities, detectionEntityIds);
+  for (let i = 0; i < delta.entities.length; i += chunkSize) {
+    yield {
+      version: delta.version,
+      geoChanged: delta.geoChanged,
+      entities: delta.entities.slice(i, i + chunkSize),
+      removed: i === 0 ? delta.removed : [],
+      fullRebuild: i === 0 ? delta.fullRebuild : undefined,
+    };
+  }
 }
 
 export function hasPendingDelta(): boolean {
@@ -350,5 +330,6 @@ export function resetDeltaState(): void {
   accumulatedDeletedIds.clear();
   accumulatedGeoChanged = false;
   accumulatedFullClear = false;
-  accumulatedVersion = 0;
+  cachedDelta = null;
+  cachedVersion = -1;
 }

@@ -14,10 +14,17 @@ import (
 
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"gopkg.in/yaml.v3"
 )
 
-func (s *WorldServer) LoadFromBytes(b []byte) error {
+var defaultsEpoch = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// LoadDefaults loads default entities, hard-setting lifetime.from to a very
+// old timestamp so that any entity written with a real timestamp wins via LWW.
+// Entities that don't yet exist in head are inserted; existing ones are only
+// overwritten if they have an older timestamp (which in practice won't happen).
+func (s *WorldServer) LoadDefaults(b []byte) error {
 	if len(bytes.TrimSpace(b)) == 0 {
 		return nil
 	}
@@ -30,12 +37,27 @@ func (s *WorldServer) LoadFromBytes(b []byte) error {
 	s.l.Lock()
 	defer s.l.Unlock()
 
+	added := 0
 	for _, e := range entities {
-		s.head[e.Id] = e
-		s.bus.Dirty(e.Id, e, pb.EntityChange_EntityChangeUpdated)
+		// Hard-set lifetime.from so defaults always lose LWW against real data.
+		if e.Lifetime == nil {
+			e.Lifetime = &pb.Lifetime{}
+		}
+		e.Lifetime.From = timestamppb.New(defaultsEpoch)
+
+		if existing, ok := s.head[e.Id]; ok {
+			if !isNewer(e.Lifetime, existing.Lifetime) {
+				continue
+			}
+			s.head[e.Id] = mergeEntity(existing, e)
+		} else {
+			s.head[e.Id] = e
+		}
+		s.bus.Dirty(e.Id, s.head[e.Id], pb.EntityChange_EntityChangeUpdated)
+		added++
 	}
 
-	slog.Info("loaded entities from bytes", "count", len(entities))
+	slog.Info("loaded default entities", "added", added, "total", len(entities))
 	return nil
 }
 
@@ -109,20 +131,15 @@ func parseEntities(b []byte) ([]*pb.Entity, error) {
 	return entities, nil
 }
 
-func (s *WorldServer) shouldPersist(e *pb.Entity) bool {
-	// Skip entities with a controller - they are managed by the controller
-	if e.Controller != nil && e.Controller.Id != nil {
-		return false
-	}
-	// Skip entities with lifetime.until set - they are expiring/temporary
-	if e.Lifetime != nil && e.Lifetime.Until != nil && e.Lifetime.Until.IsValid() {
-		return false
-	}
-	return true
+// isLocal reports whether the entity belongs to this node.
+func (s *WorldServer) isLocal(e *pb.Entity) bool {
+	return s.nodeID != "" && e.Controller != nil && e.Controller.Node != nil && *e.Controller.Node == s.nodeID
 }
 
 // FlushToFile writes the current head state to the world file atomically.
-// Only entities without a controller and without lifetime.until are written.
+// Only local entities (controller.node == this node) are persisted, and only
+// the config and device components are kept. Entities with lifetime.until
+// (expiring/temporary) are skipped entirely.
 func (s *WorldServer) FlushToFile() error {
 	if s.worldFile == "" {
 		return nil
@@ -131,9 +148,31 @@ func (s *WorldServer) FlushToFile() error {
 	s.l.RLock()
 	entities := make([]*pb.Entity, 0, len(s.head))
 	for _, e := range s.head {
-		if s.shouldPersist(e) {
-			entities = append(entities, e)
+		// Skip expiring/temporary entities.
+		if e.Lifetime != nil && e.Lifetime.Until != nil && e.Lifetime.Until.IsValid() {
+			continue
 		}
+		if !s.isLocal(e) {
+			continue
+		}
+
+		hasSomething := false
+
+		stub := &pb.Entity{Id: e.Id}
+		if e.Config != nil {
+			stub.Config = e.Config
+			hasSomething = true
+		}
+		if e.Device != nil {
+			stub.Device = e.Device
+			hasSomething = true
+		}
+
+		if !hasSomething {
+			continue
+		}
+
+		entities = append(entities, stub)
 	}
 	s.l.RUnlock()
 
@@ -273,10 +312,13 @@ func addKeyValue(node *yaml.Node, key string, val interface{}) {
 }
 
 // StartPeriodicFlush starts a goroutine that periodically flushes the head to the world file.
+// It also starts a debounce goroutine that flushes shortly after config changes.
 func (s *WorldServer) StartPeriodicFlush(interval time.Duration) {
 	if s.worldFile == "" {
 		return
 	}
+
+	s.persistNotify = make(chan struct{}, 1)
 
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -288,4 +330,46 @@ func (s *WorldServer) StartPeriodicFlush(interval time.Duration) {
 			}
 		}
 	}()
+
+	// Debounced flush: wait for a config change signal, then debounce
+	// additional signals within a short window before flushing.
+	go func() {
+		const debounce = 2 * time.Second
+		for {
+			// Block until a config change is signalled.
+			_, ok := <-s.persistNotify
+			if !ok {
+				return
+			}
+			// Drain any additional signals that arrive within the debounce window.
+			timer := time.NewTimer(debounce)
+		drain:
+			for {
+				select {
+				case _, ok := <-s.persistNotify:
+					if !ok {
+						timer.Stop()
+						return
+					}
+				case <-timer.C:
+					break drain
+				}
+			}
+			if err := s.FlushToFile(); err != nil {
+				slog.Warn("failed to flush world state (debounced)", "error", err)
+			}
+		}
+	}()
+}
+
+// notifyPersist signals the debounced flush goroutine that a config change occurred.
+func (s *WorldServer) notifyPersist() {
+	if s.persistNotify == nil {
+		return
+	}
+	select {
+	case s.persistNotify <- struct{}{}:
+	default:
+		// Already signalled, debounce will pick it up.
+	}
 }

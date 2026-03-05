@@ -93,18 +93,57 @@ func scanSerialPorts(logger *slog.Logger) map[string]devices.DeviceInfo {
 		}
 
 		info := devices.DeviceInfo{
-			Name: name,
+			Name:  name,
+			Label: name,
 			Serial: &devices.SerialDescriptor{
-				Path: "/dev/" + name,
+				Path: stablePath(name),
 			},
 		}
 
 		readUSBInfo(&info, resolved)
 
-		ports[name] = info
+		// Use a stable hardware ID as the map key so that the entity ID
+		// does not change when the kernel assigns a different ttyUSB number.
+		key := stableID(name, info)
+		info.Name = key
+
+		ports[key] = info
 	}
 
 	return ports
+}
+
+// stableID returns a hardware-based identifier for the device that is stable
+// across reboots and re-enumeration. When the USB serial number is available,
+// it returns "vid-pid-serial". Otherwise falls back to the tty device name.
+func stableID(ttyName string, info devices.DeviceInfo) string {
+	if u := info.USB; u != nil && u.SerialNumber != "" {
+		return fmt.Sprintf("%04x-%04x-%s", u.VendorID, u.ProductID, u.SerialNumber)
+	}
+	return ttyName
+}
+
+// stablePath returns a stable device path for the given tty device name.
+// On Linux, /dev/serial/by-id/ contains symlinks named after the hardware
+// identity (e.g. usb-Silicon_Labs_CP2102_0001-if00-port0) that point to the
+// actual /dev/ttyUSB* node. These persist across re-enumeration.
+func stablePath(ttyName string) string {
+	const byID = "/dev/serial/by-id"
+	entries, err := os.ReadDir(byID)
+	if err != nil {
+		return "/dev/" + ttyName
+	}
+	for _, entry := range entries {
+		target, err := os.Readlink(filepath.Join(byID, entry.Name()))
+		if err != nil {
+			continue
+		}
+		// target is relative, e.g. "../../ttyUSB0"
+		if filepath.Base(target) == ttyName {
+			return filepath.Join(byID, entry.Name())
+		}
+	}
+	return "/dev/" + ttyName
 }
 
 // readUSBInfo walks up from the tty device sysfs path to find the USB device

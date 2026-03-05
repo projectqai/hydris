@@ -3,9 +3,19 @@ package cli
 import (
 	"fmt"
 
+	"github.com/joho/godotenv"
 	"github.com/projectqai/hydris/goclient"
 	"github.com/spf13/cobra"
 )
+
+var CMD = &cobra.Command{
+	Use:   "hydris",
+	Short: "world state machine",
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		_ = godotenv.Load()
+		return nil
+	},
+}
 
 var (
 	conn         *goclient.Connection

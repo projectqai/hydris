@@ -72,6 +72,12 @@ build:
     - CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o hydris-windows-amd64-${TAG_NAME}.exe .
     - CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o hydris-darwin-amd64-${TAG_NAME} .
     - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o hydris-darwin-arm64-${TAG_NAME} .
+    - |
+      for f in hydris-linux-amd64-$TAG_NAME hydris-linux-arm64-$TAG_NAME hydris-windows-amd64-$TAG_NAME.exe hydris-darwin-amd64-$TAG_NAME hydris-darwin-arm64-$TAG_NAME; do
+        curl --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+          --upload-file "$f" \
+          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/hydris/$TAG_NAME/$f"
+      done
   artifacts:
     paths:
       - hydris-linux-amd64-*
@@ -110,6 +116,8 @@ android:
     - export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools
     - export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
     - make android
+    - 'TAG_NAME=${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}'
+    - 'curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file view/frontend/apps/foss/android/app/build/outputs/apk/release/app-release.apk "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/hydris/$TAG_NAME/hydris-$TAG_NAME.apk"'
   artifacts:
     paths:
       - view/frontend/apps/foss/android/app/build/outputs/apk/release/app-release.apk

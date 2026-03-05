@@ -6,8 +6,10 @@ import (
 	"log/slog"
 
 	"github.com/projectqai/hydris/builtin"
+	"github.com/projectqai/hydris/builtin/controller"
 	"github.com/projectqai/hydris/builtin/devices"
 	pb "github.com/projectqai/proto/go"
+	"google.golang.org/protobuf/proto"
 )
 
 func init() {
@@ -15,51 +17,77 @@ func init() {
 }
 
 func Run(ctx context.Context, logger *slog.Logger, _ string) error {
-	if !builtin.LocalPermissions.AllowLocalSerial {
-		logger.Info("serial port discovery disabled (use --allow-local-serial to enable)")
+	if builtin.LocalPermissions.DisableLocalSerial {
+		logger.Info("serial port discovery disabled (--disable-local-serial is set)")
 		<-ctx.Done()
 		return ctx.Err()
 	}
 
 	logger.Info("serial port discovery enabled")
 
-	grpcConn, err := builtin.BuiltinClientConn()
-	if err != nil {
-		return fmt.Errorf("grpc connect: %w", err)
+	controllerName := "serial"
+
+	if err := controller.Push(ctx, &pb.Entity{
+		Id:    "serial.service",
+		Label: proto.String("Serial"),
+		Controller: &pb.Controller{
+			Id: &controllerName,
+		},
+		Device: &pb.DeviceComponent{
+			Category: proto.String("Network"),
+		},
+		Configurable: &pb.ConfigurableComponent{
+			Label: proto.String("Serial Port Discovery"),
+		},
+		Interactivity: &pb.InteractivityComponent{},
+	}); err != nil {
+		return fmt.Errorf("push service entity: %w", err)
 	}
-	defer func() { _ = grpcConn.Close() }()
 
-	client := pb.NewWorldServiceClient(grpcConn)
+	return controller.Run(ctx, "serial.service", func(ctx context.Context, entity *pb.Entity, ready func()) error {
+		ready()
 
-	resp, err := client.GetLocalNode(ctx, &pb.GetLocalNodeRequest{})
-	if err != nil {
-		return fmt.Errorf("get local node: %w", err)
-	}
-	nodeEntityID := resp.Entity.Id
-
-	logger.Info("serial discovery started",
-		"nodeEntityID", nodeEntityID,
-	)
-
-	known := make(map[string]devices.DeviceInfo)
-
-	// discoverAndWatch sends snapshots of currently-present serial ports on a
-	// channel. It fires once immediately (initial scan) and again whenever
-	// devices are added or removed.
-	snapshots := discoverAndWatch(ctx, logger)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case current, ok := <-snapshots:
-			if !ok {
-				return nil
-			}
-			reconcile(ctx, logger, client, nodeEntityID, known, current)
-			known = current
+		grpcConn, err := builtin.BuiltinClientConn()
+		if err != nil {
+			return fmt.Errorf("grpc connect: %w", err)
 		}
-	}
+		defer func() { _ = grpcConn.Close() }()
+
+		client := pb.NewWorldServiceClient(grpcConn)
+
+		resp, err := client.GetLocalNode(ctx, &pb.GetLocalNodeRequest{})
+		if err != nil {
+			return fmt.Errorf("get local node: %w", err)
+		}
+		nodeEntityID := resp.Entity.Id
+
+		logger.Info("serial discovery started", "nodeEntityID", nodeEntityID)
+
+		known := make(map[string]devices.DeviceInfo)
+		snapshots := discoverAndWatch(ctx, logger)
+
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case current, ok := <-snapshots:
+				if !ok {
+					return nil
+				}
+				reconcile(ctx, logger, client, nodeEntityID, known, current)
+				known = current
+
+				_, _ = client.Push(ctx, &pb.EntityChangeRequest{
+					Changes: []*pb.Entity{{
+						Id: "serial.service",
+						Metric: &pb.MetricComponent{Metrics: []*pb.Metric{
+							{Kind: pb.MetricKind_MetricKindCount.Enum(), Label: proto.String("Connected Ports"), Id: proto.Uint32(1), Val: &pb.Metric_Uint64{Uint64: uint64(len(known))}},
+						}},
+					}},
+				})
+			}
+		}
+	})
 }
 
 // reconcile compares the known device set with the current snapshot and pushes
@@ -75,7 +103,8 @@ func reconcile(ctx context.Context, logger *slog.Logger, client pb.WorldServiceC
 		}
 		logger.Info("serial port appeared", "name", name, "path", info.Serial.Path)
 		entity := devices.BuildDeviceEntity("serial", nodeEntityID, info)
-		entity.Device.Parent = &nodeEntityID
+		serviceID := "serial.service"
+		entity.Device.Parent = &serviceID
 		entity.Device.State = pb.DeviceState_DeviceStateActive
 		newEntities = append(newEntities, entity)
 	}

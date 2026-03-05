@@ -41,7 +41,7 @@ android: gen frontend android_
 	cd view/frontend && bun run build:android
 	@echo adb install -r view/frontend/apps/foss/android/app/build/outputs/apk/release/app-release.apk 
 android_:
-	cd android && go mod tidy && go install golang.org/x/mobile/cmd/gomobile && gomobile init && gomobile bind -target=android/arm64 -androidapi 24 -o hydris.aar
+	cd android && go mod tidy && go install golang.org/x/mobile/cmd/gomobile && gomobile init && gomobile bind -target=android/arm64 -androidapi 24 -ldflags "-checklinkname=0" -o hydris.aar
 
 pre-release: vet
 	@[ -z "$$(git status --porcelain)" ]                                || (echo "FAIL: working tree is dirty" && false)

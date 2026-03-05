@@ -29,6 +29,7 @@ export function ImageStream({ url, objectFit = "cover" }: StreamComponentProps) 
         <Image
           key={key}
           source={{ uri: url }}
+          accessibilityLabel="Image stream"
           onLoad={() => {
             setConnectionState("connected");
             setError(null);

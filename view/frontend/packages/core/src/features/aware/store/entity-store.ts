@@ -3,6 +3,7 @@ import { create } from "zustand";
 
 import { getEntityName, isAsset, isExpired, isTrack } from "../../../lib/api/use-track-utils";
 import { worldClient } from "../../../lib/api/world-client";
+import type { ChangeSet } from "../utils/transform-entities";
 import { accumulateChanges, resetDeltaState } from "../utils/transform-entities";
 import { classifyEvent } from "./process-events";
 
@@ -17,13 +18,17 @@ let derivedStateTimeout: ReturnType<typeof setTimeout> | null = null;
 const previousPositions = new Map<string, { lat: number; lng: number }>();
 let changeVersion = 0;
 
-export type ChangeSet = {
-  version: number;
-  updatedIds: Set<string>;
-  deletedIds: Set<string>;
-  geoChanged: boolean;
-  fullClear?: boolean;
-};
+function trackPosition(id: string, geo: Entity["geo"]) {
+  if (geo) {
+    previousPositions.set(id, { lat: geo.latitude, lng: geo.longitude });
+  }
+}
+
+function hasGeoMoved(id: string, geo: Entity["geo"]): boolean {
+  if (!geo) return false;
+  const prev = previousPositions.get(id);
+  return !prev || prev.lat !== geo.latitude || prev.lng !== geo.longitude;
+}
 
 function isDetectionEntity(entity: Entity): boolean {
   const detectorId = entity.detection?.detectorEntityId;
@@ -145,9 +150,7 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
 
       if (!geoChanged) {
         for (const [id, entity] of pendingUpdates) {
-          if (!entity.geo) continue;
-          const prev = previousPositions.get(id);
-          if (!prev || prev.lat !== entity.geo.latitude || prev.lng !== entity.geo.longitude) {
+          if (hasGeoMoved(id, entity.geo)) {
             geoChanged = true;
             break;
           }
@@ -192,9 +195,7 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
           state.detectionEntityIds.clear();
           for (const [id, entity] of survived) {
             state.entities.set(id, entity);
-            if (entity.geo) {
-              previousPositions.set(id, { lat: entity.geo.latitude, lng: entity.geo.longitude });
-            }
+            trackPosition(id, entity.geo);
             if (isDetectionEntity(entity)) state.detectionEntityIds.add(id);
           }
         } else {
@@ -207,12 +208,7 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
 
         for (const [id, entity] of pendingUpdates) {
           state.entities.set(id, entity);
-          if (entity.geo) {
-            previousPositions.set(id, {
-              lat: entity.geo.latitude,
-              lng: entity.geo.longitude,
-            });
-          }
+          trackPosition(id, entity.geo);
           if (isDetectionEntity(entity)) {
             state.detectionEntityIds.add(id);
           } else {
@@ -327,12 +323,7 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
               state.entities.set(entity.id, entity);
               updatedIds.add(entity.id);
 
-              if (entity.geo) {
-                previousPositions.set(entity.id, {
-                  lat: entity.geo.latitude,
-                  lng: entity.geo.longitude,
-                });
-              }
+              trackPosition(entity.id, entity.geo);
               if (isDetectionEntity(entity)) {
                 state.detectionEntityIds.add(entity.id);
               }
@@ -419,24 +410,15 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
         state.detectionEntityIds.delete(id);
       }
 
-      const prevPos = previousPositions.get(id);
-      const geoChanged =
-        updated.geo &&
-        (!prevPos || prevPos.lat !== updated.geo.latitude || prevPos.lng !== updated.geo.longitude);
-
-      if (updated.geo) {
-        previousPositions.set(id, {
-          lat: updated.geo.latitude,
-          lng: updated.geo.longitude,
-        });
-      }
+      const geoChanged = hasGeoMoved(id, updated.geo);
+      trackPosition(id, updated.geo);
 
       changeVersion++;
       const lastChange: ChangeSet = {
         version: changeVersion,
         updatedIds: new Set([id]),
         deletedIds: new Set(),
-        geoChanged: !!geoChanged,
+        geoChanged,
       };
       accumulateChanges(lastChange);
       scheduleDerivedStateUpdate();
@@ -458,26 +440,15 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
             state.detectionEntityIds.delete(id);
           }
 
-          const prevPos = previousPositions.get(id);
-          const geoChanged =
-            entity.geo &&
-            (!prevPos ||
-              prevPos.lat !== entity.geo.latitude ||
-              prevPos.lng !== entity.geo.longitude);
-
-          if (entity.geo) {
-            previousPositions.set(id, {
-              lat: entity.geo.latitude,
-              lng: entity.geo.longitude,
-            });
-          }
+          const geoChanged = hasGeoMoved(id, entity.geo);
+          trackPosition(id, entity.geo);
 
           changeVersion++;
           const lastChange: ChangeSet = {
             version: changeVersion,
             updatedIds: new Set([id]),
             deletedIds: new Set(),
-            geoChanged: !!geoChanged,
+            geoChanged,
           };
           accumulateChanges(lastChange);
           scheduleDerivedStateUpdate();

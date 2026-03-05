@@ -11,9 +11,10 @@ import (
 	"github.com/aep/gasterix/cat62"
 	"github.com/projectqai/hydris/builtin"
 	pb "github.com/projectqai/proto/go"
+	"google.golang.org/protobuf/proto"
 )
 
-func runReceiver(ctx context.Context, logger *slog.Logger, entity *pb.Entity) error {
+func runReceiver(ctx context.Context, logger *slog.Logger, entity *pb.Entity, ready func()) error {
 	config := entity.Config
 	listenAddr := ":8600"
 	category := 62
@@ -42,6 +43,7 @@ func runReceiver(ctx context.Context, logger *slog.Logger, entity *pb.Entity) er
 	if err != nil {
 		return fmt.Errorf("listen UDP: %w", err)
 	}
+	ready()
 	defer func() { _ = conn.Close() }()
 
 	logger.Info("ASTERIX UDP receiver listening", "addr", listenAddr, "category", category)
@@ -59,6 +61,7 @@ func runReceiver(ctx context.Context, logger *slog.Logger, entity *pb.Entity) er
 		_ = conn.Close()
 	}()
 
+	var packetsReceived, entitiesPushed uint64
 	buffer := make([]byte, 65536)
 	for {
 		select {
@@ -80,6 +83,7 @@ func runReceiver(ctx context.Context, logger *slog.Logger, entity *pb.Entity) er
 			continue
 		}
 
+		packetsReceived++
 		logger.Debug("Received ASTERIX data", "bytes", n, "from", remoteAddr)
 
 		blocks, err := gasterix.DecodeAll(buffer[:n])
@@ -116,7 +120,17 @@ func runReceiver(ctx context.Context, logger *slog.Logger, entity *pb.Entity) er
 			if err != nil {
 				logger.Error("Push to Hydris failed", "error", err, "count", len(entities))
 			} else {
+				entitiesPushed += uint64(len(entities))
 				logger.Info("Pushed entities to Hydris", "count", len(entities))
+				_, _ = client.Push(ctx, &pb.EntityChangeRequest{
+					Changes: []*pb.Entity{{
+						Id: entity.Id,
+						Metric: &pb.MetricComponent{Metrics: []*pb.Metric{
+							{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("packets received"), Id: proto.Uint32(1), Val: &pb.Metric_Uint64{Uint64: packetsReceived}},
+							{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("entities pushed"), Id: proto.Uint32(2), Val: &pb.Metric_Uint64{Uint64: entitiesPushed}},
+						}},
+					}},
+				})
 			}
 		}
 	}

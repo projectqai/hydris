@@ -1,4 +1,5 @@
 import "maplibre-gl/dist/maplibre-gl.css";
+import "./overrides.css";
 
 import type { Layer, PickingInfo } from "@deck.gl/core";
 import { MapboxOverlay } from "@deck.gl/mapbox";
@@ -6,12 +7,13 @@ import type { FeatureCollection } from "geojson";
 import type { StyleSpecification } from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import type { MapRef, ViewStateChangeEvent } from "react-map-gl/maplibre";
-import { Map as MapGL, useControl } from "react-map-gl/maplibre";
+import { Map as MapGL, ScaleControl, useControl } from "react-map-gl/maplibre";
 
 import { BASE_LAYER_SOURCES, DEFAULT_POSITION } from "../../constants";
 import {
   createCoverageLayer,
   createLabelLayer,
+  createRangeRingsLayers,
   createSelectionLayer,
   createSensorSectorLayer,
   createShapeLayer,
@@ -30,6 +32,19 @@ import type {
 import { shapeToFeature } from "../../utils/shape-to-geojson";
 
 const SECTOR_MIN_ZOOM = 12;
+
+// Copied from maplibre's ScaleControl so ring gaps match the scale bar exactly
+function getDecimalRoundNum(d: number): number {
+  const multiplier = Math.pow(10, Math.ceil(-Math.log(d) / Math.LN10));
+  return Math.round(d * multiplier) / multiplier;
+}
+
+function getRoundNum(num: number): number {
+  const pow10 = Math.pow(10, `${Math.floor(num)}`.length - 1);
+  let d = num / pow10;
+  d = d >= 10 ? 10 : d >= 5 ? 5 : d >= 3 ? 3 : d >= 2 ? 2 : d >= 1 ? 1 : getDecimalRoundNum(d);
+  return pow10 * d;
+}
 
 type ViewState = {
   longitude: number;
@@ -58,10 +73,17 @@ function DeckGLOverlay({ layers, pickingRadius, onClick, onHover }: DeckGLOverla
   return null;
 }
 
+type RasterPaint = {
+  "raster-brightness-max"?: number;
+  "raster-brightness-min"?: number;
+  "raster-saturation"?: number;
+};
+
 const createRasterStyle = (
   tiles: string[],
   attribution: string,
   maxZoom = 20,
+  paint: RasterPaint = {},
 ): StyleSpecification => ({
   version: 8,
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
@@ -74,7 +96,7 @@ const createRasterStyle = (
       attribution,
     },
   },
-  layers: [{ id: "raster-layer", type: "raster", source: "raster" }],
+  layers: [{ id: "raster-layer", type: "raster", source: "raster", paint }],
 });
 
 const STYLES: Record<BaseLayer, StyleSpecification> = {
@@ -87,6 +109,14 @@ const STYLES: Record<BaseLayer, StyleSpecification> = {
     [BASE_LAYER_SOURCES.satellite.url],
     BASE_LAYER_SOURCES.satellite.attribution,
     BASE_LAYER_SOURCES.satellite.maxZoom,
+  ),
+  street: createRasterStyle(
+    ["a", "b", "c", "d"].map(
+      (s) => `https://${s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png`,
+    ),
+    BASE_LAYER_SOURCES.street.attribution,
+    BASE_LAYER_SOURCES.street.maxZoom,
+    { "raster-brightness-max": 0.87, "raster-brightness-min": 0.1 },
   ),
 };
 
@@ -102,7 +132,7 @@ export type MapActions = {
   getView: () => { lat: number; lng: number; zoom: number } | null;
 };
 
-export type ChangeInfo = {
+type ChangeInfo = {
   version: number;
   geoChanged: boolean;
   updatedIds?: Set<string>;
@@ -115,9 +145,15 @@ export type MapViewProps = {
   selectedId?: string | null;
   trackedId?: string | null;
   baseLayer?: BaseLayer;
+  colorScheme?: "dark" | "light";
+  initialView?: { lat: number; lng: number; zoom: number };
   coverageVisible?: boolean;
   shapesVisible?: boolean;
+  trackHistoryVisible?: boolean;
+  rangeRingCenter?: GeoPosition | null;
+  rangeRingsActive?: boolean;
   onEntityClick?: (id: string | null) => void | Promise<void>;
+  onMapClick?: (lat: number, lng: number) => void | Promise<void>;
   onReady?: () => void | Promise<void>;
   onActionsReady?: (actions: MapActions) => void;
   onTrackingLost?: () => void | Promise<void>;
@@ -132,17 +168,26 @@ export function MapView({
   filter = DEFAULT_FILTER,
   selectedId = null,
   trackedId = null,
-  baseLayer = "dark",
+  baseLayer = "satellite",
+  colorScheme = "dark",
+  initialView,
   coverageVisible = false,
   shapesVisible = true,
+  trackHistoryVisible = false,
+  rangeRingCenter = null,
+  rangeRingsActive = false,
   onEntityClick,
+  onMapClick,
   onReady,
   onActionsReady,
   onTrackingLost,
   onViewChange,
 }: MapViewProps) {
   const mapRef = useRef<MapRef>(null);
-  const [viewState, setViewState] = useState<ViewState>(INITIAL_VIEW_STATE);
+  const resolvedInitialView = initialView
+    ? { longitude: initialView.lng, latitude: initialView.lat, zoom: initialView.zoom }
+    : INITIAL_VIEW_STATE;
+  const [viewState, setViewState] = useState<ViewState>(resolvedInitialView);
   const [fontLoaded, setFontLoaded] = useState(false);
   const viewStateRef = useRef(viewState);
   viewStateRef.current = viewState;
@@ -150,6 +195,8 @@ export function MapView({
   // Keep callback refs current to avoid stale closures in deck.gl layers
   const onEntityClickRef = useRef(onEntityClick);
   onEntityClickRef.current = onEntityClick;
+  const onMapClickRef = useRef(onMapClick);
+  onMapClickRef.current = onMapClick;
   const actionsReadyCalledRef = useRef(false);
   const shapesCollectionRef = useRef<FeatureCollection<ShapeFeature["geometry"], ShapeProperties>>({
     type: "FeatureCollection",
@@ -305,30 +352,96 @@ export function MapView({
     selectedId,
     shapesVisible,
     zoom: viewState.zoom,
+    pickable: !rangeRingsActive,
     onEntityClick: handleEntityClick,
     onClusterClick: handleClusterClick,
   });
 
+  const coverageShapeIds = new Set<string>();
+  for (const entity of entityMap.values()) {
+    if (entity.coverageEntityIds) {
+      for (const covId of entity.coverageEntityIds) coverageShapeIds.add(covId);
+    }
+  }
+
+  const coverageFeatures: ShapeFeature[] = [];
+  for (const entity of coverageEntities) {
+    if (!entity.coverageEntityIds) continue;
+    if (!coverageVisible && entity.id !== selectedId) continue;
+    for (const covId of entity.coverageEntityIds) {
+      const covEntity = entityMap.get(covId);
+      if (covEntity?.shape) {
+        coverageFeatures.push(
+          shapeToFeature(covId, covEntity.shape, covEntity.affiliation ?? "unknown", false),
+        );
+      }
+    }
+  }
+
   const sectorData: SectorRenderData[] = [];
   if (showSectors) {
     for (const entity of coverageEntities) {
-      const sector = prepareSectorData(entity);
+      const sector = prepareSectorData(entity, colorScheme);
       if (sector) sectorData.push(sector);
     }
   }
 
-  const visibleShapes = shapesCollectionRef.current.features.filter(
-    (f) => filter.tracks[f.properties.affiliation],
-  );
+  const selectedEntity = selectedId ? entityMap.get(selectedId) : null;
+  const selectedTrackShapeIds = new Set<string>();
+  if (selectedEntity?.trackHistoryId) selectedTrackShapeIds.add(selectedEntity.trackHistoryId);
+  if (selectedEntity?.trackPredictionId)
+    selectedTrackShapeIds.add(selectedEntity.trackPredictionId);
+
+  const visibleShapes = shapesCollectionRef.current.features.filter((f) => {
+    if (coverageShapeIds.has(f.properties.id)) return false;
+    if (!filter.tracks[f.properties.affiliation]) return false;
+    const entity = entityMap.get(f.properties.id);
+    if (!entity?.label) {
+      // Unlabeled shape (track history/prediction): show if toggle on or belongs to selected
+      return trackHistoryVisible || selectedTrackShapeIds.has(f.properties.id);
+    }
+    return shapesVisible || f.properties.id === selectedId;
+  });
 
   const handleShapeClick = (id: string) => {
     onEntityClickRef.current?.(id);
   };
 
+  const map = mapRef.current;
+  const container = map?.getContainer();
+  const vpWidth = container?.clientWidth ?? 1200;
+  const vpHeight = container?.clientHeight ?? 800;
+
+  let rangeRingResult: ReturnType<typeof createRangeRingsLayers> | null = null;
+  if (rangeRingCenter && map) {
+    // Same projection + rounding the ScaleControl uses internally
+    const SCALE_BAR_MAX_PX = 100;
+    const y = vpHeight / 2;
+    const left = map.unproject([0, y]);
+    const right = map.unproject([SCALE_BAR_MAX_PX, y]);
+    const maxMeters = left.distanceTo(right);
+    const scaleBarDistanceM = getRoundNum(maxMeters);
+
+    // 1px ground distance at viewport center
+    const p0 = map.unproject([vpWidth / 2, y]);
+    const p1 = map.unproject([vpWidth / 2 + 1, y]);
+    const metersPerPx = p0.distanceTo(p1);
+
+    rangeRingResult = createRangeRingsLayers({
+      center: rangeRingCenter,
+      scaleBarDistanceM,
+      metersPerPx,
+      viewportWidth: vpWidth,
+      viewportHeight: vpHeight,
+      baseLayer,
+    });
+  }
+
   const layers: Layer[] = [
     createCoverageLayer({
-      data: coverageEntities,
-      visible: coverageVisible,
+      data: coverageFeatures,
+      visible: coverageVisible || coverageFeatures.length > 0,
+      baseLayer,
     }),
     createSensorSectorLayer({
       data: sectorData,
@@ -336,10 +449,11 @@ export function MapView({
     }),
     createShapeLayer({
       data: visibleShapes,
-      visible: shapesVisible,
+      visible: visibleShapes.length > 0,
       selectedId,
       onClick: handleShapeClick,
     }),
+    ...(rangeRingResult?.layers ?? []),
     createSelectionLayer({
       data: selectionData,
     }),
@@ -348,6 +462,7 @@ export function MapView({
       data: labelData,
       visible: fontLoaded && labelData.length > 0,
     }),
+    ...(rangeRingResult ? [rangeRingResult.centerLayer] : []),
   ];
 
   const handleClick = (info: PickingInfo) => {
@@ -355,6 +470,10 @@ export function MapView({
     if (isAnimatingRef.current) return;
     const msSinceLayerClick = Date.now() - lastLayerClickTimeRef.current;
     if (msSinceLayerClick < 500) return;
+    if (rangeRingsActive && info.coordinate) {
+      onMapClickRef.current?.(info.coordinate[1]!, info.coordinate[0]!);
+      return;
+    }
     if (!info.picked) {
       onEntityClickRef.current?.(null);
     }
@@ -368,7 +487,11 @@ export function MapView({
   };
 
   const handleHover = (info: PickingInfo) => {
-    setCursor(info.picked ? "pointer" : "grab");
+    if (rangeRingsActive && !info.picked) {
+      setCursor("crosshair");
+    } else {
+      setCursor(info.picked ? "pointer" : "grab");
+    }
   };
 
   const lastIntegerZoomRef = useRef(-1);
@@ -406,7 +529,7 @@ export function MapView({
         ref={mapRef}
         mapStyle={STYLES[baseLayer]}
         attributionControl={false}
-        initialViewState={INITIAL_VIEW_STATE}
+        initialViewState={resolvedInitialView}
         onMove={handleMove}
         onMoveEnd={handleMoveEnd}
         onLoad={handleMapLoad}
@@ -436,6 +559,7 @@ export function MapView({
           onClick={handleClick}
           onHover={handleHover}
         />
+        <ScaleControl position="bottom-right" maxWidth={100} unit="metric" />
       </MapGL>
     </div>
   );

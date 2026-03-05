@@ -1,10 +1,21 @@
-import { create } from "@bufbuild/protobuf";
+import { clone, create } from "@bufbuild/protobuf";
 import type { Entity } from "@projectqai/proto/world";
-import { ConfigurationComponentSchema, GeoSpatialComponentSchema } from "@projectqai/proto/world";
+import {
+  ConfigurationComponentSchema,
+  DeviceComponentSchema,
+  EntitySchema,
+  GeoSpatialComponentSchema,
+} from "@projectqai/proto/world";
 import { useState } from "react";
 
 import { useEntityStore } from "../../features/aware/store/entity-store";
 import { worldClient } from "./world-client";
+
+function randomHex8(): string {
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 type JsonObject = { [key: string]: JsonValue };
@@ -74,5 +85,115 @@ export function useEntityMutation() {
     }
   };
 
-  return { updateEntityLocation, updateEntityConfig, isPending, error };
+  const pushDeviceConfig = async (
+    entity: Entity,
+    value: JsonObject,
+  ): Promise<{ version: bigint }> => {
+    const version = (entity.config?.version ?? 0n) + 1n;
+
+    const configComponent = create(ConfigurationComponentSchema, {
+      value,
+      version,
+    });
+
+    setIsPending(true);
+    setError(null);
+
+    try {
+      const response = await worldClient.push({
+        changes: [create(EntitySchema, { id: entity.id, config: configComponent })],
+      });
+
+      if (!response.accepted) {
+        throw new Error(response.debug || "Server rejected config update");
+      }
+
+      return { version };
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      setError(error);
+      throw error;
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  const createDevice = async (parentId: string, deviceClass: string): Promise<string> => {
+    const id = `${parentId}.${deviceClass}.${randomHex8()}`;
+
+    setIsPending(true);
+    setError(null);
+
+    try {
+      const response = await worldClient.push({
+        changes: [
+          create(EntitySchema, {
+            id,
+            device: create(DeviceComponentSchema, { parent: parentId, class: deviceClass }),
+          }),
+        ],
+      });
+
+      if (!response.accepted) {
+        throw new Error(response.debug || "Server rejected device creation");
+      }
+
+      return id;
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      setError(error);
+      throw error;
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  const removeDeviceConfig = async (entity: Entity) => {
+    setIsPending(true);
+    setError(null);
+
+    try {
+      const replacement = clone(EntitySchema, entity);
+      replacement.config = undefined;
+      const response = await worldClient.push({
+        replacements: [replacement],
+      });
+
+      if (!response.accepted) {
+        throw new Error(response.debug || "Server rejected config removal");
+      }
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      setError(error);
+      throw error;
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  const deleteDevice = async (entityId: string) => {
+    setIsPending(true);
+    setError(null);
+
+    try {
+      await worldClient.expireEntity({ id: entityId });
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      setError(error);
+      throw error;
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  return {
+    updateEntityLocation,
+    updateEntityConfig,
+    pushDeviceConfig,
+    removeDeviceConfig,
+    createDevice,
+    deleteDevice,
+    isPending,
+    error,
+  };
 }

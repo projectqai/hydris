@@ -1,13 +1,13 @@
 import { TextLayer } from "@deck.gl/layers";
 
-export type LabelData = {
+type LabelData = {
   id: string;
   position: [number, number];
   label: string;
   offsetY: number;
 };
 
-export type LabelLayerProps = {
+type LabelLayerProps = {
   data: LabelData[];
   visible: boolean;
 };

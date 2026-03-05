@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/projectqai/hydris/metrics"
+	"github.com/projectqai/hydris/pkg/metrics"
 )
 
 type NodeInfo struct {

@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/projectqai/hydris/cmd"
 	"github.com/projectqai/hydris/goclient"
 	pb "github.com/projectqai/proto/go"
 
@@ -110,6 +109,15 @@ func init() {
 		RunE:    runRM,
 	}
 
+	confCmd := &cobra.Command{
+		Use:     "conf [entity-id]",
+		Aliases: []string{"configure", "config"},
+		Short:   "interactive device tree configuration",
+		Args:    cobra.MaximumNArgs(1),
+		RunE:    runConfigure,
+	}
+	confCmd.Flags().Bool("clear", false, "remove the configuration from the entity")
+
 	clearCmd := &cobra.Command{
 		Use:   "clear",
 		Short: "remove all entities by listing and deleting them one by one",
@@ -123,14 +131,6 @@ func init() {
 		RunE:    runDT,
 	}
 
-	reconcileCmd := &cobra.Command{
-		Use:     "reconcile [controller]",
-		Aliases: []string{"rec"},
-		Short:   "stream reconciliation events for a controller",
-		Args:    cobra.ExactArgs(1),
-		RunE:    runReconcile,
-	}
-
 	ECCMD.AddCommand(lsCmd)
 	ECCMD.AddCommand(observeCmd)
 	ECCMD.AddCommand(debugCmd)
@@ -138,11 +138,11 @@ func init() {
 	ECCMD.AddCommand(putCmd)
 	ECCMD.AddCommand(editCmd)
 	ECCMD.AddCommand(rmCmd)
+	ECCMD.AddCommand(confCmd)
 	ECCMD.AddCommand(clearCmd)
 	ECCMD.AddCommand(dtCmd)
-	ECCMD.AddCommand(reconcileCmd)
 
-	cmd.CMD.AddCommand(ECCMD)
+	CMD.AddCommand(ECCMD)
 }
 
 func runObserve(cmd *cobra.Command, args []string) error {
@@ -231,7 +231,7 @@ func protoToYAML(entity *pb.Entity) ([]byte, error) {
 	for i := 0; i < fields.Len(); i++ {
 		fd := fields.Get(i)
 		fieldList = append(fieldList, fieldInfo{
-			name:   fd.JSONName(),
+			name:   string(fd.Name()),
 			number: int(fd.Number()),
 		})
 	}
@@ -286,29 +286,47 @@ func yamlToProto(yamlBytes []byte, entity *pb.Entity) error {
 
 // yamlToProtoMulti converts multiple YAML documents to protobuf messages
 // Supports multiple documents separated by ---
-func yamlToProtoMulti(yamlBytes []byte) ([]*pb.Entity, error) {
+// Returns all successfully parsed entities and per-document errors
+func yamlToProtoMulti(yamlBytes []byte) ([]*pb.Entity, []error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(yamlBytes))
 	var entities []*pb.Entity
+	var errs []error
+	docIndex := 0
 
+	consecutiveErrors := 0
 	for {
 		var data map[string]interface{}
 		err := decoder.Decode(&data)
 		if err == io.EOF {
 			break
 		}
+		docIndex++
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode YAML document: %w", err)
+			errs = append(errs, fmt.Errorf("document %d: failed to decode YAML: %w", docIndex, err))
+			consecutiveErrors++
+			if consecutiveErrors > 10 {
+				break
+			}
+			continue
 		}
+		consecutiveErrors = 0
 
 		// Skip empty documents
 		if len(data) == 0 {
 			continue
 		}
 
+		// Extract ID for error context
+		id, _ := data["id"].(string)
+		if id == "" {
+			id = fmt.Sprintf("document %d", docIndex)
+		}
+
 		// Convert to JSON then to protobuf
 		jsonBytes, err := json.Marshal(data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal to JSON: %w", err)
+			errs = append(errs, fmt.Errorf("%s: failed to marshal to JSON: %w", id, err))
+			continue
 		}
 
 		entity := &pb.Entity{}
@@ -317,13 +335,14 @@ func yamlToProtoMulti(yamlBytes []byte) ([]*pb.Entity, error) {
 		}
 
 		if err := unmarshaler.Unmarshal(jsonBytes, entity); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal entity: %w", err)
+			errs = append(errs, fmt.Errorf("%s: %w", id, err))
+			continue
 		}
 
 		entities = append(entities, entity)
 	}
 
-	return entities, nil
+	return entities, errs
 }
 
 func getLocalNodeID(client pb.WorldServiceClient) string {
@@ -439,7 +458,7 @@ func printEntitiesTable(entities []*pb.Entity, localNodeID string) {
 		return
 	}
 
-	tbl := table.New("ID", "symbol", "Latitude", "Longitude", "Local")
+	tbl := table.New("ID", "Label", "State", "Latitude", "Longitude", "Local")
 
 	for _, entity := range entities {
 		if entity == nil {
@@ -451,9 +470,39 @@ func printEntitiesTable(entities []*pb.Entity, localNodeID string) {
 			lat = fmt.Sprintf("%.6f", entity.Geo.Latitude)
 			lon = fmt.Sprintf("%.6f", entity.Geo.Longitude)
 		}
-		symbol := ""
-		if entity.Symbol != nil {
-			symbol = entity.Symbol.MilStd2525C
+		state := ""
+		if entity.Configurable != nil {
+			switch entity.Configurable.State {
+			case pb.ConfigurableState_ConfigurableStateActive:
+				state = "active"
+			case pb.ConfigurableState_ConfigurableStateFailed:
+				state = "failed"
+				if entity.Configurable.Error != nil {
+					state = fmt.Sprintf("failed: %s", *entity.Configurable.Error)
+				}
+			case pb.ConfigurableState_ConfigurableStateInactive:
+				state = "inactive"
+			case pb.ConfigurableState_ConfigurableStateStarting:
+				state = "starting"
+			case pb.ConfigurableState_ConfigurableStateScheduled:
+				state = "scheduled"
+			case pb.ConfigurableState_ConfigurableStateConflict:
+				state = "conflict"
+			}
+		} else if entity.Device != nil {
+			switch entity.Device.State {
+			case pb.DeviceState_DeviceStateActive:
+				state = "active"
+			case pb.DeviceState_DeviceStateFailed:
+				state = "failed"
+				if entity.Device.Error != nil {
+					state = fmt.Sprintf("failed: %s", *entity.Device.Error)
+				}
+			}
+		}
+		label := ""
+		if entity.Label != nil {
+			label = *entity.Label
 		}
 
 		local := ""
@@ -465,7 +514,7 @@ func printEntitiesTable(entities []*pb.Entity, localNodeID string) {
 			}
 		}
 
-		tbl.AddRow(entity.Id, symbol, lat, lon, local)
+		tbl.AddRow(entity.Id, label, state, lat, lon, local)
 	}
 
 	tbl.Print()
@@ -629,19 +678,19 @@ func runPut(cmd *cobra.Command, args []string) error {
 
 	err = unmarshaler.Unmarshal(inputBytes, entity)
 	if err != nil {
-		// JSON failed, try YAML (single or multiple documents)
-		multiEntities, multiErr := yamlToProtoMulti(inputBytes)
-		if multiErr != nil {
-			// Multi-document YAML failed, try single document
-			if yamlErr := yamlToProto(inputBytes, entity); yamlErr != nil {
-				// All formats failed, return errors
-				return fmt.Errorf("failed to unmarshal as JSON: %w\nfailed to unmarshal as YAML: %v", err, yamlErr)
+		// JSON failed, try YAML (supports single and multiple documents)
+		var parseErrs []error
+		entities, parseErrs = yamlToProtoMulti(inputBytes)
+		if len(parseErrs) > 0 {
+			for _, e := range parseErrs {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", e)
 			}
-			// Single YAML succeeded
-			entities = []*pb.Entity{entity}
-		} else {
-			// Multi-document YAML succeeded
-			entities = multiEntities
+		}
+		if len(entities) == 0 {
+			if len(parseErrs) == 0 {
+				return fmt.Errorf("no entities found in input")
+			}
+			return fmt.Errorf("all entities failed to parse")
 		}
 	} else {
 		// JSON succeeded
@@ -746,9 +795,9 @@ func runEdit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to unmarshal edited entity YAML: %w", err)
 	}
 
-	// Push updated entity
+	// Replace entity entirely so removed components are actually deleted
 	pushResp, err := client.Push(context.Background(), &pb.EntityChangeRequest{
-		Changes: []*pb.Entity{editedEntity},
+		Replacements: []*pb.Entity{editedEntity},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -781,40 +830,6 @@ func runRM(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Entity '%s' removed successfully\n", entityID)
 	return nil
-}
-
-func runReconcile(cobraCmd *cobra.Command, args []string) error {
-	client := pb.NewControllerServiceClient(conn)
-
-	stream, err := client.Reconcile(cobraCmd.Context(), &pb.ControllerReconciliationRequest{
-		Controller: args[0],
-	})
-	if err != nil {
-		return fmt.Errorf("failed to start reconcile stream: %w", err)
-	}
-
-	marshaler := protojson.MarshalOptions{
-		UseProtoNames:   true,
-		EmitUnpopulated: false,
-		Indent:          "  ",
-	}
-
-	for {
-		event, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return fmt.Errorf("stream error: %w", err)
-		}
-
-		jsonBytes, err := marshaler.Marshal(event)
-		if err != nil {
-			return fmt.Errorf("failed to marshal event: %w", err)
-		}
-
-		fmt.Println(string(jsonBytes))
-	}
 }
 
 func runClear(cmd *cobra.Command, args []string) error {

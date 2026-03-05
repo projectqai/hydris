@@ -1,100 +1,141 @@
-// Package controller provides a framework for managing config-driven connectors.
+// Package controller provides a framework for managing entity-driven connectors.
 //
-// It uses the engine's ControllerService.Reconcile RPC to receive (config, device)
-// matching events, and runs a connector for each 1:1 match.
+// It uses the engine's WatchEntities RPC to watch a specific entity by ID,
+// starting the run function when the entity appears and restarting it when
+// the entity's Config changes.
 package controller
 
 import (
 	"context"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/projectqai/hydris/builtin"
+	"github.com/projectqai/hydris/goclient"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 )
 
-// RunFunc is called for each (config, device) match.
-// It should block until done or error.
-// The context is cancelled when the match is removed.
-// On error, it will be restarted with backoff until the context is cancelled.
-type RunFunc func(ctx context.Context, config *pb.Entity, device *pb.Entity) error
+// RunFunc is called for each entity that has Config on this controller.
+// It should block until done or ctx is cancelled.
+// On error, the framework retries with backoff.
+// The function must call ready() once it has validated the configuration
+// and is operational. If it returns an error without calling ready(),
+// the error is treated as a configuration validation failure.
+type RunFunc func(ctx context.Context, entity *pb.Entity, ready func()) error
 
-type connector struct {
-	cancel context.CancelFunc
-	config *pb.Entity
-	device *pb.Entity
+// Option configures optional behavior for Run.
+type Option func(*runConfig)
+
+type runConfig struct {
+	onUpdate func(*pb.Entity)
 }
 
-// Run1to1 connects to the engine's Reconcile stream and runs a connector
-// for each (config, device) pair matched by the engine.
-func Run1to1(ctx context.Context, controllerName string, run RunFunc) error {
+// WithOnUpdate registers a callback that is invoked for every entity update
+// that does not change Config (i.e. non-restart updates). This allows the
+// running function to react to component changes like PTZ commands.
+// The callback is only called while the run function is active.
+func WithOnUpdate(fn func(*pb.Entity)) Option {
+	return func(c *runConfig) {
+		c.onUpdate = fn
+	}
+}
+
+// Run watches a single entity by ID using WatchEntities and runs the
+// provided function when the entity has a Config. If the Config changes,
+// the running function is cancelled and restarted.
+func Run(ctx context.Context, entityID string, run RunFunc, opts ...Option) error {
+	var cfg runConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	grpcConn, err := builtin.BuiltinClientConn()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = grpcConn.Close() }()
 
-	client := pb.NewControllerServiceClient(grpcConn)
+	worldClient := pb.NewWorldServiceClient(grpcConn)
 
-	stream, err := client.Reconcile(ctx, &pb.ControllerReconciliationRequest{
-		Controller: controllerName,
+	stream, err := goclient.WatchEntitiesWithRetry(ctx, worldClient, &pb.ListEntitiesRequest{
+		Filter: &pb.EntityFilter{
+			Id: &entityID,
+		},
 	})
 	if err != nil {
 		return err
 	}
 
-	var mu sync.Mutex
-	connectors := make(map[string]*connector) // "configID/deviceID" -> connector
-
-	connectorKey := func(configID, deviceID string) string {
-		return configID + "/" + deviceID
-	}
-
-	stopConnector := func(key string) {
-		if conn, exists := connectors[key]; exists {
-			conn.cancel()
-			delete(connectors, key)
-		}
-	}
-
-	startConnector := func(key string, config *pb.Entity, device *pb.Entity) {
-		var connCtx context.Context
-		var cancel context.CancelFunc
-		if config.Lifetime != nil && config.Lifetime.Until != nil {
-			connCtx, cancel = context.WithDeadline(ctx, config.Lifetime.Until.AsTime())
+	pushConfigurableState := func(entity *pb.Entity, state pb.ConfigurableState, errMsg string, applied bool) {
+		var cfg *pb.ConfigurableComponent
+		if entity.Configurable != nil {
+			cfg = proto.Clone(entity.Configurable).(*pb.ConfigurableComponent)
 		} else {
-			connCtx, cancel = context.WithCancel(ctx)
+			cfg = &pb.ConfigurableComponent{}
 		}
+		cfg.State = state
+		if errMsg != "" {
+			cfg.Error = proto.String(errMsg)
+		} else {
+			cfg.Error = nil
+		}
+		if applied && entity.Config != nil {
+			cfg.AppliedVersion = entity.Config.Version
+		}
+		_, _ = worldClient.Push(ctx, &pb.EntityChangeRequest{
+			Changes: []*pb.Entity{{
+				Id:           entityID,
+				Configurable: cfg,
+			}},
+		})
+	}
 
-		conn := &connector{cancel: cancel, config: config, device: device}
-		connectors[key] = conn
+	var cancel context.CancelFunc
+	var currentEntity *pb.Entity
+
+	stopRunning := func() {
+		if cancel != nil {
+			cancel()
+			cancel = nil
+			pushConfigurableState(currentEntity, pb.ConfigurableState_ConfigurableStateInactive, "", false)
+			currentEntity = nil
+		}
+	}
+
+	startRunning := func(entity *pb.Entity) {
+		var connCtx context.Context
+		connCtx, cancel = context.WithCancel(ctx)
+		currentEntity = entity
 
 		go func() {
-			defer func() {
-				mu.Lock()
-				// Only delete if we're still the active connector for this key.
-				// A replacement connector may have already taken our slot.
-				if connectors[key] == conn {
-					delete(connectors, key)
-				}
-				mu.Unlock()
-			}()
-
 			for {
 				if connCtx.Err() != nil {
 					return
 				}
 
-				err := run(connCtx, config, device)
+				pushConfigurableState(entity, pb.ConfigurableState_ConfigurableStateStarting, "", false)
+
+				readyCalled := false
+				ready := func() {
+					if !readyCalled {
+						readyCalled = true
+						pushConfigurableState(entity, pb.ConfigurableState_ConfigurableStateActive, "", true)
+					}
+				}
+
+				err := run(connCtx, entity, ready)
 				if connCtx.Err() != nil {
 					return
 				}
 
+				errMsg := ""
 				if err != nil {
-					slog.Error("connector error, restarting", "config", config.Id, "device", device.Id, "error", err)
+					errMsg = err.Error()
+					slog.Error("connector error, restarting", "entity", entityID, "error", err)
 				}
+
+				pushConfigurableState(entity, pb.ConfigurableState_ConfigurableStateFailed, errMsg, true)
 
 				select {
 				case <-connCtx.Done():
@@ -105,52 +146,43 @@ func Run1to1(ctx context.Context, controllerName string, run RunFunc) error {
 		}()
 	}
 
+	defer stopRunning()
+
 	for {
-		resp, err := stream.Recv()
+		event, err := stream.Recv()
 		if err != nil {
-			// Cancel all running connectors.
-			mu.Lock()
-			for key := range connectors {
-				stopConnector(key)
-			}
-			mu.Unlock()
 			return err
 		}
 
-		event := resp.GetConfig()
-		if event == nil {
+		if event.Entity == nil {
 			continue
 		}
 
-		config := event.Config
-		device := event.Device
-		if config == nil || device == nil {
-			continue
-		}
-
-		key := connectorKey(config.Id, device.Id)
-
-		mu.Lock()
 		switch event.T {
-		case pb.ControllerDeviceConfigurationEventType_ControllerDeviceConfigurationEventNew:
-			stopConnector(key) // safety: shouldn't exist, but just in case
-			startConnector(key, config, device)
-
-		case pb.ControllerDeviceConfigurationEventType_ControllerDeviceConfigurationEventChanged:
-			if existing, running := connectors[key]; !running || !proto.Equal(existing.config, config) || !proto.Equal(existing.device, device) {
-				stopConnector(key)
-				startConnector(key, config, device)
+		case pb.EntityChange_EntityChangeUpdated:
+			entity := event.Entity
+			if entity.Config == nil {
+				stopRunning()
+				continue
 			}
+			if currentEntity != nil && proto.Equal(currentEntity.Config, entity.Config) {
+				// Config unchanged — forward to onUpdate callback.
+				if cfg.onUpdate != nil && cancel != nil {
+					cfg.onUpdate(entity)
+				}
+				continue
+			}
+			stopRunning()
+			startRunning(entity)
 
-		case pb.ControllerDeviceConfigurationEventType_ControllerDeviceConfigurationEventRemoved:
-			stopConnector(key)
+		case pb.EntityChange_EntityChangeExpired, pb.EntityChange_EntityChangeUnobserved:
+			stopRunning()
 		}
-		mu.Unlock()
 	}
 }
 
-// PublishDevice emits a device entity with Configurable entries and Labels.
-func PublishDevice(ctx context.Context, entityID string, controllerName string, configurables []*pb.Configurable, labels map[string]string, parent *string) error {
+// Push pushes one or more entities to the world service.
+func Push(ctx context.Context, entities ...*pb.Entity) error {
 	grpcConn, err := builtin.BuiltinClientConn()
 	if err != nil {
 		return err
@@ -158,23 +190,8 @@ func PublishDevice(ctx context.Context, entityID string, controllerName string, 
 	defer func() { _ = grpcConn.Close() }()
 
 	client := pb.NewWorldServiceClient(grpcConn)
-
-	dev := &pb.DeviceComponent{
-		Configurable: configurables,
-		Labels:       labels,
-	}
-	if parent != nil {
-		dev.Parent = parent
-	}
-
 	_, err = client.Push(ctx, &pb.EntityChangeRequest{
-		Changes: []*pb.Entity{{
-			Id: entityID,
-			Controller: &pb.Controller{
-				Id: &controllerName,
-			},
-			Device: dev,
-		}},
+		Changes: entities,
 	})
 	return err
 }

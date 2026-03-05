@@ -3,7 +3,7 @@ import { GeoJsonLayer } from "@deck.gl/layers";
 
 import type { ShapeFeature, ShapeProperties } from "../types";
 
-export type ShapeLayerProps = {
+type ShapeLayerProps = {
   data: ShapeFeature[];
   visible: boolean;
   selectedId: string | null;

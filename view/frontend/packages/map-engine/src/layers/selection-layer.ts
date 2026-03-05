@@ -3,14 +3,14 @@ import { IconLayer } from "@deck.gl/layers";
 import type { EntityData } from "../types";
 import { generateSelectionFrame, getFrameSize } from "../utils/selection-frame";
 
-export type SelectionData = {
+type SelectionData = {
   entity: EntityData;
   sizePixels: number;
   offsetX: number;
   offsetY: number;
 };
 
-export type SelectionLayerProps = {
+type SelectionLayerProps = {
   data: SelectionData | null;
 };
 

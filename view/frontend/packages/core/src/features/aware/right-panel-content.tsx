@@ -1,4 +1,6 @@
 import { generateSymbol } from "@hydris/map-engine/utils/symbol-atlas";
+import { EmptyState } from "@hydris/ui/empty-state";
+import { useThemeColors } from "@hydris/ui/lib/theme";
 import { Info } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { Image, Text, View } from "react-native";
@@ -12,33 +14,16 @@ type RightPanelContentProps = {
   headerActions?: ReactNode;
 };
 
-function EmptyState() {
-  return (
-    <View className="flex-1 px-6 pt-16 select-none">
-      <View className="items-center">
-        <View className="opacity-30">
-          <Info size={28} color="rgba(255, 255, 255)" strokeWidth={1.5} />
-        </View>
-        <Text className="font-sans-medium text-foreground/50 mt-2 text-center text-sm">
-          No entity selected
-        </Text>
-        <Text className="text-foreground/30 text-center font-sans text-xs leading-relaxed">
-          Click an entity on the map to view details
-        </Text>
-      </View>
-    </View>
-  );
-}
-
 export function CollapsedInfo() {
+  const t = useThemeColors();
   const selectedEntityId = useSelectionStore((s) => s.selectedEntityId);
   const selectedEntity = useEntityStore(selectEntity(selectedEntityId));
 
   if (!selectedEntity) {
     return (
       <View className="flex-row items-center gap-1.5">
-        <Info size={14} color="rgba(255, 255, 255, 0.5)" strokeWidth={2} />
-        <Text className="font-sans-medium text-foreground/50 text-xs">No entity selected</Text>
+        <Info size={14} color={t.iconMuted} strokeWidth={2} />
+        <Text className="font-sans-medium text-foreground/70 text-xs">No entity selected</Text>
       </View>
     );
   }
@@ -48,9 +33,13 @@ export function CollapsedInfo() {
   return (
     <View className="flex-row items-center gap-1.5">
       {sidc ? (
-        <Image source={{ uri: generateSymbol(sidc) }} className="size-5" />
+        <Image
+          source={{ uri: generateSymbol(sidc) }}
+          className="size-5"
+          accessibilityLabel="Entity symbol"
+        />
       ) : (
-        <Info size={14} color="rgba(255, 255, 255, 0.5)" strokeWidth={2} />
+        <Info size={14} color={t.iconMuted} strokeWidth={2} />
       )}
       <Text className="font-sans-medium text-foreground/80 text-xs">
         {getEntityName(selectedEntity)}
@@ -64,7 +53,13 @@ export function RightPanelContent({ headerActions }: RightPanelContentProps) {
   const selectedEntity = useEntityStore(selectEntity(selectedEntityId));
 
   if (!selectedEntity) {
-    return <EmptyState />;
+    return (
+      <EmptyState
+        icon={Info}
+        title="No entity selected"
+        subtitle="Click an entity on the map to view details"
+      />
+    );
   }
 
   return (

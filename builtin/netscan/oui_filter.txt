@@ -1,0 +1,23 @@
+# OUI vendor name substrings to include in the build.
+# One pattern per line, case-insensitive substring match.
+# Lines starting with # are comments. Blank lines are ignored.
+# Edit this file to change which vendors are embedded at build time.
+
+
+Reolink
+Espressif
+Raspberry Pi
+Arduino
+Texas Instruments
+Silicon Labs
+Microchip Technology
+Nordic Semiconductor
+STMicroelectronics
+Cisco
+Intel
+Shenzhen
+Dragino
+RAKwireless
+Heltec
+LILYGO
+Digi International

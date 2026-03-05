@@ -2,14 +2,18 @@ package goclient
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/base64"
 	"io"
 	"log/slog"
+	"net/url"
 	"time"
 
 	proto "github.com/projectqai/proto/go"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -32,12 +36,72 @@ func (c *Connection) Close() error {
 	return nil
 }
 
-// Connect establishes a gRPC connection to the server
+// basicAuthCreds implements credentials.PerRPCCredentials for HTTP basic auth.
+type basicAuthCreds struct {
+	header string
+}
+
+func (b basicAuthCreds) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+	return map[string]string{"authorization": b.header}, nil
+}
+
+func (b basicAuthCreds) RequireTransportSecurity() bool { return false }
+
+// parseServerURL parses a server URL and returns the gRPC target, dial options
+// for TLS/auth, and any error. Supported formats:
+//
+//	host:port              (plaintext gRPC)
+//	http://host[:port]     (plaintext, default port 80)
+//	https://host[:port]    (TLS, default port 443)
+//	https://user:pass@host (TLS + basic auth)
+func parseServerURL(serverURL string) (target string, opts []grpc.DialOption, err error) {
+	u, parseErr := url.Parse(serverURL)
+	// If there's no scheme, url.Parse may put everything in Path or Opaque.
+	// Detect the "host:port" case (no scheme).
+	if parseErr != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		// Plain host:port — keep existing behavior
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		return serverURL, opts, nil
+	}
+
+	host := u.Hostname()
+	port := u.Port()
+
+	switch u.Scheme {
+	case "https":
+		if port == "" {
+			port = "443"
+		}
+		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})))
+	case "http":
+		if port == "" {
+			port = "80"
+		}
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+
+	target = host + ":" + port
+
+	// Basic auth from userinfo
+	if u.User != nil {
+		username := u.User.Username()
+		password, _ := u.User.Password()
+		encoded := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+		opts = append(opts, grpc.WithPerRPCCredentials(basicAuthCreds{header: "Basic " + encoded}))
+	}
+
+	return target, opts, nil
+}
+
+// Connect establishes a gRPC connection to the server.
+// serverURL can be "host:port", "https://host", or "https://user:pass@host".
 func Connect(serverURL string) (*Connection, error) {
-	conn, err := grpc.NewClient(
-		serverURL,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	target, opts, err := parseServerURL(serverURL)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, err
 	}

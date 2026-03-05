@@ -1,7 +1,7 @@
 import type { BaseLayer } from "@hydris/map-engine/types";
 import type { OverlayCategoryOption } from "@hydris/ui/controls";
-import { ControlButton, OverlayCategory } from "@hydris/ui/controls";
-import { GRADIENT_COLORS, GRADIENT_PROPS } from "@hydris/ui/lib/theme";
+import { ControlIconButton, OverlayCategory } from "@hydris/ui/controls";
+import { GRADIENT_PROPS, useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import { PANEL_TOP_OFFSET, usePanelContext } from "@hydris/ui/panels";
 import { LinearGradient } from "expo-linear-gradient";
@@ -13,6 +13,7 @@ import {
   Maximize2,
   Minimize2,
   Radius,
+  Route,
   Satellite,
   ZoomIn,
   ZoomOut,
@@ -36,6 +37,7 @@ import {
   getShareableLocationUrl,
   useUrlParams,
 } from "../../lib/use-url-params";
+import { MapSearchControl } from "./map-search";
 import { mapEngineActions, useMapEngine } from "./store/map-engine-store";
 import { useMapStore } from "./store/map-store";
 import { useOverlayStore } from "./store/overlay-store";
@@ -44,12 +46,10 @@ import { useSelectionStore } from "./store/selection-store";
 type NetworkType = "datalinks";
 type SensorStatus = "online" | "degraded";
 type TrackType = "red" | "unknown" | "blue";
-type VisualizationType = "coverage" | "shapes";
+type VisualizationType = "coverage" | "shapes" | "trackHistory";
 
 const BUTTON_SIZE = 40;
 const ICON_SIZE = 16;
-const ICON_COLOR = "rgba(255, 255, 255, 0.7)";
-const ICON_COLOR_ACTIVE = "rgba(255, 255, 255, 1)";
 const RIGHT_PANEL_MARGIN = 12;
 
 type LayerOption = {
@@ -88,6 +88,7 @@ const NETWORK_OPTIONS: OverlayCategoryOption[] = [
 const VISUALIZATION_OPTIONS: OverlayCategoryOption[] = [
   { id: "coverage", label: "Coverage Area", icon: Radius },
   { id: "shapes", label: "Geoshapes", icon: Hexagon },
+  { id: "trackHistory", label: "Track Lines", icon: Route },
 ];
 
 function ControlMenu({ visible, children }: { visible: boolean; children: React.ReactNode }) {
@@ -105,6 +106,7 @@ function ControlMenu({ visible, children }: { visible: boolean; children: React.
 }
 
 export function MapControls() {
+  const t = useThemeColors();
   const { height: windowHeight } = useWindowDimensions();
   const { params } = useUrlParams();
   const paramsRef = useRef(params);
@@ -126,13 +128,15 @@ export function MapControls() {
   } = usePanelContext();
   const [showLayerMenu, setShowLayerMenu] = useState(false);
   const [showOverlayMenu, setShowOverlayMenu] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
   const [isFullscreenActive, setIsFullscreenActive] = useState(false);
 
-  const anyMenuOpen = showLayerMenu || showOverlayMenu;
+  const anyMenuOpen = showLayerMenu || showOverlayMenu || showSearch;
 
   const closeAllMenus = () => {
     setShowLayerMenu(false);
     setShowOverlayMenu(false);
+    setShowSearch(false);
   };
 
   // Sync isFullscreenActive with isFullscreen SharedValue
@@ -166,7 +170,6 @@ export function MapControls() {
 
   const handleLayerSelect = (layer: BaseLayer) => {
     setLayerStore(layer);
-    mapEngine.setBaseLayer(layer);
     setShowLayerMenu(false);
   };
 
@@ -207,37 +210,41 @@ export function MapControls() {
         pointerEvents="box-none"
         onLayout={handleLayout}
       >
-        <ControlButton
+        <ControlIconButton
+          icon={isFullscreenActive ? Minimize2 : Maximize2}
+          iconSize={ICON_SIZE}
           onPress={handleFullscreenToggle}
-          isActive={isFullscreenActive}
-          size={BUTTON_SIZE}
-        >
-          {isFullscreenActive ? (
-            <Minimize2 size={ICON_SIZE} color={ICON_COLOR_ACTIVE} />
-          ) : (
-            <Maximize2 size={ICON_SIZE} color={ICON_COLOR} />
-          )}
-        </ControlButton>
+          variant={isFullscreenActive ? "active" : "default"}
+          size="lg"
+          accessibilityLabel={isFullscreenActive ? "Exit fullscreen" : "Enter fullscreen"}
+        />
+
+        <MapSearchControl
+          isOpen={showSearch}
+          onToggle={() => {
+            setShowSearch(!showSearch);
+            setShowLayerMenu(false);
+            setShowOverlayMenu(false);
+          }}
+        />
 
         <View className="relative">
-          <ControlButton
+          <ControlIconButton
+            icon={currentLayer === "satellite" ? Satellite : Layers}
+            iconSize={ICON_SIZE}
             onPress={() => {
               setShowLayerMenu(!showLayerMenu);
               setShowOverlayMenu(false);
+              setShowSearch(false);
             }}
-            isActive={showLayerMenu}
-            size={BUTTON_SIZE}
-          >
-            {currentLayer === "satellite" ? (
-              <Satellite size={ICON_SIZE} color={showLayerMenu ? ICON_COLOR_ACTIVE : ICON_COLOR} />
-            ) : (
-              <Layers size={ICON_SIZE} color={showLayerMenu ? ICON_COLOR_ACTIVE : ICON_COLOR} />
-            )}
-          </ControlButton>
+            variant={showLayerMenu ? "active" : "default"}
+            size="lg"
+            accessibilityLabel="Map layers"
+          />
 
           <ControlMenu visible={showLayerMenu}>
             <LinearGradient
-              colors={GRADIENT_COLORS}
+              colors={t.gradients.default}
               {...GRADIENT_PROPS}
               className="border-border/40 w-full gap-0.5 overflow-hidden rounded-lg border p-1"
             >
@@ -248,19 +255,21 @@ export function MapControls() {
                   <Pressable
                     key={option.id}
                     onPress={() => handleLayerSelect(option.id)}
-                    className="min-w-[100px] hover:opacity-70 active:opacity-70"
+                    className={cn(
+                      "hover:bg-surface-overlay/10 active:bg-surface-overlay/15 min-w-28 rounded",
+                      isSelected && "bg-surface-overlay/15 hover:bg-surface-overlay/15",
+                    )}
                   >
-                    <View
-                      className={cn(
-                        "flex-row items-center gap-2.5 rounded px-3 py-2.5 select-none",
-                        isSelected && "bg-white/15",
-                      )}
-                    >
-                      <Icon size={ICON_SIZE} color={isSelected ? ICON_COLOR_ACTIVE : ICON_COLOR} />
+                    <View className="flex-row items-center gap-2.5 px-3 py-2.5 select-none">
+                      <Icon size={ICON_SIZE} color={isSelected ? t.iconActive : t.iconDefault} />
                       <Text
                         selectable={false}
-                        className={cn("text-sm", isSelected ? "text-white" : "text-white/50")}
-                        style={{ fontWeight: isSelected ? "500" : "400" }}
+                        className={cn(
+                          "text-sm select-none",
+                          isSelected
+                            ? "font-sans-medium text-foreground"
+                            : "font-sans-medium text-on-surface/70",
+                        )}
                       >
                         {option.label}
                       </Text>
@@ -273,20 +282,22 @@ export function MapControls() {
         </View>
 
         <View className="relative">
-          <ControlButton
+          <ControlIconButton
+            icon={Eye}
+            iconSize={ICON_SIZE}
             onPress={() => {
               setShowOverlayMenu(!showOverlayMenu);
               setShowLayerMenu(false);
+              setShowSearch(false);
             }}
-            isActive={showOverlayMenu}
-            size={BUTTON_SIZE}
-          >
-            <Eye size={ICON_SIZE} color={showOverlayMenu ? ICON_COLOR_ACTIVE : ICON_COLOR} />
-          </ControlButton>
+            variant={showOverlayMenu ? "active" : "default"}
+            size="lg"
+            accessibilityLabel="Overlays"
+          />
 
           <ControlMenu visible={showOverlayMenu}>
             <LinearGradient
-              colors={GRADIENT_COLORS}
+              colors={t.gradients.default}
               {...GRADIENT_PROPS}
               className="border-border/40 gap-2.5 overflow-hidden rounded-lg border p-2.5"
               style={{ minWidth: 240 }}
@@ -322,15 +333,26 @@ export function MapControls() {
           </ControlMenu>
         </View>
 
-        <ControlButton onPress={mapEngine.zoomIn} size={BUTTON_SIZE}>
-          <ZoomIn size={ICON_SIZE} color={ICON_COLOR} />
-        </ControlButton>
+        <ControlIconButton
+          icon={ZoomIn}
+          iconSize={ICON_SIZE}
+          onPress={mapEngine.zoomIn}
+          size="lg"
+          accessibilityLabel="Zoom in"
+        />
 
-        <ControlButton onPress={mapEngine.zoomOut} size={BUTTON_SIZE}>
-          <ZoomOut size={ICON_SIZE} color={ICON_COLOR} />
-        </ControlButton>
+        <ControlIconButton
+          icon={ZoomOut}
+          iconSize={ICON_SIZE}
+          onPress={mapEngine.zoomOut}
+          size="lg"
+          accessibilityLabel="Zoom out"
+        />
 
-        <ControlButton
+        <ControlIconButton
+          icon={Link2}
+          iconSize={ICON_SIZE}
+          accessibilityLabel="Copy shareable link"
           onPress={() => {
             const selectedEntityId = useSelectionStore.getState().selectedEntityId;
             const view = mapEngineActions.getView();
@@ -341,16 +363,16 @@ export function MapControls() {
                 getShareableEntityUrl(selectedEntityId, {
                   tab: currentParams.tab,
                   zoom: view?.zoom,
+                  lat: view?.lat,
+                  lng: view?.lng,
                 }),
               );
             } else if (view) {
               copyShareableLink(getShareableLocationUrl(view.lat, view.lng, { zoom: view.zoom }));
             }
           }}
-          size={BUTTON_SIZE}
-        >
-          <Link2 size={ICON_SIZE} color={ICON_COLOR} />
-        </ControlButton>
+          size="lg"
+        />
       </Animated.View>
     </>
   );

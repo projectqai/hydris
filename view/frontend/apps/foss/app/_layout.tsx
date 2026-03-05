@@ -16,13 +16,15 @@ import {
   Inter_700Bold,
 } from "@expo-google-fonts/inter";
 import { useFonts } from "expo-font";
+import { useKeepAwake } from "expo-keep-awake";
 import * as Linking from "expo-linking";
 import * as NavigationBar from "expo-navigation-bar";
 import { router, Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
+import { useColorScheme } from "nativewind";
 import { useEffect } from "react";
-import { View } from "react-native";
+import { Appearance, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -30,30 +32,43 @@ import { Toaster } from "sonner-native";
 
 SplashScreen.preventAutoHideAsync();
 
-import { TopNav } from "@hydris/core/components/top-nav";
+import { useThemeStore } from "@hydris/core/features/aware/store/theme-store";
 import * as HydrisEngine from "@hydris/engine";
+import { useThemeColors } from "@hydris/ui/lib/theme";
 import Constants from "expo-constants";
 
-function FossTopNav() {
-  return (
-    <TopNav.Root>
-      <TopNav.Left>
-        <TopNav.LogoOrTime />
-      </TopNav.Left>
-      <TopNav.Right>
-        <TopNav.ConnectionStatus />
-      </TopNav.Right>
-    </TopNav.Root>
-  );
-}
-
 export default function RootLayout() {
+  useKeepAwake();
+  const { colorScheme, setColorScheme } = useColorScheme();
+  const t = useThemeColors();
   const [fontsLoaded] = useFonts({
     Inter: Inter_400Regular,
     "Inter-Medium": Inter_500Medium,
     "Inter-SemiBold": Inter_600SemiBold,
     "Inter-Bold": Inter_700Bold,
   });
+
+  const themePreference = useThemeStore((s) => s.preference);
+
+  useEffect(() => {
+    const apply = (scheme: "dark" | "light") => {
+      setColorScheme(scheme);
+
+      if (typeof document !== "undefined") {
+        document.documentElement.classList.toggle("dark", scheme === "dark");
+      }
+    };
+
+    if (themePreference !== "system") {
+      apply(themePreference);
+      return;
+    }
+    apply(Appearance.getColorScheme() ?? "dark");
+    const sub = Appearance.addChangeListener(({ colorScheme: cs }) => {
+      apply(cs ?? "dark");
+    });
+    return () => sub.remove();
+  }, [themePreference, setColorScheme]);
 
   useEffect(() => {
     if (process.env.EXPO_OS === "android") {
@@ -96,24 +111,22 @@ export default function RootLayout() {
           <View className="flex-1 bg-background">
             <Stack
               screenOptions={{
-                headerShown: true,
-                header: () => <FossTopNav />,
-                contentStyle: { backgroundColor: "#161616" },
-                headerTransparent: true,
-                headerShadowVisible: false,
+                headerShown: false,
+                contentStyle: { backgroundColor: t.background },
                 animation: "none",
               }}
             >
               <Stack.Screen name="index" />
+              <Stack.Screen name="aware" />
             </Stack>
-            <StatusBar style="light" />
+            <StatusBar hidden style={colorScheme === "dark" ? "light" : "dark"} />
             <Toaster
               position="top-center"
               offset={68}
               toastOptions={{
                 style: {
-                  backgroundColor: "rgb(27, 27, 27)",
-                  borderColor: "rgb(60, 60, 60)",
+                  backgroundColor: t.card,
+                  borderColor: t.border,
                   borderWidth: 1,
                   borderRadius: 4,
                   paddingHorizontal: 16,
@@ -123,7 +136,7 @@ export default function RootLayout() {
                     : { marginHorizontal: "35%" }),
                 },
                 titleStyle: {
-                  color: "rgb(220, 220, 220)",
+                  color: t.foreground,
                 },
               }}
             />

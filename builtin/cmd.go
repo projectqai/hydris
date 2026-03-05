@@ -2,8 +2,12 @@ package builtin
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +21,39 @@ var ServerURL string = "localhost:50051"
 // Permissions controls which local resources builtins are allowed to access.
 // Set before calling StartAll.
 type Permissions struct {
-	AllowLocalSerial bool
+	DisableLocalSerial bool
+	AllowNetscan       bool
+	AllowedPaths       []string
+}
+
+// ValidatePath checks that the given file path is under the current working
+// directory or one of the explicitly allowed paths (--allow-path).
+func ValidatePath(path string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve path %q: %w", path, err)
+	}
+	abs = filepath.Clean(abs)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+
+	allowed := append([]string{cwd}, LocalPermissions.AllowedPaths...)
+	for _, dir := range allowed {
+		dir, err = filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		dir = filepath.Clean(dir)
+		if abs == dir || strings.HasPrefix(abs, dir+string(filepath.Separator)) {
+			return nil
+		}
+	}
+
+	parent := filepath.Dir(abs)
+	return fmt.Errorf("path %q is not allowed; add --allow-path=%s to hydris startup", path, parent)
 }
 
 var LocalPermissions Permissions

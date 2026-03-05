@@ -2,8 +2,10 @@ package meshtastic
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 
@@ -16,7 +18,13 @@ const (
 	start2             = 0xC3
 	headerLen          = 4
 	maxToFromRadioSize = 512
+	recvTimeout        = 30 * time.Second
 )
+
+// deadliner is implemented by connections that support read deadlines (e.g. *os.File).
+type deadliner interface {
+	SetReadDeadline(time.Time) error
+}
 
 // Radio manages a connection to a meshtastic device.
 type Radio struct {
@@ -27,11 +35,13 @@ type Radio struct {
 
 // radioConn bridges gomobile callbacks to io.ReadWriteCloser.
 type radioConn struct {
-	writer  SerialWriter
-	readBuf chan []byte
-	pending []byte
-	closed  chan struct{}
-	once    sync.Once
+	writer       SerialWriter
+	readBuf      chan []byte
+	pending      []byte
+	closed       chan struct{}
+	once         sync.Once
+	readDeadline time.Time
+	deadlineMu   sync.Mutex
 }
 
 // NewRadio creates a Radio from a direct io.ReadWriteCloser (e.g. an os.File for a serial port).
@@ -53,12 +63,33 @@ func (c *radioConn) Write(p []byte) (int, error) {
 	return c.writer.Write(p)
 }
 
+func (c *radioConn) SetReadDeadline(t time.Time) error {
+	c.deadlineMu.Lock()
+	c.readDeadline = t
+	c.deadlineMu.Unlock()
+	return nil
+}
+
 func (c *radioConn) Read(p []byte) (int, error) {
 	// Drain pending bytes first
 	if len(c.pending) > 0 {
 		n := copy(p, c.pending)
 		c.pending = c.pending[n:]
 		return n, nil
+	}
+
+	c.deadlineMu.Lock()
+	dl := c.readDeadline
+	c.deadlineMu.Unlock()
+
+	var timeout time.Duration
+	if dl.IsZero() {
+		timeout = recvTimeout
+	} else {
+		timeout = time.Until(dl)
+		if timeout <= 0 {
+			return 0, os.ErrDeadlineExceeded
+		}
 	}
 
 	// Wait for next chunk from USB read thread
@@ -74,6 +105,8 @@ func (c *radioConn) Read(p []byte) (int, error) {
 		return n, nil
 	case <-c.closed:
 		return 0, io.EOF
+	case <-time.After(timeout):
+		return 0, os.ErrDeadlineExceeded
 	}
 }
 
@@ -106,8 +139,11 @@ func (r *Radio) init() (*RadioHandshake, error) {
 	cfg := &RadioHandshake{}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		msg, err := r.Recv()
+		msg, err := r.RecvTimeout(5 * time.Second)
 		if err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				continue // read timed out, check outer deadline
+			}
 			return nil, err
 		}
 		switch v := msg.GetMsg().(type) {
@@ -164,9 +200,21 @@ func (r *Radio) Send(msg *meshpb.ToRadio) error {
 
 // Recv reads one FromRadio packet from the connection. Blocks until a complete
 // packet is received.
+// ErrRecvTimeout is returned when a Recv call times out waiting for data.
+var ErrRecvTimeout = os.ErrDeadlineExceeded
+
 func (r *Radio) Recv() (*meshpb.FromRadio, error) {
+	return r.RecvTimeout(recvTimeout)
+}
+
+func (r *Radio) RecvTimeout(timeout time.Duration) (*meshpb.FromRadio, error) {
 	buf := make([]byte, 1)
 	for {
+		// Set a read deadline so we don't block forever on a stuck connection.
+		if d, ok := r.conn.(deadliner); ok {
+			_ = d.SetReadDeadline(time.Now().Add(timeout))
+		}
+
 		// Scan for sync marker [0x94, 0xC3]
 		if _, err := io.ReadFull(r.conn, buf); err != nil {
 			return nil, err

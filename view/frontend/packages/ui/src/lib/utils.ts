@@ -1,5 +1,16 @@
+import tailwindConfig from "@hydris/tailwind-config";
 import { type ClassValue, clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
+
+const customFontSizes = Object.keys(tailwindConfig.theme.extend.fontSize);
+
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      "font-size": [{ text: customFontSizes }],
+    },
+  },
+});
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

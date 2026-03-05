@@ -1,11 +1,10 @@
-import { GRADIENT_PROPS, GradientPanel } from "@hydris/ui/lib/theme";
+import { GradientPanel, useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import { FloatingSheet, type SheetOption } from "@hydris/ui/sheets/floating-sheet";
 import { TimeWidget } from "@hydris/ui/widgets/time-widget";
 import { Image } from "expo-image";
-import { LinearGradient } from "expo-linear-gradient";
 import { type Href, usePathname, useRootNavigationState, useRouter } from "expo-router";
-import { Bell, Layers, LayoutGrid, Wifi, WifiOff } from "lucide-react-native";
+import { Bell, Box, Menu, Wifi, WifiOff } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { createContext, useContext, useState } from "react";
 import { Pressable, Text, View } from "react-native";
@@ -41,45 +40,47 @@ function Root({ children }: { children: ReactNode }) {
 
   return (
     <TopNavContext.Provider value={{ pathname, isActive }}>
-      <View
-        className="px-3"
-        style={{ paddingTop: insets.top + (process.env.EXPO_OS === "web" ? 12 : 0) }}
-      >
-        <View className="h-11 flex-row items-center justify-center">{children}</View>
+      <View style={{ paddingTop: insets.top }}>
+        <GradientPanel className="h-8 flex-row items-center justify-between px-2 select-none lg:h-11 lg:px-4">
+          {children}
+        </GradientPanel>
+        <View className="bg-surface-overlay/5 h-px" />
       </View>
     </TopNavContext.Provider>
   );
 }
 
 function Left({ children }: { children: ReactNode }) {
-  return <View className="absolute left-0">{children}</View>;
+  return <View className="flex-row items-center gap-3 lg:gap-4">{children}</View>;
 }
 
 function Right({ children }: { children: ReactNode }) {
-  return <View className="absolute right-0 flex-row items-center gap-1">{children}</View>;
+  return <View className="flex-row items-center gap-1 lg:gap-1.5">{children}</View>;
 }
 
 function Logo() {
   const router = useRouter();
   return (
-    <Pressable onPress={() => router.push("/")} className="focus:outline-none">
+    <Pressable
+      onPress={() => router.push("/")}
+      accessibilityLabel="Home"
+      accessibilityRole="link"
+      className="focus:outline-none"
+    >
       <Image
         source={require("@hydris/ui/assets/logo.png")}
-        style={{ width: 36, height: 36, opacity: 0.8 }}
+        className="size-5 opacity-80 lg:size-6"
         contentFit="contain"
         cachePolicy="memory-disk"
+        accessible={false}
       />
     </Pressable>
   );
 }
 
-function Time() {
-  return <TimeWidget />;
-}
-
 function LogoOrTime() {
   const { isActive } = useTopNav();
-  return isActive("/aware") ? <Time /> : <Logo />;
+  return isActive("/aware") ? <TimeWidget /> : <Logo />;
 }
 
 type Section = {
@@ -92,7 +93,7 @@ function Sections({ items }: { items: Section[] }) {
   const { isActive } = useTopNav();
 
   return (
-    <GradientPanel className="border-border/80 h-11 flex-row items-center gap-0.5 overflow-hidden rounded-xl border px-1.5">
+    <View className="bg-surface-overlay/4 pointer-events-auto h-6 flex-row items-center rounded-lg p-0.5 lg:h-8 lg:p-1">
       {items.map((section) => {
         const active = isActive(section.path);
         return (
@@ -100,14 +101,14 @@ function Sections({ items }: { items: Section[] }) {
             key={section.path}
             onPress={() => router.push(section.path as Href)}
             className={cn(
-              "group rounded-lg px-5 py-1.5 transition-colors focus:outline-none",
-              active ? "bg-white/10" : "hover:bg-white/10",
+              "h-full items-center justify-center rounded-md px-2.5 transition-colors focus:outline-none lg:h-full lg:px-5",
+              active ? "bg-surface-overlay/10" : "active:bg-surface-overlay/10",
             )}
           >
             <Text
               className={cn(
-                "font-sans-semibold text-sm transition-colors",
-                active ? "text-foreground" : "text-muted-foreground group-hover:text-foreground",
+                "font-sans-medium text-10 lg:text-13 tracking-wide transition-colors",
+                active ? "text-foreground" : "text-foreground/75",
               )}
             >
               {section.label}
@@ -115,36 +116,30 @@ function Sections({ items }: { items: Section[] }) {
           </Pressable>
         );
       })}
-    </GradientPanel>
+    </View>
   );
 }
 
 function Workspace({ name = "Default" }: { name?: string }) {
+  const t = useThemeColors();
   const router = useRouter();
   return (
     <Pressable
       onPress={() => router.push("/")}
-      className="hover:opacity-90 focus:outline-none active:opacity-70"
+      className="bg-glass hover:bg-glass-hover active:bg-glass-active flex h-7 flex-row items-center gap-2 rounded-md px-2 focus:outline-none lg:h-9 lg:gap-2.5 lg:px-3"
     >
-      <LinearGradient
-        colors={[
-          "rgba(31, 31, 31, 0.95)",
-          "rgba(35, 35, 35, 0.95)",
-          "rgba(38, 38, 38, 0.95)",
-          "rgba(42, 42, 42, 0.95)",
-          "rgba(48, 48, 48, 0.95)",
-        ]}
-        {...GRADIENT_PROPS}
-        className="border-border/80 h-11 flex-row items-center gap-2.5 overflow-hidden rounded-xl border px-2.5 hover:border-white/20"
-      >
-        <View className="bg-accent size-7 items-center justify-center rounded-md">
-          <Layers size={14} color="rgb(255 255 255)" />
-        </View>
-        <View>
-          <Text className="font-sans-semibold text-foreground text-xs leading-none">{name}</Text>
-          <Text className="text-muted-foreground font-sans text-[10px]">Workspace</Text>
-        </View>
-      </LinearGradient>
+      <View className="bg-accent size-5 items-center justify-center rounded lg:size-6">
+        <Box size={12} strokeWidth={1.5} className="lg:hidden" color={t.iconActive} />
+        <Box size={14} strokeWidth={1.5} className="hidden lg:flex" color={t.iconActive} />
+      </View>
+      <View className="gap-px">
+        <Text className="text-foreground/75 text-8 lg:text-9 font-sans leading-none tracking-wider uppercase">
+          Workspace
+        </Text>
+        <Text className="font-sans-semibold text-foreground/80 text-9 lg:text-11 leading-none">
+          {name}
+        </Text>
+      </View>
     </Pressable>
   );
 }
@@ -156,6 +151,7 @@ function QuickActions({
   options: SheetOption[];
   onSelect: (id: string) => void;
 }) {
+  const t = useThemeColors();
   const [visible, setVisible] = useState(false);
 
   const handleSelect = (id: string) => {
@@ -165,24 +161,15 @@ function QuickActions({
 
   return (
     <>
-      <LinearGradient
-        colors={[
-          "rgba(35, 35, 35, 0.95)",
-          "rgba(38, 38, 38, 0.95)",
-          "rgba(42, 42, 42, 0.95)",
-          "rgba(46, 46, 46, 0.95)",
-          "rgba(50, 50, 50, 0.95)",
-        ]}
-        {...GRADIENT_PROPS}
-        className="border-border/80 size-11 overflow-hidden rounded-xl border hover:border-white/20"
+      <Pressable
+        className="bg-glass hover:bg-glass-hover active:bg-glass-active flex size-7 items-center justify-center rounded-md focus:outline-none lg:size-9"
+        onPress={() => setVisible(true)}
+        accessibilityLabel="Quick actions menu"
+        accessibilityRole="button"
       >
-        <Pressable
-          className="size-full items-center justify-center hover:opacity-90 focus:outline-none active:opacity-70"
-          onPress={() => setVisible(true)}
-        >
-          <LayoutGrid size={15} color="rgb(255 255 255 / 0.7)" />
-        </Pressable>
-      </LinearGradient>
+        <Menu size={16} strokeWidth={1.5} className="lg:hidden" color={t.iconMuted} />
+        <Menu size={18} strokeWidth={1.5} className="hidden lg:flex" color={t.iconMuted} />
+      </Pressable>
       <FloatingSheet
         visible={visible}
         onClose={() => setVisible(false)}
@@ -194,27 +181,24 @@ function QuickActions({
 }
 
 function Alerts({ count = 0 }: { count?: number }) {
+  const t = useThemeColors();
   return (
-    <Pressable className="hover:opacity-90 focus:outline-none active:opacity-70">
-      <LinearGradient
-        colors={[
-          "rgba(38, 38, 38, 0.95)",
-          "rgba(42, 42, 42, 0.95)",
-          "rgba(46, 46, 46, 0.95)",
-          "rgba(50, 50, 50, 0.95)",
-          "rgba(54, 54, 54, 0.95)",
-        ]}
-        {...GRADIENT_PROPS}
-        className="border-border/80 size-11 items-center justify-center overflow-hidden rounded-xl border hover:border-white/20"
-      >
-        <Bell size={15} color="rgb(255 255 255 / 0.7)" />
-        {count > 0 && <View className="absolute top-2 right-2 size-2 rounded-full bg-red-500" />}
-      </LinearGradient>
+    <Pressable
+      className="bg-glass hover:bg-glass-hover active:bg-glass-active relative flex size-7 items-center justify-center rounded-md focus:outline-none lg:size-9"
+      accessibilityLabel={count > 0 ? `${count} alerts` : "Alerts"}
+      accessibilityRole="button"
+    >
+      <Bell size={16} strokeWidth={1.5} className="lg:hidden" color={t.iconMuted} />
+      <Bell size={18} strokeWidth={1.5} className="hidden lg:flex" color={t.iconMuted} />
+      {count > 0 && (
+        <View className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-red-500 lg:top-1 lg:right-1" />
+      )}
     </Pressable>
   );
 }
 
 function ConnectionStatus() {
+  const t = useThemeColors();
   const isConnected = useEntityStore((s) => s.isConnected);
   const error = useEntityStore((s) => s.error);
   const [showTooltip, setShowTooltip] = useState(false);
@@ -223,38 +207,59 @@ function ConnectionStatus() {
   const iconColor = isDisconnected
     ? "rgb(239, 68, 68)"
     : isConnected
-      ? "rgb(34, 197, 94)"
+      ? t.activeGreen
       : "rgb(251, 191, 36)";
 
   const tooltipText = isDisconnected ? "Disconnected" : isConnected ? "Connected" : "Connecting...";
 
   return (
     <View className="relative">
-      <Pressable onHoverIn={() => setShowTooltip(true)} onHoverOut={() => setShowTooltip(false)}>
-        <LinearGradient
-          colors={[
-            "rgba(38, 38, 38, 0.95)",
-            "rgba(42, 42, 42, 0.95)",
-            "rgba(46, 46, 46, 0.95)",
-            "rgba(50, 50, 50, 0.95)",
-            "rgba(54, 54, 54, 0.95)",
-          ]}
-          {...GRADIENT_PROPS}
-          className="border-border/80 size-11 items-center justify-center overflow-hidden rounded-xl border hover:border-white/20"
-        >
-          {isDisconnected ? (
-            <WifiOff size={15} color={iconColor} />
-          ) : (
-            <Wifi size={15} color={iconColor} />
-          )}
-        </LinearGradient>
+      <Pressable
+        onHoverIn={() => setShowTooltip(true)}
+        onHoverOut={() => setShowTooltip(false)}
+        className="bg-glass hover:bg-glass-hover active:bg-glass-active flex size-7 items-center justify-center rounded-md focus:outline-none lg:size-9"
+        accessibilityLabel={tooltipText}
+        accessibilityRole="button"
+      >
+        {isDisconnected ? (
+          <>
+            <WifiOff size={16} strokeWidth={1.5} className="lg:hidden" color={iconColor} />
+            <WifiOff size={18} strokeWidth={1.5} className="hidden lg:flex" color={iconColor} />
+          </>
+        ) : (
+          <>
+            <Wifi size={16} strokeWidth={1.5} className="lg:hidden" color={iconColor} />
+            <Wifi size={18} strokeWidth={1.5} className="hidden lg:flex" color={iconColor} />
+          </>
+        )}
       </Pressable>
       {showTooltip && (
-        <View className="absolute top-12 right-0 rounded bg-black/90 px-2 py-1">
-          <Text className="text-foreground font-sans text-xs whitespace-nowrap">{tooltipText}</Text>
+        <View className="absolute top-1/2 right-full z-50 mr-2 -translate-y-1/2 rounded border border-white/8 bg-black/92 px-2 py-1">
+          <Text className="text-11 font-sans whitespace-nowrap text-white/88">{tooltipText}</Text>
         </View>
       )}
     </View>
+  );
+}
+
+function IconButton({
+  children,
+  onPress,
+  accessibilityLabel,
+}: {
+  children: ReactNode;
+  onPress?: () => void;
+  accessibilityLabel: string;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      className="bg-glass hover:bg-glass-hover active:bg-glass-active flex size-7 items-center justify-center rounded-md focus:outline-none lg:size-9"
+    >
+      {children}
+    </Pressable>
   );
 }
 
@@ -262,12 +267,11 @@ export const TopNav = {
   Root,
   Left,
   Right,
-  Logo,
-  Time,
   LogoOrTime,
   Sections,
   Workspace,
   QuickActions,
   Alerts,
   ConnectionStatus,
+  IconButton,
 };

@@ -18,11 +18,17 @@ export const BASE_LAYER_SOURCES: Record<
     attribution: "© Esri",
     maxZoom: 19,
   },
+  street: {
+    url: "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
+    attribution: "© OpenStreetMap contributors © CARTO",
+    maxZoom: 20,
+  },
 };
 
 export const ATTRIBUTIONS: Record<BaseLayer, string> = {
   dark: `MapLibre | ${BASE_LAYER_SOURCES.dark.attribution}`,
   satellite: `MapLibre | ${BASE_LAYER_SOURCES.satellite.attribution}`,
+  street: `MapLibre | ${BASE_LAYER_SOURCES.street.attribution}`,
 };
 
 export const SensorSectors: Array<CircleSector<ActiveSensorSector>> = [

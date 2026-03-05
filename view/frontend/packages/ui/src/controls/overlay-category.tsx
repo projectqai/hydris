@@ -23,7 +23,7 @@ export function OverlayCategory({ title, options, activeStates, onToggle }: Over
     <View className="gap-1.5">
       <Text
         selectable={false}
-        className="text-[12px] font-medium tracking-wider text-white/40 uppercase"
+        className="text-12 text-on-surface/70 font-sans-medium tracking-wider uppercase"
       >
         {title}
       </Text>

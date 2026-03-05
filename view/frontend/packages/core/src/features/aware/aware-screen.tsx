@@ -1,269 +1,196 @@
-import { KeyboardProvider } from "@hydris/ui/keyboard";
-import { PanelProvider, ResizablePanel, usePanelContext } from "@hydris/ui/panels";
-import type { ReactNode } from "react";
-import { useEffect, useRef } from "react";
-import { View } from "react-native";
+"use no memo";
 
+import type { PaletteMode } from "@hydris/ui/command-palette/palette-reducer";
+import { KeyboardProvider } from "@hydris/ui/keyboard";
+import { LayoutEditingContext, LeafRendererContext } from "@hydris/ui/layout/contexts";
+import { LayoutRenderer } from "@hydris/ui/layout/layout-renderer";
+import type { LayoutEditingContextValue, WidgetPickerState } from "@hydris/ui/layout/types";
+import { PanelProvider } from "@hydris/ui/panels";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { View } from "react-native";
+import Animated, { runOnJS, useSharedValue, withTiming } from "react-native-reanimated";
+
+import { CameraPaneProvider } from "./camera-pane-context";
+import { CommandPalette } from "./components/command-palette/command-palette";
+import { PaneShell } from "./components/layout/pane-shell";
+import { WidgetPickerModal } from "./components/layout/widget-picker-modal";
+import { TopBar } from "./components/top-bar/top-bar";
+import { PRESETS } from "./constants";
 import { useDeepLink } from "./hooks/use-deep-link";
 import { useEscapeHandler } from "./hooks/use-escape-handler";
-import { CollapsedStats, LeftPanelContent } from "./left-panel-content";
-import { MapControls } from "./map-controls";
-import { MapSearch } from "./map-search";
-import MapView from "./map-view";
+import { useLayoutManager } from "./hooks/use-layout-manager";
+import { PaletteContext, type PaletteContextValue } from "./palette-context";
 import { PIPProvider } from "./pip-context";
 import { PIPPlayer } from "./pip-player";
-import { CollapsedInfo, RightPanelContent } from "./right-panel-content";
-import { selectDetectionEntityIds, selectLastChange, useEntityStore } from "./store/entity-store";
-import {
-  setCurrentView,
-  useFlyToTarget,
-  useMapRef,
-  useZoomCommand,
-} from "./store/map-engine-store";
-import { useMapStore } from "./store/map-store";
-import { useOverlayStore } from "./store/overlay-store";
-import { useSelectionStore } from "./store/selection-store";
-import { buildDelta, buildDeltaChunked } from "./utils/transform-entities";
+import { useEntityStore } from "./store/entity-store";
 
-type AwareScreenProps = {
-  headerActions?: ReactNode;
-};
+function AwareContent({ showWeather }: { showWeather?: boolean }) {
+  const {
+    activePresetId,
+    layoutTree,
+    swapSourceId,
+    totalPanes,
+    mapVisible,
+    isLayoutModified,
+    layoutOpacity,
+    handlePresetSelect,
+    handleSplit,
+    handleRemove,
+    handleSwapStart,
+    handleSwapTarget,
+    handleResetToPreset,
+    handleChangeContent,
+    handleRatioChange,
+    clearSwapSource,
+    applyExternalLayout,
+  } = useLayoutManager();
 
-const BRIDGE_CHUNK_SIZE = 5000;
-const THROTTLE_MS = 500;
+  const [isCustomizing, setIsCustomizing] = useState(false);
+  const customizeProgress = useSharedValue(0);
+  const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
+  const openPalette = useCallback(
+    (mode: PaletteMode = { kind: "root" }) => setPaletteMode(mode),
+    [],
+  );
+  const closePalette = useCallback(() => setPaletteMode(null), []);
+  const paletteCtx = useMemo<PaletteContextValue>(() => ({ open: openPalette }), [openPalette]);
 
-function EntityBridge() {
-  const entities = useEntityStore((s) => s.entities);
-  const lastChange = useEntityStore(selectLastChange);
-  const detectionEntityIds = useEntityStore(selectDetectionEntityIds);
-  const mapRef = useMapRef();
+  const [pickerState, setPickerState] = useState<WidgetPickerState>(null);
+  const openPicker: LayoutEditingContextValue["openPicker"] = useCallback(
+    (path, currentContent) => setPickerState({ path, currentContent }),
+    [],
+  );
+  const closePicker = useCallback(() => setPickerState(null), []);
 
-  const pushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastPushTimeRef = useRef(0);
-  const chunkingRef = useRef(false);
-  const pendingVersionRef = useRef(false);
+  useDeepLink(mapVisible, { applyExternalLayout });
+
+  const enterCustomize = useCallback(() => {
+    setIsCustomizing(true);
+    // eslint-disable-next-line react-compiler/react-compiler
+    customizeProgress.value = withTiming(1, { duration: 280 });
+  }, [customizeProgress]);
+
+  const finishExitCustomize = useCallback(() => {
+    setIsCustomizing(false);
+    clearSwapSource();
+  }, [clearSwapSource]);
+
+  const exitCustomize = useCallback(() => {
+    customizeProgress.value = withTiming(0, { duration: 220 }, (finished) => {
+      if (finished) runOnJS(finishExitCustomize)();
+    });
+  }, [customizeProgress, finishExitCustomize]);
+
+  useEscapeHandler({ swapSourceId, clearSwapSource, isCustomizing, exitCustomize });
 
   useEffect(() => {
-    if (chunkingRef.current) {
-      pendingVersionRef.current = true;
-      return;
-    }
-
-    if (pushTimerRef.current) {
-      clearTimeout(pushTimerRef.current);
-      pushTimerRef.current = null;
-    }
-
-    const doPush = () => {
-      pushTimerRef.current = null;
-      const ref = mapRef.current;
-      if (!ref || typeof ref.pushDelta !== "function") {
-        pushTimerRef.current = setTimeout(doPush, 100);
+    if (process.env.EXPO_OS !== "web") return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        setPaletteMode((v) => (v ? null : { kind: "root" }));
         return;
       }
-      lastPushTimeRef.current = Date.now();
-
-      if (entities.size <= BRIDGE_CHUNK_SIZE) {
-        const delta = buildDelta(entities, detectionEntityIds);
-        ref.pushDelta(JSON.stringify(delta));
-        return;
-      }
-
-      const iter = buildDeltaChunked(entities, detectionEntityIds, BRIDGE_CHUNK_SIZE);
-      const first = iter.next();
-
-      if (first.done) return;
-      ref.pushDelta(JSON.stringify(first.value));
-
-      chunkingRef.current = true;
-      pendingVersionRef.current = false;
-
-      const pushNext = () => {
-        const next = iter.next();
-        if (!next.done) {
-          ref.pushDelta(JSON.stringify(next.value));
-          setTimeout(pushNext, 0);
-        } else {
-          chunkingRef.current = false;
-          if (pendingVersionRef.current) {
-            pendingVersionRef.current = false;
-            lastPushTimeRef.current = Date.now();
-            const catchup = buildDelta(
-              useEntityStore.getState().entities,
-              useEntityStore.getState().detectionEntityIds,
-            );
-            if (catchup.entities.length > 0 || catchup.removed.length > 0) {
-              ref.pushDelta(JSON.stringify(catchup));
-            }
-          }
+      if (e.key.startsWith("F") && !e.altKey && !e.metaKey && !e.ctrlKey) {
+        const idx = parseInt(e.key.slice(1), 10) - 1;
+        if (idx >= 0 && idx < PRESETS.length) {
+          e.preventDefault();
+          handlePresetSelect(PRESETS[idx]!.id);
         }
-      };
-      pushNext();
-    };
-
-    const elapsed = Date.now() - lastPushTimeRef.current;
-    if (elapsed >= THROTTLE_MS) {
-      doPush();
-    } else {
-      pushTimerRef.current = setTimeout(doPush, THROTTLE_MS - elapsed);
-    }
-
-    return () => {
-      if (pushTimerRef.current) {
-        clearTimeout(pushTimerRef.current);
-        pushTimerRef.current = null;
       }
     };
-  }, [lastChange.version, mapRef]);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [handlePresetSelect]);
 
-  useEffect(() => {
-    const selectedEntityId = useSelectionStore.getState().selectedEntityId;
-    if (!selectedEntityId) return;
-    const gone = lastChange.fullClear
-      ? !entities.has(selectedEntityId)
-      : lastChange.deletedIds.has(selectedEntityId);
-    if (gone) useSelectionStore.getState().clearSelection();
-  }, [lastChange]);
-
-  return null;
-}
-
-function AwareScreenContent({ headerActions }: AwareScreenProps) {
-  const viewedEntityId = useSelectionStore((s) => s.viewedEntityId);
-  const selectedEntityId = useSelectionStore((s) => s.selectedEntityId);
-  const isFollowing = useSelectionStore((s) => s.isFollowing);
-  const baseLayer = useMapStore((s) => s.layer);
-  const tracks = useOverlayStore((s) => s.tracks);
-  const sensors = useOverlayStore((s) => s.sensors);
-  const visualization = useOverlayStore((s) => s.visualization);
-  const mapRef = useMapRef();
-  const flyToTarget = useFlyToTarget();
-  const zoomCommand = useZoomCommand();
-  const { collapseAll } = usePanelContext();
-
-  const trackedId = isFollowing && selectedEntityId ? selectedEntityId : null;
-  const selectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (selectionTimerRef.current) {
-      clearTimeout(selectionTimerRef.current);
-      selectionTimerRef.current = null;
-    }
-    const push = () => {
-      selectionTimerRef.current = null;
-      const ref = mapRef.current;
-      if (!ref || typeof ref.pushSelection !== "function") {
-        selectionTimerRef.current = setTimeout(push, 100);
-        return;
-      }
-      ref.pushSelection(selectedEntityId, trackedId);
-    };
-    push();
-    return () => {
-      if (selectionTimerRef.current) {
-        clearTimeout(selectionTimerRef.current);
-        selectionTimerRef.current = null;
-      }
-    };
-  }, [selectedEntityId, trackedId, mapRef]);
-
-  const filterJson = JSON.stringify({ tracks, sensors });
-  const settingsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (settingsTimerRef.current) {
-      clearTimeout(settingsTimerRef.current);
-      settingsTimerRef.current = null;
-    }
-    const push = () => {
-      settingsTimerRef.current = null;
-      const ref = mapRef.current;
-      if (!ref || typeof ref.pushSettings !== "function") {
-        settingsTimerRef.current = setTimeout(push, 100);
-        return;
-      }
-      ref.pushSettings(baseLayer, filterJson, visualization.coverage, visualization.shapes);
-    };
-    push();
-    return () => {
-      if (settingsTimerRef.current) {
-        clearTimeout(settingsTimerRef.current);
-        settingsTimerRef.current = null;
-      }
-    };
-  }, [baseLayer, filterJson, visualization.coverage, visualization.shapes, mapRef]);
-
-  useEscapeHandler();
-  useDeepLink(true);
-
-  const handleEntityClick = async (id: string | null) => {
-    const { selectedEntityId, viewedEntityId, select, clearSelection } =
-      useSelectionStore.getState();
-
-    if (id) {
-      if (selectedEntityId === id) {
-        select(null);
-      } else {
-        select(id);
-      }
-      return;
-    }
-
-    if (selectedEntityId) {
-      select(null);
-    } else if (viewedEntityId) {
-      clearSelection();
-      collapseAll();
-    } else {
-      collapseAll();
-    }
-  };
+  const editingCtx = useMemo<LayoutEditingContextValue>(
+    () => ({
+      customizeProgress,
+      isCustomizing,
+      onSplit: handleSplit,
+      onRemove: handleRemove,
+      onChangeContent: handleChangeContent,
+      onRatioChange: handleRatioChange,
+      totalPanes,
+      swapSourceId,
+      onSwapStart: handleSwapStart,
+      onSwapTarget: handleSwapTarget,
+      pickerState,
+      openPicker,
+      closePicker,
+    }),
+    [
+      isCustomizing,
+      totalPanes,
+      swapSourceId,
+      pickerState,
+      handleSplit,
+      handleRemove,
+      handleChangeContent,
+      handleRatioChange,
+      handleSwapStart,
+      handleSwapTarget,
+      openPicker,
+      closePicker,
+    ],
+  );
 
   return (
-    <>
-      <EntityBridge />
-      <MapView
-        ref={mapRef}
-        flyToTarget={flyToTarget}
-        zoomCommand={zoomCommand}
-        baseLayer={baseLayer}
-        coverageVisible={visualization.coverage}
-        shapesVisible={visualization.shapes}
-        onEntityClick={handleEntityClick}
-        onTrackingLost={async () => useSelectionStore.setState({ isFollowing: false })}
-        onViewChange={async (lat, lng, zoom) => setCurrentView(lat, lng, zoom)}
-      />
+    <PaletteContext.Provider value={paletteCtx}>
+      <View className="bg-background flex-1">
+        <TopBar
+          activePresetId={activePresetId}
+          onPresetSelect={handlePresetSelect}
+          customizeProgress={customizeProgress}
+          isCustomizing={isCustomizing}
+          onCustomize={enterCustomize}
+          onDone={exitCustomize}
+          isLayoutModified={!!isLayoutModified}
+          onResetToPreset={handleResetToPreset}
+          onOpenPalette={() => openPalette()}
+          showWeather={showWeather}
+        />
 
-      <ResizablePanel side="left" minWidth={200} maxWidth={600} collapsedHeight={60}>
-        <ResizablePanel.Collapsed>
-          <CollapsedStats />
-        </ResizablePanel.Collapsed>
-        <ResizablePanel.Content>
-          <LeftPanelContent />
-        </ResizablePanel.Content>
-      </ResizablePanel>
-
-      <ResizablePanel
-        side="right"
-        minWidth={200}
-        maxWidth={600}
-        collapsedHeight={60}
-        collapsed={!viewedEntityId}
-      >
-        <ResizablePanel.Collapsed>
-          <CollapsedInfo />
-        </ResizablePanel.Collapsed>
-        <ResizablePanel.Content>
-          <RightPanelContent headerActions={headerActions} />
-        </ResizablePanel.Content>
-      </ResizablePanel>
-
-      <MapControls />
-      <MapSearch />
-      <PIPPlayer />
-    </>
+        <View style={{ flex: 1 }}>
+          <View className="flex flex-1">
+            <LayoutEditingContext.Provider value={editingCtx}>
+              <LeafRendererContext.Provider value={PaneShell}>
+                <Animated.View style={[{ flex: 1 }, layoutOpacity]}>
+                  <LayoutRenderer node={layoutTree} />
+                </Animated.View>
+              </LeafRendererContext.Provider>
+            </LayoutEditingContext.Provider>
+          </View>
+        </View>
+        {pickerState && (
+          <WidgetPickerModal
+            visible
+            onClose={closePicker}
+            onSelect={(content) => {
+              handleChangeContent(pickerState.path, content);
+              closePicker();
+            }}
+            currentContent={pickerState.currentContent}
+          />
+        )}
+        {paletteMode && (
+          <CommandPalette
+            onClose={closePalette}
+            initialMode={paletteMode}
+            layoutActions={{
+              presetSelect: handlePresetSelect,
+              customize: enterCustomize,
+              resetLayout: handleResetToPreset,
+            }}
+          />
+        )}
+        <PIPPlayer minTop={70} />
+      </View>
+    </PaletteContext.Provider>
   );
 }
 
-export default function AwareScreen({ headerActions }: AwareScreenProps) {
+export default function AwareScreen({ showWeather }: { showWeather?: boolean } = {}) {
   const startStream = useEntityStore((s) => s.startStream);
   const stopStream = useEntityStore((s) => s.stopStream);
 
@@ -273,14 +200,14 @@ export default function AwareScreen({ headerActions }: AwareScreenProps) {
   }, [startStream, stopStream]);
 
   return (
-    <View className="flex-1">
-      <KeyboardProvider>
-        <PanelProvider>
-          <PIPProvider>
-            <AwareScreenContent headerActions={headerActions} />
-          </PIPProvider>
-        </PanelProvider>
-      </KeyboardProvider>
-    </View>
+    <KeyboardProvider>
+      <PanelProvider>
+        <PIPProvider>
+          <CameraPaneProvider isInPane={() => false}>
+            <AwareContent showWeather={showWeather} />
+          </CameraPaneProvider>
+        </PIPProvider>
+      </PanelProvider>
+    </KeyboardProvider>
   );
 }

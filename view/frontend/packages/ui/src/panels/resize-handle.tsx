@@ -6,6 +6,7 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import type { SharedValue } from "react-native-reanimated";
 import { useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 
+import { useThemeColors } from "../lib/theme";
 import { cn } from "../lib/utils";
 import type { PanelSide } from "./types";
 
@@ -42,6 +43,7 @@ export function ResizeHandle({
   collapsedValue,
   expandedValue,
 }: ResizeHandleProps) {
+  const t = useThemeColors();
   const startValue = useSharedValue(0);
   const isHorizontal = direction === "horizontal";
   const activeOffset = isHorizontal ? { x: [-5, 5], y: 0 } : { x: 0, y: [-5, 5] };
@@ -116,9 +118,9 @@ export function ResizeHandle({
           }}
         >
           {isHorizontal ? (
-            <GripVertical size={13} color="rgba(255, 255, 255, 1)" strokeWidth={2} />
+            <GripVertical size={13} color={t.iconActive} strokeWidth={2} />
           ) : (
-            <GripHorizontal size={13} color="rgba(255, 255, 255, 1)" strokeWidth={2} />
+            <GripHorizontal size={13} color={t.iconActive} strokeWidth={2} />
           )}
         </View>
       </View>

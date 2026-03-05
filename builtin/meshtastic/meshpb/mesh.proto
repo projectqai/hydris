@@ -10,6 +10,7 @@ enum Port {
   PORT_TEXT          = 1;
   PORT_POSITION      = 3;
   PORT_NODEINFO      = 4;
+  PORT_ADMIN         = 6;
   PORT_TELEMETRY     = 67;
   PORT_TAK           = 72;
   PORT_TAK_FORWARDER = 257;
@@ -191,5 +192,154 @@ message Telem {
   fixed32 time = 1;
   oneof reading {
     DevMetrics device = 2;
+  }
+}
+
+// --- Admin protocol for configuring radio hardware ---
+// Field numbers match the upstream meshtastic wire format.
+
+enum RegionCode {
+  REGION_UNSET  = 0;
+  REGION_US     = 1;
+  REGION_EU_433 = 2;
+  REGION_EU_868 = 3;
+  REGION_CN     = 4;
+  REGION_JP     = 5;
+  REGION_ANZ    = 6;
+  REGION_KR     = 7;
+  REGION_TW     = 8;
+  REGION_RU     = 9;
+  REGION_IN     = 10;
+  REGION_NZ_865 = 11;
+  REGION_TH     = 12;
+  REGION_LORA_24 = 13;
+  REGION_UA_433 = 14;
+  REGION_UA_868 = 15;
+  REGION_MY_433 = 16;
+  REGION_MY_919 = 17;
+  REGION_SG_923 = 18;
+  REGION_PH_433 = 19;
+  REGION_PH_868 = 20;
+  REGION_PH_915 = 21;
+}
+
+enum ModemPreset {
+  MODEM_LONG_FAST     = 0;
+  MODEM_MEDIUM_SLOW   = 3;
+  MODEM_MEDIUM_FAST   = 4;
+  MODEM_SHORT_SLOW    = 5;
+  MODEM_SHORT_FAST    = 6;
+  MODEM_LONG_MODERATE = 7;
+  MODEM_SHORT_TURBO   = 8;
+  MODEM_LONG_TURBO    = 9;
+}
+
+enum DeviceRole {
+  ROLE_CLIENT        = 0;
+  ROLE_CLIENT_MUTE   = 1;
+  ROLE_ROUTER        = 2;
+  ROLE_TRACKER       = 5;
+  ROLE_SENSOR        = 6;
+  ROLE_TAK           = 7;
+  ROLE_CLIENT_HIDDEN = 8;
+  ROLE_TAK_TRACKER   = 10;
+  ROLE_ROUTER_LATE   = 11;
+}
+
+enum RebroadcastMode {
+  REBROADCAST_ALL        = 0;
+  REBROADCAST_LOCAL_ONLY = 2;
+  REBROADCAST_KNOWN_ONLY = 3;
+  REBROADCAST_NONE       = 4;
+}
+
+enum GpsMode {
+  GPS_DISABLED    = 0;
+  GPS_ENABLED     = 1;
+  GPS_NOT_PRESENT = 2;
+}
+
+enum ChannelRole {
+  CH_DISABLED  = 0;
+  CH_PRIMARY   = 1;
+  CH_SECONDARY = 2;
+}
+
+// LoRa radio parameters. Field numbers match upstream Config.LoRaConfig.
+message LoraConfig {
+  bool        use_preset    = 1;
+  ModemPreset modem_preset  = 2;
+  uint32      bandwidth     = 3;
+  uint32      spread_factor = 4;
+  uint32      coding_rate   = 5;
+  float       frequency_offset = 6;
+  RegionCode  region        = 7;
+  uint32      hop_limit     = 8;
+  bool        tx_enabled    = 9;
+  int32       tx_power      = 10;
+  uint32      channel_num   = 11;
+  bool        override_duty_cycle    = 12;
+  bool        sx126x_rx_boosted_gain = 13;
+  float       override_frequency     = 14;
+  bool        ignore_mqtt   = 104;
+  bool        config_ok_to_mqtt = 105;
+}
+
+// Device behaviour. Field numbers match upstream Config.DeviceConfig.
+message DeviceConfig {
+  DeviceRole      role                     = 1;
+  RebroadcastMode rebroadcast_mode         = 6;
+  uint32          node_info_broadcast_secs = 7;
+}
+
+// Position reporting. Field numbers match upstream Config.PositionConfig.
+message PositionConfig {
+  uint32  position_broadcast_secs          = 1;
+  bool    position_broadcast_smart_enabled = 2;
+  bool    fixed_position                   = 3;
+  uint32  gps_update_interval              = 5;
+  uint32  broadcast_smart_minimum_distance = 10;
+  uint32  broadcast_smart_minimum_interval_secs = 11;
+  GpsMode gps_mode                         = 13;
+}
+
+// Wrapper matching upstream Config oneof. Only sections we care about.
+message CfgSet {
+  oneof payload_variant {
+    DeviceConfig   device   = 1;
+    PositionConfig position = 2;
+    LoraConfig     lora     = 6;
+  }
+}
+
+// Channel encryption and identity. Field numbers match upstream ChannelSettings.
+message ChanSettings {
+  bytes  psk  = 2;
+  string name = 3;
+}
+
+// Channel with index and role. Field numbers match upstream Channel.
+message ChanCfg {
+  int32        index    = 1;
+  ChanSettings settings = 2;
+  ChannelRole  role     = 3;
+}
+
+// User/owner identity. Field numbers match upstream User.
+message Owner {
+  string id         = 1;
+  string long_name  = 2;
+  string short_name = 3;
+}
+
+// Admin message sent to PORT_ADMIN on the device's own node.
+// Field numbers match upstream AdminMessage payload_variant.
+message AdminMsg {
+  oneof payload_variant {
+    Owner  set_owner   = 32;
+    ChanCfg set_channel = 33;
+    CfgSet set_config  = 34;
+    bool   begin_edit_settings  = 64;
+    bool   commit_edit_settings = 65;
   }
 }

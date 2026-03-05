@@ -16,12 +16,27 @@
     "./sheets/floating-sheet": "./src/sheets/floating-sheet.tsx",
     "./controls": "./src/controls/index.ts",
     "./lib/utils": "./src/lib/utils.ts",
+    "./lib/platform": "./src/lib/platform.ts",
     "./lib/theme": "./src/lib/theme.tsx",
     "./badge": "./src/badge.tsx",
+    "./empty-state": "./src/empty-state.tsx",
     "./info-row": "./src/info-row.tsx",
     "./tabs": "./src/tabs/tabs.tsx",
     "./segmented-control": "./src/segmented-control/segmented-control.tsx",
-    "./floating-window": "./src/floating-window/floating-window.tsx"
+    "./floating-window": "./src/floating-window/floating-window.tsx",
+    "./command-palette/palette-reducer": "./src/command-palette/palette-reducer.ts",
+    "./command-palette/use-list-nav": "./src/command-palette/use-list-nav.ts",
+    "./command-palette/highlight-text": "./src/command-palette/highlight-text.tsx",
+    "./layout/types": "./src/layout/types.ts",
+    "./layout/tree-utils": "./src/layout/tree-utils.ts",
+    "./layout/contexts": "./src/layout/contexts.ts",
+    "./layout/constants": "./src/layout/constants.ts",
+    "./layout/animated-split": "./src/layout/animated-split.tsx",
+    "./layout/layout-renderer": "./src/layout/layout-renderer.tsx",
+    "./top-bar/command-trigger": "./src/top-bar/command-trigger.tsx",
+    "./top-bar/customize-help-icon": "./src/top-bar/customize-help-icon.tsx",
+    "./action-button": "./src/action-button.tsx",
+    "./middle-truncate-text": "./src/middle-truncate-text.tsx"
   },
   "scripts": {
     "lint": "eslint .",
@@ -29,6 +44,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@hydris/tailwind-config": "workspace:*",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
@@ -52,7 +68,8 @@
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-native": "catalog:",
-    "react-native-web": "catalog:"
+    "react-native-web": "catalog:",
+    "zustand": "^5.0.8"
   },
   "peerDependencies": {
     "expo-linear-gradient": "*",
@@ -61,7 +78,8 @@
     "react-native": "*",
     "react-native-gesture-handler": "*",
     "react-native-reanimated": "*",
-    "react-native-web": "*"
+    "react-native-web": "*",
+    "zustand": "*"
   },
   "peerDependenciesMeta": {
     "react-native": {

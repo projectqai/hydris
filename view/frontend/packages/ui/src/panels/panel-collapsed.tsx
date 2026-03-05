@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-export type PanelCollapsedProps = {
+type PanelCollapsedProps = {
   children: ReactNode;
 };
 

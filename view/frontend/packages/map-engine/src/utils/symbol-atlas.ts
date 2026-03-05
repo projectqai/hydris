@@ -30,6 +30,10 @@ export type AtlasStats = {
   isFull: boolean;
 };
 
+function svgToDataUri(svgString: string): string {
+  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgString)))}`;
+}
+
 function estimateCapacity(symbolSize: number): number {
   const avgSymbolWidth = symbolSize * 1.4;
   const avgSymbolHeight = symbolSize * 1.6;
@@ -117,10 +121,8 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
           `Symbol "${sidc}" using direct SVG rendering.`,
       );
 
-      const svgString = symbol.asSVG();
-      const base64 = btoa(unescape(encodeURIComponent(svgString)));
       overflowSymbols.set(key, {
-        dataUrl: `data:image/svg+xml;base64,${base64}`,
+        dataUrl: svgToDataUri(symbol.asSVG()),
         width,
         height,
         anchorX: anchor.x,
@@ -130,9 +132,7 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
       return key;
     }
 
-    const svgString = symbol.asSVG();
-    const base64 = btoa(unescape(encodeURIComponent(svgString)));
-    const dataUrl = `data:image/svg+xml;base64,${base64}`;
+    const dataUrl = svgToDataUri(symbol.asSVG());
 
     const entry: AtlasEntry = {
       x: currentX,
@@ -188,10 +188,8 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
           `[SymbolAtlas] Atlas full during preload. Symbol "${sidc}" using direct SVG rendering.`,
         );
 
-        const svgString = symbol.asSVG();
-        const base64 = btoa(unescape(encodeURIComponent(svgString)));
         overflowSymbols.set(key, {
-          dataUrl: `data:image/svg+xml;base64,${base64}`,
+          dataUrl: svgToDataUri(symbol.asSVG()),
           width,
           height,
           anchorX: anchor.x,
@@ -201,9 +199,7 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
         continue;
       }
 
-      const svgString = symbol.asSVG();
-      const base64 = btoa(unescape(encodeURIComponent(svgString)));
-      const dataUrl = `data:image/svg+xml;base64,${base64}`;
+      const dataUrl = svgToDataUri(symbol.asSVG());
 
       const entry: AtlasEntry = {
         x: currentX,
@@ -288,7 +284,5 @@ export function getSymbolAtlas(size = 32): SymbolAtlas {
 
 export function generateSymbol(sidc: string, size = 32): string {
   const symbol = new ms.Symbol(sidc, { size });
-  const svgString = symbol.asSVG();
-  const base64 = btoa(unescape(encodeURIComponent(svgString)));
-  return `data:image/svg+xml;base64,${base64}`;
+  return svgToDataUri(symbol.asSVG());
 }

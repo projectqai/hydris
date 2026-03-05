@@ -1,7 +1,7 @@
 import { IconLayer } from "@deck.gl/layers";
 
 import type { ActiveSensorSectors, EntityData } from "../types";
-import { getSectorSvgDataUri } from "../utils/sensor-svg";
+import { DARK_SVG_THEME, getSectorSvgDataUri, LIGHT_SVG_THEME } from "../utils/sensor-svg";
 
 export type SectorRenderData = {
   entity: EntityData;
@@ -9,7 +9,7 @@ export type SectorRenderData = {
   sectorDataUri: string;
 };
 
-export type SensorSectorLayerProps = {
+type SensorSectorLayerProps = {
   data: SectorRenderData[];
   visible: boolean;
 };
@@ -28,11 +28,15 @@ export function createSensorSectorLayer({ data, visible }: SensorSectorLayerProp
   });
 }
 
-export function prepareSectorData(entity: EntityData): SectorRenderData | null {
+export function prepareSectorData(
+  entity: EntityData,
+  colorScheme: "dark" | "light" = "dark",
+): SectorRenderData | null {
   if (!entity.ellipseRadius || !entity.activeSectors) return null;
+  const theme = colorScheme === "light" ? LIGHT_SVG_THEME : DARK_SVG_THEME;
   return {
     entity,
     sectors: entity.activeSectors,
-    sectorDataUri: getSectorSvgDataUri(entity.activeSectors),
+    sectorDataUri: getSectorSvgDataUri(entity.activeSectors, theme),
   };
 }

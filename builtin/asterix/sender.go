@@ -11,9 +11,10 @@ import (
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/goclient"
 	pb "github.com/projectqai/proto/go"
+	"google.golang.org/protobuf/proto"
 )
 
-func runSender(ctx context.Context, logger *slog.Logger, entity *pb.Entity) error {
+func runSender(ctx context.Context, logger *slog.Logger, entity *pb.Entity, ready func()) error {
 	config := entity.Config
 	destAddr := "127.0.0.1:8600"
 	category := 62
@@ -51,6 +52,7 @@ func runSender(ctx context.Context, logger *slog.Logger, entity *pb.Entity) erro
 		return fmt.Errorf("dial UDP: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+	ready()
 
 	logger.Info("ASTERIX UDP sender connected", "local", conn.LocalAddr(), "dest", destAddr, "category", category)
 
@@ -67,6 +69,7 @@ func runSender(ctx context.Context, logger *slog.Logger, entity *pb.Entity) erro
 	}
 
 	sentCount := 0
+	var entitiesSent uint64
 	for {
 		select {
 		case <-ctx.Done():
@@ -119,7 +122,16 @@ func runSender(ctx context.Context, logger *slog.Logger, entity *pb.Entity) erro
 			continue
 		}
 
+		entitiesSent++
 		sentCount++
 		logger.Debug("Sent ASTERIX", "entityID", event.Entity.Id, "bytes", len(data), "total", sentCount)
+		_, _ = client.Push(ctx, &pb.EntityChangeRequest{
+			Changes: []*pb.Entity{{
+				Id: entity.Id,
+				Metric: &pb.MetricComponent{Metrics: []*pb.Metric{
+					{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("entities sent"), Id: proto.Uint32(1), Val: &pb.Metric_Uint64{Uint64: entitiesSent}},
+				}},
+			}},
+		})
 	}
 }

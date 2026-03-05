@@ -36,8 +36,14 @@ func TestEntityHasComponent(t *testing.T) {
 		{"mission present", &pb.Entity{Mission: &pb.MissionComponent{}}, 31, true},
 		{"link present", &pb.Entity{Link: &pb.LinkComponent{}}, 32, true},
 		{"power present", &pb.Entity{Power: &pb.PowerComponent{}}, 33, true},
+		{"local_shape present", &pb.Entity{LocalShape: &pb.LocalShapeComponent{}}, 29, true},
 		{"navigation present", &pb.Entity{Navigation: &pb.NavigationComponent{}}, 34, true},
+		{"capture present", &pb.Entity{Capture: &pb.CaptureComponent{}}, 35, true},
+		{"metric present", &pb.Entity{Metric: &pb.MetricComponent{}}, 36, true},
+		{"sensor present", &pb.Entity{Sensor: &pb.SensorComponent{}}, 37, true},
 		{"device present", &pb.Entity{Device: &pb.DeviceComponent{}}, 50, true},
+		{"configurable present", &pb.Entity{Configurable: &pb.ConfigurableComponent{}}, 52, true},
+		{"interactivity present", &pb.Entity{Interactivity: &pb.InteractivityComponent{}}, 60, true},
 		{"config present", &pb.Entity{Config: &pb.ConfigurationComponent{}}, 51, true},
 		{"unknown field", &pb.Entity{}, 99, false},
 	}
@@ -223,143 +229,74 @@ func TestMatchesEntityFilter_ConfigFilter(t *testing.T) {
 	w := testWorld(nil)
 	entity := &pb.Entity{
 		Id:     "e1",
-		Config: &pb.ConfigurationComponent{Key: "mykey"},
+		Config: &pb.ConfigurationComponent{},
 	}
 	noConfig := &pb.Entity{Id: "e2"}
 
-	filter := &pb.EntityFilter{Config: &pb.ConfigurationFilter{Key: proto.String("mykey")}}
+	filter := &pb.EntityFilter{Config: &pb.ConfigurationFilter{}}
 
 	if !w.matchesEntityFilter(entity, filter) {
-		t.Error("should match config key")
+		t.Error("should match entity with config")
 	}
 	if w.matchesEntityFilter(noConfig, filter) {
 		t.Error("should not match entity without config")
 	}
-	if w.matchesEntityFilter(entity, &pb.EntityFilter{Config: &pb.ConfigurationFilter{Key: proto.String("other")}}) {
-		t.Error("should not match different config key")
-	}
 }
 
-func TestMatchesEntityFilter_DeviceFilter_Labels(t *testing.T) {
+func TestMatchesEntityFilter_DeviceFilter_Parent(t *testing.T) {
 	w := testWorld(nil)
 	entity := &pb.Entity{
 		Id: "e1",
 		Device: &pb.DeviceComponent{
-			Labels: map[string]string{"type": "sensor", "zone": "a"},
+			Parent: proto.String("node.abc123"),
 		},
 	}
 
-	// Subset match
 	filter := &pb.EntityFilter{Device: &pb.DeviceFilter{
-		Labels: map[string]string{"type": "sensor"},
+		Parent: proto.String("node.abc123"),
 	}}
 	if !w.matchesEntityFilter(entity, filter) {
-		t.Error("should match label subset")
+		t.Error("should match parent")
 	}
 
-	// Non-matching label
 	filter2 := &pb.EntityFilter{Device: &pb.DeviceFilter{
-		Labels: map[string]string{"type": "camera"},
+		Parent: proto.String("node.other"),
 	}}
 	if w.matchesEntityFilter(entity, filter2) {
-		t.Error("should not match wrong label value")
+		t.Error("should not match different parent")
 	}
 
-	// No device
 	if w.matchesEntityFilter(&pb.Entity{Id: "e2"}, filter) {
 		t.Error("should not match entity without device")
 	}
 }
 
-func TestMatchesEntityFilter_DeviceFilter_USB(t *testing.T) {
-	w := testWorld(nil)
-	vid := uint32(0x1234)
-	pid := uint32(0x5678)
-	entity := &pb.Entity{
-		Id: "e1",
-		Device: &pb.DeviceComponent{
-			Usb: &pb.UsbDevice{VendorId: &vid, ProductId: &pid},
-		},
-	}
-
-	filter := &pb.EntityFilter{Device: &pb.DeviceFilter{
-		Usb: &pb.UsbDevice{VendorId: &vid},
-	}}
-	if !w.matchesEntityFilter(entity, filter) {
-		t.Error("should match USB vendor")
-	}
-
-	otherVid := uint32(0xFFFF)
-	filter2 := &pb.EntityFilter{Device: &pb.DeviceFilter{
-		Usb: &pb.UsbDevice{VendorId: &otherVid},
-	}}
-	if w.matchesEntityFilter(entity, filter2) {
-		t.Error("should not match different USB vendor")
-	}
-
-	// Entity without USB
-	noUsb := &pb.Entity{Id: "e2", Device: &pb.DeviceComponent{}}
-	if w.matchesEntityFilter(noUsb, filter) {
-		t.Error("should not match entity without USB")
-	}
-}
-
-func TestMatchesEntityFilter_DeviceFilter_IP(t *testing.T) {
+func TestMatchesEntityFilter_DeviceFilter_UniqueHardwareId(t *testing.T) {
 	w := testWorld(nil)
 	entity := &pb.Entity{
 		Id: "e1",
 		Device: &pb.DeviceComponent{
-			Ip: &pb.IpDevice{Host: proto.String("192.168.1.1"), Port: proto.Uint32(8080)},
+			UniqueHardwareId: proto.String("SN-00042"),
 		},
 	}
 
 	filter := &pb.EntityFilter{Device: &pb.DeviceFilter{
-		Ip: &pb.IpDevice{Host: proto.String("192.168.1.1")},
+		UniqueHardwareId: proto.String("SN-00042"),
 	}}
 	if !w.matchesEntityFilter(entity, filter) {
-		t.Error("should match IP host")
+		t.Error("should match unique hardware id")
 	}
 
 	filter2 := &pb.EntityFilter{Device: &pb.DeviceFilter{
-		Ip: &pb.IpDevice{Host: proto.String("10.0.0.1")},
+		UniqueHardwareId: proto.String("SN-99999"),
 	}}
 	if w.matchesEntityFilter(entity, filter2) {
-		t.Error("should not match different host")
+		t.Error("should not match different hardware id")
 	}
 
-	// No IP on entity
-	noIP := &pb.Entity{Id: "e2", Device: &pb.DeviceComponent{}}
-	if w.matchesEntityFilter(noIP, filter) {
-		t.Error("should not match entity without IP")
-	}
-}
-
-func TestMatchesEntityFilter_DeviceFilter_Serial(t *testing.T) {
-	w := testWorld(nil)
-	entity := &pb.Entity{
-		Id: "e1",
-		Device: &pb.DeviceComponent{
-			Serial: &pb.SerialDevice{Path: proto.String("/dev/ttyACM0")},
-		},
-	}
-
-	filter := &pb.EntityFilter{Device: &pb.DeviceFilter{
-		Serial: &pb.SerialDevice{Path: proto.String("/dev/ttyACM0")},
-	}}
-	if !w.matchesEntityFilter(entity, filter) {
-		t.Error("should match serial path")
-	}
-
-	filter2 := &pb.EntityFilter{Device: &pb.DeviceFilter{
-		Serial: &pb.SerialDevice{Path: proto.String("/dev/ttyUSB0")},
-	}}
-	if w.matchesEntityFilter(entity, filter2) {
-		t.Error("should not match different serial path")
-	}
-
-	noSerial := &pb.Entity{Id: "e2", Device: &pb.DeviceComponent{}}
-	if w.matchesEntityFilter(noSerial, filter) {
-		t.Error("should not match entity without serial")
+	noHwid := &pb.Entity{Id: "e2", Device: &pb.DeviceComponent{}}
+	if w.matchesEntityFilter(noHwid, filter) {
+		t.Error("should not match entity without hardware id")
 	}
 }
 
@@ -418,6 +355,46 @@ func TestMatchesEntityFilter_TrackFilter(t *testing.T) {
 	}
 	if w.matchesEntityFilter(entity, &pb.EntityFilter{Track: &pb.TrackFilter{Tracker: proto.String("other")}}) {
 		t.Error("should not match different tracker")
+	}
+}
+
+func TestMatchesEntityFilter_MissionFilter(t *testing.T) {
+	w := testWorld(nil)
+	entity := &pb.Entity{
+		Id: "mission1",
+		Mission: &pb.MissionComponent{
+			Members: []string{"asset1", "asset2"},
+		},
+	}
+	noMission := &pb.Entity{Id: "e2"}
+
+	// MemberId match
+	filter := &pb.EntityFilter{Mission: &pb.MissionFilter{MemberId: proto.String("asset1")}}
+	if !w.matchesEntityFilter(entity, filter) {
+		t.Error("should match mission containing member")
+	}
+
+	// MemberId no match
+	filter2 := &pb.EntityFilter{Mission: &pb.MissionFilter{MemberId: proto.String("asset99")}}
+	if w.matchesEntityFilter(entity, filter2) {
+		t.Error("should not match mission without that member")
+	}
+
+	// No mission component
+	if w.matchesEntityFilter(noMission, filter) {
+		t.Error("should not match entity without mission")
+	}
+
+	// MissionId match
+	filter3 := &pb.EntityFilter{Mission: &pb.MissionFilter{MissionId: proto.String("mission1")}}
+	if !w.matchesEntityFilter(entity, filter3) {
+		t.Error("should match mission by ID")
+	}
+
+	// MissionId no match
+	filter4 := &pb.EntityFilter{Mission: &pb.MissionFilter{MissionId: proto.String("mission2")}}
+	if w.matchesEntityFilter(entity, filter4) {
+		t.Error("should not match different mission ID")
 	}
 }
 

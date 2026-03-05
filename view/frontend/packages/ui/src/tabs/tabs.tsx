@@ -2,6 +2,7 @@ import { type LucideIcon } from "lucide-react-native";
 import { type ReactElement, type ReactNode, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 
+import { useThemeColors } from "../lib/theme";
 import { cn } from "../lib/utils";
 
 type TabProps = {
@@ -22,13 +23,15 @@ type TabsProps = {
   initialTab?: string;
   currentTab?: string;
   onTabChange?: (tabName: string) => void;
+  disableHover?: boolean;
 };
 
 export function Tab({ children }: TabProps) {
   return <>{children}</>;
 }
 
-export function Tabs({ children, initialTab, currentTab, onTabChange }: TabsProps) {
+export function Tabs({ children, initialTab, currentTab, onTabChange, disableHover }: TabsProps) {
+  const t = useThemeColors();
   const childrenArray = (Array.isArray(children) ? children : [children]).filter(
     (child): child is ReactElement<TabProps> => Boolean(child),
   );
@@ -86,24 +89,24 @@ export function Tabs({ children, initialTab, currentTab, onTabChange }: TabsProp
                   tabRefs.current[tab.name] = ref;
                 }}
                 onPress={() => handleTabPress(tab.name)}
-                className="relative flex-1 items-center px-3 py-2"
-                style={({ pressed }) => ({
-                  opacity: pressed ? 0.7 : 1,
-                })}
+                className={cn(
+                  "relative flex-1 items-center rounded px-3 py-2",
+                  !disableHover && "hover:bg-foreground/[0.06] active:bg-foreground/[0.10]",
+                )}
               >
                 {Icon ? (
                   <View className="items-center gap-1">
                     <Icon
                       size={18}
-                      color={isActive ? "rgba(255, 255, 255, 0.9)" : "rgba(255, 255, 255, 0.4)"}
+                      color={isActive ? t.iconStrong : t.iconDefault}
                       strokeWidth={isActive ? 2 : 1.5}
                     />
                     <Text
                       className={cn(
-                        "text-[10px]",
+                        "text-xs",
                         isActive
                           ? "font-sans-medium text-foreground/80"
-                          : "text-foreground/40 font-sans",
+                          : "text-foreground/75 font-sans",
                       )}
                     >
                       {tab.subtitle ?? tab.title}
@@ -115,13 +118,18 @@ export function Tabs({ children, initialTab, currentTab, onTabChange }: TabsProp
                       "text-sm",
                       isActive
                         ? "font-sans-medium text-foreground/90"
-                        : "text-foreground/40 font-sans",
+                        : "text-foreground/75 font-sans",
                     )}
                   >
                     {tab.title}
                   </Text>
                 )}
-                {isActive && <View className="bg-primary absolute right-0 bottom-0 left-0 h-0.5" />}
+                {isActive && (
+                  <View
+                    className="absolute right-0 bottom-0 left-0 h-0.5"
+                    style={{ backgroundColor: t.tabIndicator }}
+                  />
+                )}
               </Pressable>
             );
           })}

@@ -4,6 +4,7 @@ import (
 	pb "github.com/projectqai/proto/go"
 
 	"github.com/paulmach/orb"
+	"github.com/paulmach/orb/geo"
 )
 
 func entityHasComponent(entity *pb.Entity, field uint32) bool {
@@ -42,6 +43,8 @@ func entityHasComponent(entity *pb.Entity, field uint32) bool {
 		return entity.Transponder != nil
 	case 28:
 		return entity.Administrative != nil
+	case 29:
+		return entity.LocalShape != nil
 	case 30:
 		return entity.Orientation != nil
 	case 31:
@@ -52,10 +55,26 @@ func entityHasComponent(entity *pb.Entity, field uint32) bool {
 		return entity.Power != nil
 	case 34:
 		return entity.Navigation != nil
+	case 35:
+		return entity.Capture != nil
+	case 36:
+		return entity.Metric != nil
+	case 37:
+		return entity.Sensor != nil
+	case 38:
+		return entity.Pose != nil
+	case 41:
+		return entity.TaskExecution != nil
 	case 50:
 		return entity.Device != nil
 	case 51:
 		return entity.Config != nil
+	case 52:
+		return entity.Configurable != nil
+	case 60:
+		return entity.Interactivity != nil
+	case 62:
+		return entity.TargetPose != nil
 	}
 	return false
 }
@@ -137,6 +156,9 @@ func planarToOrb(planar *pb.PlanarGeometry) orb.Geometry {
 			}
 			return poly
 		}
+	case *pb.PlanarGeometry_Circle:
+		// Circles are handled directly in entityIntersectsGeoFilter
+		// via haversine distance check; return nil here.
 	}
 
 	return nil
@@ -161,6 +183,16 @@ func entityIntersectsGeoFilter(entity *pb.Entity, geoFilter *pb.GeoFilter) bool 
 				return true
 			}
 
+			// Handle circle with geodesic distance check
+			if circle, ok := g.Geometry.Planar.Plane.(*pb.PlanarGeometry_Circle); ok {
+				if circle.Circle == nil || circle.Circle.Center == nil {
+					return true
+				}
+				center := orb.Point{circle.Circle.Center.Longitude, circle.Circle.Center.Latitude}
+				dist := geo.Distance(center, entityPoint)
+				return dist <= circle.Circle.RadiusM
+			}
+
 			filterGeom := planarToOrb(g.Geometry.Planar)
 			if filterGeom == nil {
 				return true
@@ -180,7 +212,6 @@ func entityIntersectsGeoFilter(entity *pb.Entity, geoFilter *pb.GeoFilter) bool 
 
 	return true
 }
-
 func (s *WorldServer) matchesEntityFilter(entity *pb.Entity, filter *pb.EntityFilter) bool {
 	if filter == nil {
 		return true
@@ -233,12 +264,9 @@ func (s *WorldServer) matchesEntityFilter(entity *pb.Entity, filter *pb.EntityFi
 		}
 	}
 
-	// Configuration filter
+	// Configuration filter (existence check only)
 	if filter.Config != nil {
 		if entity.Config == nil {
-			return false
-		}
-		if filter.Config.Key != nil && entity.Config.Key != *filter.Config.Key {
 			return false
 		}
 	}
@@ -248,43 +276,11 @@ func (s *WorldServer) matchesEntityFilter(entity *pb.Entity, filter *pb.EntityFi
 		if entity.Device == nil {
 			return false
 		}
-		// Labels subset match
-		if len(filter.Device.Labels) > 0 {
-			for k, v := range filter.Device.Labels {
-				if entity.Device.Labels[k] != v {
-					return false
-				}
-			}
+		if filter.Device.Parent != nil && entity.Device.GetParent() != *filter.Device.Parent {
+			return false
 		}
-		if filter.Device.Usb != nil {
-			if entity.Device.Usb == nil {
-				return false
-			}
-			if filter.Device.Usb.VendorId != nil && entity.Device.Usb.GetVendorId() != filter.Device.Usb.GetVendorId() {
-				return false
-			}
-			if filter.Device.Usb.ProductId != nil && entity.Device.Usb.GetProductId() != filter.Device.Usb.GetProductId() {
-				return false
-			}
-		}
-		if filter.Device.Ip != nil {
-			if entity.Device.Ip == nil {
-				return false
-			}
-			if filter.Device.Ip.Host != nil && entity.Device.Ip.GetHost() != filter.Device.Ip.GetHost() {
-				return false
-			}
-			if filter.Device.Ip.Port != nil && entity.Device.Ip.GetPort() != filter.Device.Ip.GetPort() {
-				return false
-			}
-		}
-		if filter.Device.Serial != nil {
-			if entity.Device.Serial == nil {
-				return false
-			}
-			if filter.Device.Serial.Path != nil && entity.Device.Serial.GetPath() != filter.Device.Serial.GetPath() {
-				return false
-			}
+		if filter.Device.UniqueHardwareId != nil && entity.Device.GetUniqueHardwareId() != *filter.Device.UniqueHardwareId {
+			return false
 		}
 	}
 
@@ -309,6 +305,32 @@ func (s *WorldServer) matchesEntityFilter(entity *pb.Entity, filter *pb.EntityFi
 		}
 		if filter.Track.Tracker != nil && entity.Track.GetTracker() != *filter.Track.Tracker {
 			return false
+		}
+	}
+
+	// Mission filter
+	if filter.Mission != nil {
+		if entity.Mission == nil {
+			return false
+		}
+		if filter.Mission.MissionId != nil {
+			// find member assets of this mission: entity must have this mission's ID
+			if entity.Id != *filter.Mission.MissionId {
+				return false
+			}
+		}
+		if filter.Mission.MemberId != nil {
+			// find missions containing this asset
+			found := false
+			for _, m := range entity.Mission.Members {
+				if m == *filter.Mission.MemberId {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
 		}
 	}
 

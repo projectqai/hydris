@@ -157,5 +157,3 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
 
   return result;
 }
-
-export type { ClusterOutput };

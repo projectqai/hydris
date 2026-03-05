@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/projectqai/hydris/builtin/meshtastic/meshpb"
-	"github.com/projectqai/hydris/cot"
 	"github.com/projectqai/hydris/goclient"
+	"github.com/projectqai/hydris/pkg/cot"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -215,7 +215,7 @@ const (
 )
 
 func sendEntityAsHydris(ctx context.Context, logger *slog.Logger, radio *Radio, entity *pb.Entity, channel, hopLimit uint32) error {
-	raw, err := proto.Marshal(entity)
+	raw, err := proto.Marshal(filterEntityForMesh(entity))
 	if err != nil {
 		return fmt.Errorf("marshal entity: %w", err)
 	}

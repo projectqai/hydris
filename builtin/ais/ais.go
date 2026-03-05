@@ -18,6 +18,7 @@ import (
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/controller"
 	pb "github.com/projectqai/proto/go"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -63,39 +64,141 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 
 	streamSchema, _ := structpb.NewStruct(map[string]any{
 		"type": "object",
+		"ui:groups": []any{
+			map[string]any{"key": "connection", "title": "Connection"},
+			map[string]any{"key": "filter", "title": "Geo Filter", "collapsed": true},
+			map[string]any{"key": "self", "title": "Self Position", "collapsed": true},
+		},
 		"properties": map[string]any{
-			"host":                  map[string]any{"type": "string"},
-			"port":                  map[string]any{"type": "number"},
-			"entity_expiry_seconds": map[string]any{"type": "number"},
-			"latitude":              map[string]any{"type": "number"},
-			"longitude":             map[string]any{"type": "number"},
-			"radius_km":             map[string]any{"type": "number"},
-			"self_entity_id":        map[string]any{"type": "string"},
-			"self_label":            map[string]any{"type": "string"},
-			"self_sidc":             map[string]any{"type": "string"},
-			"self_allow_invalid":    map[string]any{"type": "boolean"},
+			"host": map[string]any{
+				"type":           "string",
+				"title":          "Host",
+				"description":    "AIS data source hostname or IP",
+				"ui:placeholder": "e.g. ais.example.com",
+				"ui:group":       "connection",
+				"ui:order":       0,
+			},
+			"port": map[string]any{
+				"type":           "number",
+				"title":          "Port",
+				"description":    "AIS data source port",
+				"minimum":        1,
+				"maximum":        65535,
+				"ui:placeholder": "e.g. 5631",
+				"ui:group":       "connection",
+				"ui:order":       1,
+			},
+			"entity_expiry_seconds": map[string]any{
+				"type":        "number",
+				"title":       "Entity Expiry",
+				"description": "How long to keep vessels without updates",
+				"default":     300,
+				"minimum":     10,
+				"ui:unit":     "s",
+				"ui:group":    "connection",
+				"ui:order":    2,
+			},
+			"latitude": map[string]any{
+				"type":           "number",
+				"title":          "Latitude",
+				"description":    "Center latitude for geo filter",
+				"ui:placeholder": "e.g. 48.8566",
+				"ui:group":       "filter",
+				"ui:order":       0,
+			},
+			"longitude": map[string]any{
+				"type":           "number",
+				"title":          "Longitude",
+				"description":    "Center longitude for geo filter",
+				"ui:placeholder": "e.g. 2.3522",
+				"ui:group":       "filter",
+				"ui:order":       1,
+			},
+			"radius_km": map[string]any{
+				"type":        "number",
+				"title":       "Radius",
+				"description": "Only show vessels within this radius",
+				"minimum":     0.1,
+				"ui:unit":     "km",
+				"ui:group":    "filter",
+				"ui:order":    2,
+			},
+			"self_entity_id": map[string]any{
+				"type":           "string",
+				"title":          "Entity ID",
+				"description":    "Custom entity ID for self position from GPS",
+				"ui:placeholder": "e.g. ais.self.myboat",
+				"ui:group":       "self",
+				"ui:order":       0,
+			},
+			"self_label": map[string]any{
+				"type":           "string",
+				"title":          "Label",
+				"description":    "Display label for self position",
+				"ui:placeholder": "e.g. My Boat",
+				"ui:group":       "self",
+				"ui:order":       1,
+			},
+			"self_sidc": map[string]any{
+				"type":           "string",
+				"title":          "Symbol",
+				"description":    "MIL-STD-2525C symbol code for self",
+				"ui:placeholder": "e.g. SFSPXM----*****",
+				"ui:group":       "self",
+				"ui:order":       2,
+			},
+			"self_allow_invalid": map[string]any{
+				"type":        "boolean",
+				"title":       "Allow Invalid GPS",
+				"description": "Accept GPS positions marked as void (no fix)",
+				"default":     false,
+				"ui:group":    "self",
+				"ui:order":    3,
+			},
 		},
 		"required": []any{"host", "port"},
 	})
 
-	if err := controller.PublishDevice(ctx, controllerName+".service", controllerName, []*pb.Configurable{
-		{Key: "ais.stream.v0", Schema: streamSchema},
-	}, nil, nil); err != nil {
+	serviceEntityID := controllerName + ".service"
+
+	if err := controller.Push(ctx,
+		&pb.Entity{
+			Id:    serviceEntityID,
+			Label: proto.String("AIS"),
+			Controller: &pb.Controller{
+				Id: &controllerName,
+			},
+			Device: &pb.DeviceComponent{
+				Category: proto.String("Feeds"),
+			},
+			Configurable: &pb.ConfigurableComponent{
+				SupportedDeviceClasses: []*pb.DeviceClassOption{
+					{Class: "stream", Label: "AIS Stream"},
+				},
+			},
+			Interactivity: &pb.InteractivityComponent{
+				Icon: proto.String("ship"),
+			},
+		},
+	); err != nil {
 		return fmt.Errorf("publish device: %w", err)
 	}
 
-	return controller.Run1to1(ctx, controllerName, func(ctx context.Context, config *pb.Entity, _ *pb.Entity) error {
-		return runStream(ctx, logger, config)
+	classes := []controller.DeviceClass{
+		{Class: "stream", Label: "AIS Stream", Schema: streamSchema},
+	}
+
+	return controller.WatchChildren(ctx, serviceEntityID, controllerName, classes, func(ctx context.Context, entityID string) error {
+		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+			return runStream(ctx, logger, entity, ready)
+		})
 	})
 }
 
-func runStream(ctx context.Context, logger *slog.Logger, entity *pb.Entity) error {
+func runStream(ctx context.Context, logger *slog.Logger, entity *pb.Entity, ready func()) error {
 	config := entity.Config
 	if config == nil {
 		return fmt.Errorf("entity %s has no config", entity.Id)
-	}
-	if config.Key != "ais.stream.v0" {
-		return fmt.Errorf("unknown config key: %s", config.Key)
 	}
 
 	streamConfig, err := parseStreamConfig(config)
@@ -106,6 +209,7 @@ func runStream(ctx context.Context, logger *slog.Logger, entity *pb.Entity) erro
 	if streamConfig.Host == "" || streamConfig.Port == 0 {
 		return fmt.Errorf("host and port are required")
 	}
+	ready()
 
 	if streamConfig.EntityExpirySeconds <= 0 {
 		streamConfig.EntityExpirySeconds = 300

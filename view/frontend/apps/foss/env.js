@@ -62,5 +62,4 @@ const ClientEnv = client.parse(_clientEnv);
 module.exports = {
   Env,
   ClientEnv,
-  withEnvSuffix,
 };

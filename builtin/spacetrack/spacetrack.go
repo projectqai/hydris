@@ -29,6 +29,7 @@ type TrackerConfig struct {
 	TLERefreshSeconds    int     `json:"tle_refresh_seconds"`
 	Username             string  `json:"username"`
 	Password             string  `json:"password"`
+	DisableOrbitTrack    bool    `json:"disable_orbit_track"`
 }
 
 type SatellitePosition struct {
@@ -167,28 +168,138 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 
 	orbitSchema, _ := structpb.NewStruct(map[string]any{
 		"type": "object",
+		"ui:groups": []any{
+			map[string]any{"key": "source", "title": "TLE Source"},
+			map[string]any{"key": "display", "title": "Display"},
+			map[string]any{"key": "timing", "title": "Timing"},
+			map[string]any{"key": "auth", "title": "Authentication", "collapsed": true},
+		},
 		"properties": map[string]any{
-			"tle":                 map[string]any{"type": "string", "description": "TLE data or URL"},
-			"id":                  map[string]any{"type": "string"},
-			"label":               map[string]any{"type": "string"},
-			"symbol":              map[string]any{"type": "string"},
-			"interval":            map[string]any{"type": "number", "description": "Position update interval in seconds"},
-			"orbit_interval":      map[string]any{"type": "number", "description": "Orbit track update interval in seconds"},
-			"tle_refresh_seconds": map[string]any{"type": "number"},
-			"username":            map[string]any{"type": "string"},
-			"password":            map[string]any{"type": "string"},
+			"tle": map[string]any{
+				"type":           "string",
+				"title":          "TLE Data",
+				"description":    "Inline TLE data or URL to TLE file",
+				"ui:widget":      "textarea",
+				"ui:placeholder": "Paste TLE or enter URL",
+				"ui:group":       "source",
+				"ui:order":       0,
+			},
+			"disable_orbit_track": map[string]any{
+				"type":        "boolean",
+				"title":       "Disable Orbit Track",
+				"description": "Disable projected orbit ground track",
+				"default":     false,
+				"ui:group":    "source",
+				"ui:order":    1,
+			},
+			"id": map[string]any{
+				"type":           "string",
+				"title":          "Entity ID",
+				"description":    "Custom entity ID prefix",
+				"ui:placeholder": "e.g. iss",
+				"ui:group":       "display",
+				"ui:order":       0,
+			},
+			"label": map[string]any{
+				"type":           "string",
+				"title":          "Label",
+				"description":    "Display label for the satellite",
+				"ui:placeholder": "e.g. ISS",
+				"ui:group":       "display",
+				"ui:order":       1,
+			},
+			"symbol": map[string]any{
+				"type":           "string",
+				"title":          "Symbol",
+				"description":    "MIL-STD-2525C symbol code",
+				"ui:placeholder": "e.g. SNPPS-----*****",
+				"ui:group":       "display",
+				"ui:order":       2,
+			},
+			"interval": map[string]any{
+				"type":        "number",
+				"title":       "Position Interval",
+				"description": "Position update interval",
+				"default":     1.0,
+				"minimum":     0.1,
+				"ui:unit":     "s",
+				"ui:group":    "timing",
+				"ui:order":    0,
+			},
+			"orbit_interval": map[string]any{
+				"type":        "number",
+				"title":       "Orbit Interval",
+				"description": "Orbit track update interval",
+				"default":     60.0,
+				"minimum":     1.0,
+				"ui:unit":     "s",
+				"ui:group":    "timing",
+				"ui:order":    1,
+			},
+			"tle_refresh_seconds": map[string]any{
+				"type":        "number",
+				"title":       "TLE Refresh",
+				"description": "How often to re-fetch TLE from URL",
+				"default":     3600.0,
+				"minimum":     60.0,
+				"ui:unit":     "s",
+				"ui:group":    "timing",
+				"ui:order":    2,
+			},
+			"username": map[string]any{
+				"type":           "string",
+				"title":          "Username",
+				"description":    "HTTP basic auth username for TLE source",
+				"ui:placeholder": "e.g. space-track.org username",
+				"ui:group":       "auth",
+				"ui:order":       0,
+			},
+			"password": map[string]any{
+				"type":        "string",
+				"title":       "Password",
+				"description": "HTTP basic auth password for TLE source",
+				"ui:widget":   "password",
+				"ui:group":    "auth",
+				"ui:order":    1,
+			},
 		},
 		"required": []any{"tle"},
 	})
 
-	if err := controller.PublishDevice(ctx, controllerName+".service", controllerName, []*pb.Configurable{
-		{Key: "spacetrack.orbit.v0", Schema: orbitSchema},
-	}, nil, nil); err != nil {
-		return fmt.Errorf("publish device: %w", err)
+	serviceEntityID := controllerName + ".service"
+
+	if err := controller.Push(ctx,
+		&pb.Entity{
+			Id:    serviceEntityID,
+			Label: proto.String("Space Track"),
+			Controller: &pb.Controller{
+				Id: &controllerName,
+			},
+			Device: &pb.DeviceComponent{
+				Category: proto.String("Feeds"),
+			},
+			Configurable: &pb.ConfigurableComponent{
+				SupportedDeviceClasses: []*pb.DeviceClassOption{
+					{Class: "orbits", Label: "Orbit Tracker"},
+				},
+			},
+			Interactivity: &pb.InteractivityComponent{
+				Icon: proto.String("satellite"),
+			},
+		},
+	); err != nil {
+		return fmt.Errorf("push service entity: %w", err)
 	}
 
-	return controller.Run1to1(ctx, controllerName, func(ctx context.Context, config *pb.Entity, _ *pb.Entity) error {
-		return runTracker(ctx, logger, config)
+	classes := []controller.DeviceClass{
+		{Class: "orbits", Label: "Orbit Tracker", Schema: orbitSchema},
+	}
+
+	return controller.WatchChildren(ctx, serviceEntityID, controllerName, classes, func(ctx context.Context, entityID string) error {
+		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+			ready()
+			return runTracker(ctx, logger, entity)
+		})
 	})
 }
 
@@ -196,9 +307,6 @@ func runTracker(ctx context.Context, logger *slog.Logger, entity *pb.Entity) err
 	config := entity.Config
 	if config == nil {
 		return fmt.Errorf("entity %s has no config", entity.Id)
-	}
-	if config.Key != "spacetrack.orbit.v0" {
-		return fmt.Errorf("unknown config key: %s", config.Key)
 	}
 
 	trackerConfig, err := parseTrackerConfig(config)
@@ -245,9 +353,23 @@ func runTracker(ctx context.Context, logger *slog.Logger, entity *pb.Entity) err
 
 	logger.Info("Loaded TLEs", "configEntityID", entity.Id, "count", len(tles))
 
+	var positionUpdateCount uint64
+
 	// Push initial position + orbit updates
 	pushPositionUpdates(ctx, logger, worldClient, tles, entity.Id, trackerConfig)
-	pushOrbitEntities(ctx, logger, worldClient, tles, entity.Id, trackerConfig)
+	positionUpdateCount += uint64(len(tles))
+	_, _ = worldClient.Push(ctx, &pb.EntityChangeRequest{
+		Changes: []*pb.Entity{{
+			Id: entity.Id,
+			Metric: &pb.MetricComponent{Metrics: []*pb.Metric{
+				{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("satellites tracked"), Id: proto.Uint32(1), Val: &pb.Metric_Uint64{Uint64: uint64(len(tles))}},
+				{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("position updates"), Id: proto.Uint32(2), Val: &pb.Metric_Uint64{Uint64: positionUpdateCount}},
+			}},
+		}},
+	})
+	if !trackerConfig.DisableOrbitTrack {
+		pushOrbitEntities(ctx, logger, worldClient, tles, entity.Id, trackerConfig)
+	}
 
 	orbitTicker := time.NewTicker(time.Duration(trackerConfig.OrbitIntervalSeconds * float64(time.Second)))
 	defer orbitTicker.Stop()
@@ -260,8 +382,21 @@ func runTracker(ctx context.Context, logger *slog.Logger, entity *pb.Entity) err
 
 		case <-ticker.C:
 			pushPositionUpdates(ctx, logger, worldClient, tles, entity.Id, trackerConfig)
+			positionUpdateCount += uint64(len(tles))
+			_, _ = worldClient.Push(ctx, &pb.EntityChangeRequest{
+				Changes: []*pb.Entity{{
+					Id: entity.Id,
+					Metric: &pb.MetricComponent{Metrics: []*pb.Metric{
+						{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("satellites tracked"), Id: proto.Uint32(1), Val: &pb.Metric_Uint64{Uint64: uint64(len(tles))}},
+						{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("position updates"), Id: proto.Uint32(2), Val: &pb.Metric_Uint64{Uint64: positionUpdateCount}},
+					}},
+				}},
+			})
 
 		case <-orbitTicker.C:
+			if trackerConfig.DisableOrbitTrack {
+				continue
+			}
 			pushOrbitEntities(ctx, logger, worldClient, tles, entity.Id, trackerConfig)
 
 		case <-tleTicker.C:
@@ -305,6 +440,10 @@ func pushPositionUpdates(ctx context.Context, logger *slog.Logger, worldClient p
 			continue
 		}
 
+		if config.DisableOrbitTrack {
+			entity.Track.Prediction = nil
+		}
+
 		entities := []*pb.Entity{entity}
 
 		pushCtx, pushCancel := context.WithTimeout(ctx, 2*time.Second)
@@ -325,7 +464,7 @@ func generateIDAndLabel(configEntityID string, config *TrackerConfig, tle *sgp4.
 	if tleCount == 1 && config.EntityID != "" {
 		entityID = fmt.Sprintf("spacetrack.%s", config.EntityID)
 	} else {
-		trackName := tle.Name
+		trackName := sanitizeIDComponent(tle.Name)
 		if trackName == "" {
 			trackName = "track"
 		}
@@ -356,6 +495,23 @@ func generateIDAndLabel(configEntityID string, config *TrackerConfig, tle *sgp4.
 	}
 
 	return entityID, label
+}
+
+// sanitizeIDComponent converts a TLE name into a valid entity ID component
+// by lowercasing, replacing spaces with hyphens, and dropping other
+// non-alphanumeric characters.
+func sanitizeIDComponent(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '.':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteRune('-')
+		}
+	}
+	return b.String()
 }
 
 func positionToEntity(position *SatellitePosition, tle *sgp4.TLE, entityID, label, symbol string, expires time.Duration, controllerName string, trackerID string) *pb.Entity {
@@ -425,7 +581,8 @@ func pushOrbitEntities(ctx context.Context, logger *slog.Logger, worldClient pb.
 		}
 
 		entityID, _ := generateIDAndLabel(configEntityID, config, tle, len(tles))
-		entity := orbitMissionEntity(tle, entityID, "spacetrack")
+		expires := time.Duration(config.OrbitIntervalSeconds * float64(time.Second))
+		entity := orbitMissionEntity(tle, entityID, "spacetrack", expires)
 
 		pushCtx, pushCancel := context.WithTimeout(ctx, 2*time.Second)
 		_, err := worldClient.Push(pushCtx, &pb.EntityChangeRequest{
@@ -441,7 +598,7 @@ func pushOrbitEntities(ctx context.Context, logger *slog.Logger, worldClient pb.
 
 // orbitMissionEntity projects the ground track forward one orbital period
 // from the current time and returns it as a separate mission entity.
-func orbitMissionEntity(tle *sgp4.TLE, satelliteEntityID string, controllerName string) *pb.Entity {
+func orbitMissionEntity(tle *sgp4.TLE, satelliteEntityID string, controllerName string, expires time.Duration) *pb.Entity {
 	missionID := satelliteEntityID + ".orbit"
 	periodMin := 1440.0 / tle.MeanMotion
 	steps := int(math.Ceil(periodMin))
@@ -474,6 +631,10 @@ func orbitMissionEntity(tle *sgp4.TLE, satelliteEntityID string, controllerName 
 
 	entity := &pb.Entity{
 		Id: missionID,
+		Lifetime: &pb.Lifetime{
+			From:  timestamppb.Now(),
+			Until: timestamppb.New(time.Now().Add(expires * 2)),
+		},
 		Controller: &pb.Controller{
 			Id: &controllerName,
 		},
@@ -542,6 +703,9 @@ func parseTrackerConfig(config *pb.ConfigurationComponent) (*TrackerConfig, erro
 		if refresh := int(v.GetNumberValue()); refresh > 0 {
 			trackerConfig.TLERefreshSeconds = refresh
 		}
+	}
+	if v, ok := fields["disable_orbit_track"]; ok {
+		trackerConfig.DisableOrbitTrack = v.GetBoolValue()
 	}
 	if v, ok := fields["username"]; ok {
 		trackerConfig.Username = v.GetStringValue()

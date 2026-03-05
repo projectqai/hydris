@@ -1,11 +1,19 @@
+import { validateLayoutNode } from "@hydris/ui/layout/tree-utils";
+import type { LayoutNode } from "@hydris/ui/layout/types";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner-native";
 
-import { type AwareUrlParams, useUrlParams } from "../../../lib/use-url-params";
+import { type AwareUrlParams, decodeViewState, useUrlParams } from "../../../lib/use-url-params";
+import { COMPONENT_REGISTRY } from "../constants";
 import { useEntityStore } from "../store/entity-store";
+import { useLeftPanelStore } from "../store/left-panel-store";
 import { mapEngineActions } from "../store/map-engine-store";
+import { useMapStore } from "../store/map-store";
+import { DEFAULT_OVERLAYS, useOverlayStore } from "../store/overlay-store";
 import { useSelectionStore } from "../store/selection-store";
 import { useTabStore } from "../store/tab-store";
+
+const VALID_COMPONENT_IDS = new Set(Object.keys(COMPONENT_REGISTRY));
 
 function getParamsKey(params: AwareUrlParams): string {
   const { entityId, lat, lng, alt, zoom, tab } = params;
@@ -46,9 +54,17 @@ function validateParams(params: AwareUrlParams): ValidationResult {
   return { isValid: true };
 }
 
-export function useDeepLink(mapReady: boolean) {
+type DeepLinkOptions = {
+  applyExternalLayout: (presetId: string, tree?: LayoutNode) => void;
+};
+
+export function useDeepLink(mapReady: boolean, options: DeepLinkOptions) {
   const { params, clearParams } = useUrlParams();
   const processedKeyRef = useRef<string | null>(null);
+  const positionAppliedRef = useRef<string | null>(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const layoutProcessedRef = useRef(false);
   const entities = useEntityStore((s) => s.entities);
   const isConnected = useEntityStore((s) => s.isConnected);
   const fetchEntity = useEntityStore((s) => s.fetchEntity);
@@ -56,17 +72,45 @@ export function useDeepLink(mapReady: boolean) {
   useEffect(() => {
     if (!mapReady) return;
 
-    const { entityId, lat, lng, alt, zoom, tab } = params;
+    const { entityId, lat, lng, alt, zoom, tab, layout } = params;
+
+    if (layout && !layoutProcessedRef.current) {
+      layoutProcessedRef.current = true;
+      const payload = decodeViewState(layout);
+      if (payload) {
+        const validatedTree = payload.t
+          ? validateLayoutNode(payload.t, VALID_COMPONENT_IDS)
+          : undefined;
+        optionsRef.current.applyExternalLayout(payload.p, validatedTree ?? undefined);
+
+        if (payload.o) {
+          const merged: Record<string, Record<string, boolean>> = {};
+          for (const cat of Object.keys(DEFAULT_OVERLAYS) as (keyof typeof DEFAULT_OVERLAYS)[]) {
+            merged[cat] = { ...DEFAULT_OVERLAYS[cat], ...payload.o[cat] };
+          }
+          useOverlayStore.setState(merged);
+        }
+
+        if (payload.l) {
+          useMapStore.getState().setLayer(payload.l as "dark" | "satellite" | "street");
+        }
+
+        if (payload.list === "assets" || payload.list === "tracks") {
+          useLeftPanelStore.setState({ listMode: payload.list });
+        }
+
+        if (payload.tab) {
+          useTabStore.setState({ initialTab: payload.tab });
+        }
+      }
+      requestAnimationFrame(() => clearParams(["layout"]));
+    }
 
     const hasDeepLinkParams = entityId !== undefined || lat || lng;
     if (!hasDeepLinkParams) return;
 
-    const isEntityDeepLink = entityId !== undefined;
-    if (isEntityDeepLink && !isConnected) return;
-
     const paramsKey = getParamsKey(params);
     if (processedKeyRef.current === paramsKey) return;
-    processedKeyRef.current = paramsKey;
 
     const validation = validateParams(params);
     if (!validation.isValid) {
@@ -77,23 +121,35 @@ export function useDeepLink(mapReady: boolean) {
       return;
     }
 
-    if (lat && lng && !entityId) {
-      useSelectionStore.getState().select(null);
+    // Fly to position immediately — don't wait for entity loading
+    const targetZoom = zoom ? parseFloat(zoom) : undefined;
+    if (lat && lng && positionAppliedRef.current !== paramsKey) {
+      positionAppliedRef.current = paramsKey;
       mapEngineActions.flyTo(
         parseFloat(lat),
         parseFloat(lng),
         alt ? parseFloat(alt) : undefined,
         undefined,
-        zoom ? parseFloat(zoom) : undefined,
+        targetZoom,
       );
-      return;
+      if (!entityId) {
+        useSelectionStore.getState().select(null);
+      }
     }
 
+    // Entity selection happens async — may still be loading
     if (entityId) {
-      handleEntityDeepLink(entityId, tab, zoom);
+      if (!isConnected) return;
+      handleEntityDeepLink(entityId, { tab, lat, lng, alt, zoom: targetZoom });
     }
 
-    async function handleEntityDeepLink(id: string, tab?: string, zoom?: string) {
+    // Mark fully processed only when all parts are handled
+    processedKeyRef.current = paramsKey;
+
+    async function handleEntityDeepLink(
+      id: string,
+      opts: { tab?: string; lat?: string; lng?: string; alt?: string; zoom?: number },
+    ) {
       let entity = entities.get(id);
 
       if (!entity) {
@@ -101,26 +157,23 @@ export function useDeepLink(mapReady: boolean) {
         entity = fetched ?? undefined;
       }
 
-      if (!entity) {
+      if (entity) {
+        if (opts.tab) {
+          useTabStore.setState({ initialTab: opts.tab });
+        }
+        useSelectionStore.getState().select(id);
+        // Only fly to entity geo if no explicit position was shared
+        if (!opts.lat && !opts.lng && entity.geo) {
+          mapEngineActions.flyTo(
+            entity.geo.latitude,
+            entity.geo.longitude,
+            entity.geo.altitude ?? undefined,
+            undefined,
+            opts.zoom ?? 14,
+          );
+        }
+      } else {
         toast.error("Entity not found");
-        return;
-      }
-
-      if (tab) {
-        useTabStore.setState({ initialTab: tab });
-      }
-
-      useSelectionStore.getState().select(id);
-
-      if (entity.geo) {
-        const targetZoom = zoom ? parseFloat(zoom) : 14;
-        mapEngineActions.flyTo(
-          entity.geo.latitude,
-          entity.geo.longitude,
-          entity.geo.altitude ?? undefined,
-          undefined,
-          targetZoom,
-        );
       }
     }
   }, [mapReady, isConnected, params, entities, fetchEntity, clearParams]);

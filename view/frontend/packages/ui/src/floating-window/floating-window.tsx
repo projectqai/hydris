@@ -11,6 +11,7 @@ import Animated, {
   withSpring,
 } from "react-native-reanimated";
 
+import { Z } from "../layout/constants";
 import { GradientPanel } from "../lib/theme";
 import { cn } from "../lib/utils";
 
@@ -182,6 +183,7 @@ export function FloatingWindow({
 
   const resizeHandles = [
     {
+      anchor: "se" as const,
       gesture: createResizeGesture("se"),
       cursor: "cursor-nwse-resize",
       bottom: 0,
@@ -190,6 +192,7 @@ export function FloatingWindow({
       height: 16,
     },
     {
+      anchor: "sw" as const,
       gesture: createResizeGesture("sw"),
       cursor: "cursor-nesw-resize",
       bottom: 0,
@@ -198,6 +201,7 @@ export function FloatingWindow({
       height: 16,
     },
     {
+      anchor: "ne" as const,
       gesture: createResizeGesture("ne"),
       cursor: "cursor-nesw-resize",
       top: 0,
@@ -206,6 +210,7 @@ export function FloatingWindow({
       height: 16,
     },
     {
+      anchor: "nw" as const,
       gesture: createResizeGesture("nw"),
       cursor: "cursor-nwse-resize",
       top: 0,
@@ -214,6 +219,7 @@ export function FloatingWindow({
       height: 16,
     },
     {
+      anchor: "n" as const,
       gesture: createResizeGesture("n"),
       cursor: "cursor-ns-resize",
       top: 0,
@@ -222,6 +228,7 @@ export function FloatingWindow({
       height: 8,
     },
     {
+      anchor: "s" as const,
       gesture: createResizeGesture("s"),
       cursor: "cursor-ns-resize",
       bottom: 0,
@@ -230,6 +237,7 @@ export function FloatingWindow({
       height: 8,
     },
     {
+      anchor: "e" as const,
       gesture: createResizeGesture("e"),
       cursor: "cursor-ew-resize",
       right: 0,
@@ -238,6 +246,7 @@ export function FloatingWindow({
       width: 8,
     },
     {
+      anchor: "w" as const,
       gesture: createResizeGesture("w"),
       cursor: "cursor-ew-resize",
       left: 0,
@@ -254,8 +263,8 @@ export function FloatingWindow({
       height: height.value,
       left: positionX.value,
       top: positionY.value,
-      zIndex: 9999,
-      userSelect: "none" as any,
+      zIndex: Z.FLOATING_WINDOW,
+      userSelect: "none",
     };
   });
 
@@ -267,7 +276,7 @@ export function FloatingWindow({
     <Animated.View style={containerStyle}>
       <GradientPanel
         variant="dense"
-        className="size-full overflow-hidden rounded-xl border border-white/10"
+        className="border-surface-overlay/10 size-full overflow-hidden rounded-xl border"
       >
         {header && (
           <GestureDetector gesture={dragGesture}>
@@ -287,8 +296,8 @@ export function FloatingWindow({
           </GestureDetector>
         )}
 
-        {resizeHandles.map((handle, i) => (
-          <GestureDetector key={i} gesture={handle.gesture}>
+        {resizeHandles.map((handle) => (
+          <GestureDetector key={handle.anchor} gesture={handle.gesture}>
             <View
               className={cn("absolute", handle.cursor)}
               style={{

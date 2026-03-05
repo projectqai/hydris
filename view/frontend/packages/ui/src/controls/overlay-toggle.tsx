@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react-native";
 import { Pressable, Text, View } from "react-native";
 
+import { useThemeColors } from "../lib/theme";
 import { cn } from "../lib/utils";
 
 export type ThemeColor = "red" | "yellow" | "blue" | "green";
@@ -27,33 +28,36 @@ export function OverlayToggle({
   isActive,
   onToggle,
 }: OverlayToggleProps) {
+  const t = useThemeColors();
   return (
-    <Pressable onPress={onToggle} className="hover:opacity-70 active:opacity-70">
-      <View
+    <Pressable
+      onPress={onToggle}
+      className={cn(
+        "flex-row items-center gap-2 rounded px-2.5 py-1 select-none",
+        isActive
+          ? "bg-surface-overlay/15 hover:bg-surface-overlay/20 active:bg-surface-overlay/25"
+          : "bg-surface-overlay/5 hover:bg-surface-overlay/10 active:bg-surface-overlay/15",
+      )}
+    >
+      {Icon ? (
+        <Icon size={12} strokeWidth={1.5} color={isActive ? t.iconActive : t.iconSubtle} />
+      ) : color ? (
+        <View
+          className={cn(
+            "size-1.5 rounded-full",
+            isActive ? colorClasses[color] : "bg-surface-overlay/30",
+          )}
+        />
+      ) : null}
+      <Text
+        selectable={false}
         className={cn(
-          "flex-row items-center gap-2 rounded px-2.5 py-1 select-none",
-          isActive ? "bg-white/15" : "bg-white/5",
+          "font-sans-medium text-sm",
+          isActive ? "text-foreground" : "text-on-surface/70",
         )}
       >
-        {Icon ? (
-          <Icon
-            size={12}
-            strokeWidth={1.5}
-            color={isActive ? "rgba(255,255,255,1)" : "rgba(255,255,255,0.5)"}
-          />
-        ) : color ? (
-          <View
-            className={cn("size-1.5 rounded-full", isActive ? colorClasses[color] : "bg-white/30")}
-          />
-        ) : null}
-        <Text
-          selectable={false}
-          className={cn("text-sm", isActive ? "text-white" : "text-white/50")}
-          style={{ fontWeight: isActive ? "500" : "400" }}
-        >
-          {label}
-        </Text>
-      </View>
+        {label}
+      </Text>
     </Pressable>
   );
 }

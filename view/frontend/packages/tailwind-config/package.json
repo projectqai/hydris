@@ -1,0 +1,10 @@
+{
+  "name": "@hydris/tailwind-config",
+  "version": "1.0.0",
+  "description": "Shared Tailwind CSS configuration for Hydris monorepo",
+  "private": true,
+  "main": "index.js",
+  "files": [
+    "index.js"
+  ]
+}

@@ -22,7 +22,7 @@ export function MJPEGStream({ url, objectFit = "cover" }: StreamComponentProps) 
       </style>
     </head>
     <body>
-      <img src="${url}" onload="window.ReactNativeWebView.postMessage('loaded')" onerror="window.ReactNativeWebView.postMessage('error')" />
+      <img src="${url}" alt="MJPEG stream" onload="window.ReactNativeWebView.postMessage('loaded')" onerror="window.ReactNativeWebView.postMessage('error')" />
     </body>
     </html>
   `;

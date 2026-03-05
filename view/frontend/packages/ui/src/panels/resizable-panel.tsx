@@ -28,6 +28,9 @@ const DEFAULT_WIDTH_DESKTOP = 280;
 const DEFAULT_WIDTH_MOBILE = 200;
 const MOBILE_BREAKPOINT = 768;
 const MIN_WIDTH = 180;
+const COLLAPSE_FADE_START = 30;
+const COLLAPSE_FADE_END = 50;
+const EXPAND_TRANSITION_END = 100;
 const MAX_WIDTH = 600;
 const COLLAPSED_HEIGHT = 60;
 
@@ -165,13 +168,13 @@ function ResizablePanelAnimated({
   const collapsedContentStyle = useAnimatedStyle(() => {
     const opacity = interpolate(
       height.value,
-      [collapsedHeight, collapsedHeight + 50],
+      [collapsedHeight, collapsedHeight + COLLAPSE_FADE_END],
       [1, 0],
       "clamp",
     );
     const scale = interpolate(
       height.value,
-      [collapsedHeight, collapsedHeight + 50],
+      [collapsedHeight, collapsedHeight + COLLAPSE_FADE_END],
       [1, 0.9],
       "clamp",
     );
@@ -179,20 +182,23 @@ function ResizablePanelAnimated({
     return {
       opacity: withSpring(opacity, SPRING_CONFIG),
       transform: [{ scale: withSpring(scale, SPRING_CONFIG) }],
-      pointerEvents: height.value < collapsedHeight + 30 ? ("auto" as const) : ("none" as const),
+      pointerEvents:
+        height.value < collapsedHeight + COLLAPSE_FADE_START
+          ? ("auto" as const)
+          : ("none" as const),
     };
   });
 
   const expandedContentStyle = useAnimatedStyle(() => {
     const opacity = interpolate(
       height.value,
-      [collapsedHeight + 30, collapsedHeight + 100],
+      [collapsedHeight + COLLAPSE_FADE_START, collapsedHeight + EXPAND_TRANSITION_END],
       [0, 1],
       "clamp",
     );
     const translateY = interpolate(
       height.value,
-      [collapsedHeight + 30, collapsedHeight + 100],
+      [collapsedHeight + COLLAPSE_FADE_START, collapsedHeight + EXPAND_TRANSITION_END],
       [20, 0],
       "clamp",
     );
@@ -200,14 +206,15 @@ function ResizablePanelAnimated({
     return {
       opacity: withSpring(opacity, SPRING_CONFIG),
       transform: [{ translateY: withSpring(translateY, SPRING_CONFIG) }],
-      pointerEvents: height.value > collapsedHeight + 50 ? ("auto" as const) : ("none" as const),
+      pointerEvents:
+        height.value > collapsedHeight + COLLAPSE_FADE_END ? ("auto" as const) : ("none" as const),
     };
   });
 
   const handlesVisibilityStyle = useAnimatedStyle(() => {
     const opacity = interpolate(
       height.value,
-      [collapsedHeight, collapsedHeight + 30],
+      [collapsedHeight, collapsedHeight + COLLAPSE_FADE_START],
       [0, 1],
       "clamp",
     );
@@ -241,6 +248,8 @@ function ResizablePanelAnimated({
           <TouchableOpacity
             style={{ width: "100%", height: "100%" }}
             className="items-center justify-center outline-none"
+            accessibilityLabel="Expand panel"
+            accessibilityRole="button"
             onPress={() => {
               runOnUI(() => {
                 "worklet";

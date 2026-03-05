@@ -51,18 +51,19 @@ type ClusterRenderData = {
   overflow?: OverflowEntry;
 };
 
-export type UseEntityClustersOptions = {
+type UseEntityClustersOptions = {
   entityMap: Map<string, EntityData>;
   lastChange?: { version: number; geoChanged: boolean };
   filter: EntityFilter;
   selectedId: string | null;
   shapesVisible: boolean;
   zoom: number;
+  pickable?: boolean;
   onEntityClick?: (id: string) => void | Promise<void>;
   onClusterClick?: (clusterId: string, lat: number, lng: number, expansionZoom: number) => void;
 };
 
-export type UseEntityClustersResult = {
+type UseEntityClustersResult = {
   layers: Layer[];
   selectionData: {
     entity: EntityData;
@@ -82,6 +83,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
     selectedId,
     shapesVisible,
     zoom,
+    pickable = true,
     onEntityClick,
     onClusterClick,
   } = options;
@@ -250,7 +252,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
         }
       }
 
-      if (entity?.ellipseRadius !== undefined) {
+      if (entity?.ellipseRadius !== undefined || entity?.coverageEntityIds?.length) {
         coverageEntities.push(entity);
       }
     }
@@ -492,7 +494,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
             sizeUnits: "pixels",
             sizeMinPixels: ICON_SIZE_MIN_PIXELS,
             sizeMaxPixels: ICON_SIZE_MAX_PIXELS,
-            pickable: true,
+            pickable,
             autoHighlight: true,
             highlightColor: [59, 130, 246, 80],
             onClick: handleEntityClick,
@@ -524,7 +526,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
       sizeUnits: "pixels",
       sizeMinPixels: ICON_SIZE_MIN_PIXELS,
       sizeMaxPixels: ICON_SIZE_MAX_PIXELS,
-      pickable: true,
+      pickable,
       autoHighlight: true,
       highlightColor: [59, 130, 246, 80],
       onClick: handleEntityClick,
@@ -551,7 +553,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
             sizeUnits: "pixels",
             sizeMinPixels: ICON_SIZE_MIN_PIXELS,
             sizeMaxPixels: ICON_SIZE_MAX_PIXELS,
-            pickable: true,
+            pickable,
             autoHighlight: true,
             highlightColor: [59, 130, 246, 80],
             onClick: handleClusterClick,
@@ -583,7 +585,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
       sizeUnits: "pixels",
       sizeMinPixels: ICON_SIZE_MIN_PIXELS,
       sizeMaxPixels: ICON_SIZE_MAX_PIXELS,
-      pickable: true,
+      pickable,
       autoHighlight: true,
       highlightColor: [59, 130, 246, 80],
       onClick: handleClusterClick,
@@ -630,7 +632,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
       getFillColor: CLUSTER_BG,
       stroked: true,
       lineWidthMinPixels: 2,
-      pickable: true,
+      pickable,
       autoHighlight: true,
       highlightColor: [59, 130, 246, 80],
       onClick: handleAffiliationClusterClick,
@@ -648,6 +650,8 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
       fontFamily: "Inter, system-ui, sans-serif",
       fontWeight: "500",
       fontSettings: { sdf: true, fontSize: 64, buffer: 8, radius: 16, cutoff: 0.2 },
+      outlineWidth: 2,
+      outlineColor: [0, 0, 0, 255],
       pickable: false,
     }),
   ];

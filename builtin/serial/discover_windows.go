@@ -71,17 +71,23 @@ func scanSerialPorts(logger *slog.Logger) map[string]devices.DeviceInfo {
 		}
 
 		info := devices.DeviceInfo{
-			Name: comPort,
+			Name:  comPort,
+			Label: comPort,
 			Serial: &devices.SerialDescriptor{
 				Path: `\\.\` + comPort,
 			},
 		}
 
+		stableKey := comPort
 		if usb, ok := usbMap[comPort]; ok {
 			info.USB = &usb
+			if usb.SerialNumber != "" {
+				stableKey = fmt.Sprintf("%04x-%04x-%s", usb.VendorID, usb.ProductID, usb.SerialNumber)
+				info.Name = stableKey
+			}
 		}
 
-		ports[comPort] = info
+		ports[stableKey] = info
 	}
 
 	return ports

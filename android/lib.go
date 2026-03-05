@@ -18,7 +18,10 @@ import (
 	_ "github.com/projectqai/hydris/builtin/asterix"
 	_ "github.com/projectqai/hydris/builtin/federation"
 	_ "github.com/projectqai/hydris/builtin/hexdb"
+	_ "github.com/projectqai/hydris/builtin/mavlink"
 	meshtastic "github.com/projectqai/hydris/builtin/meshtastic"
+	_ "github.com/projectqai/hydris/builtin/playground"
+	_ "github.com/projectqai/hydris/builtin/reolink"
 	_ "github.com/projectqai/hydris/builtin/spacetrack"
 	_ "github.com/projectqai/hydris/builtin/tak"
 	"github.com/projectqai/hydris/engine"
@@ -105,11 +108,9 @@ func StartEngine() string {
 		slog.Info("persistence enabled", "worldFile", worldFile)
 	}
 
-	// Load builtin defaults if no entities were loaded
-	if service.engine.EntityCount() == 0 {
-		if err := service.engine.LoadFromBytes(builtin.DefaultWorld); err != nil {
-			slog.Error("failed to load default world", "error", err)
-		}
+	// Load builtin defaults with old timestamp so they never overwrite real data
+	if err := service.engine.LoadDefaults(builtin.DefaultWorld); err != nil {
+		slog.Error("failed to load default world", "error", err)
 	}
 
 	service.engine.InitNodeIdentity()

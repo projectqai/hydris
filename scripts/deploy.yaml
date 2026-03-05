@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hydris-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hydris
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hydris
+  template:
+    metadata:
+      labels:
+        app: hydris
+    spec:
+      containers:
+        - name: hydris
+          image: ghcr.io/projectqai/hydris:latest
+          args: ["-w", "/data/world.yaml"]
+          ports:
+            - containerPort: 50051
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: hydris-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hydris
+spec:
+  selector:
+    app: hydris
+  ports:
+    - port: 50051
+      targetPort: 50051

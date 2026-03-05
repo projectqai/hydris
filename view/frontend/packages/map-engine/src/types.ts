@@ -45,13 +45,15 @@ export type EntityData = {
   symbol?: string;
   label?: string;
   affiliation?: Affiliation;
-  coverageRadius?: number;
   ellipseRadius?: number;
+  trackHistoryId?: string;
+  trackPredictionId?: string;
   activeSectors?: ActiveSensorSectors;
   shape?: ShapeGeometry;
+  coverageEntityIds?: string[];
 };
 
-export type BaseLayer = "dark" | "satellite";
+export type BaseLayer = "dark" | "satellite" | "street";
 
 export type SceneMode = "2d" | "2.5d" | "3d";
 

@@ -1,4 +1,5 @@
 import { HLSStream } from "./hls-stream";
+import { IframeStream } from "./iframe-stream";
 import { ImageStream } from "./image-stream";
 import { MJPEGStream } from "./mjpeg-stream";
 import type { VideoStreamProps } from "./types";
@@ -12,6 +13,8 @@ export function VideoStream({ url, protocol, objectFit }: VideoStreamProps) {
       return <MJPEGStream url={url} objectFit={objectFit} />;
     case "image":
       return <ImageStream url={url} objectFit={objectFit} />;
+    case "iframe":
+      return <IframeStream url={url} objectFit={objectFit} />;
     case "webrtc":
     default:
       return <WebRTCStream url={url} objectFit={objectFit} />;

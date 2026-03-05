@@ -3,7 +3,7 @@ package engine
 import (
 	"time"
 
-	"github.com/projectqai/hydris/metrics"
+	"github.com/projectqai/hydris/pkg/metrics"
 )
 
 func (s *WorldServer) EntityCount() int {

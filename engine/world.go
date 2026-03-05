@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -17,21 +18,19 @@ import (
 	"sync/atomic"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/fatih/color"
 	"github.com/projectqai/hydris/builtin"
-	"github.com/projectqai/hydris/metrics"
-	"github.com/projectqai/hydris/policy"
-	"github.com/projectqai/hydris/version"
+	"github.com/projectqai/hydris/engine/transform"
+	"github.com/projectqai/hydris/pkg/metrics"
+	"github.com/projectqai/hydris/pkg/version"
+	"github.com/projectqai/hydris/pkg/whep"
 	"github.com/projectqai/hydris/view"
 	pb "github.com/projectqai/proto/go"
 	"github.com/projectqai/proto/go/_goconnect"
-
-	"connectrpc.com/connect"
 	"github.com/rs/cors"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
-	"reflect"
-
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -51,12 +50,15 @@ type WorldServer struct {
 	// worldFile is the path to persist world state (if set)
 	worldFile string
 
-	// policy is optional OPA policy engine for authorization
-	policy *policy.Engine
+	// persistNotify is signalled when a config change requires a debounced flush
+	persistNotify chan struct{}
 
 	// nodeID is the stable unique identifier for this node
 	nodeID     string
 	nodeEntity *pb.Entity
+
+	// transformers manage derived entities (e.g. sensor coverage from sensor range)
+	transformers []transform.Transformer
 }
 
 func NewWorldServer() *WorldServer {
@@ -64,6 +66,12 @@ func NewWorldServer() *WorldServer {
 		bus:   NewBus(),
 		head:  make(map[string]*pb.Entity),
 		store: NewStore(),
+		transformers: []transform.Transformer{
+			transform.NewPoseTransformer(),
+			transform.NewCameraTransformer(),
+			transform.NewShapeTransformer(),
+			transform.NewClassificationTransformer(),
+		},
 	}
 
 	// Start garbage collection ticker
@@ -138,8 +146,11 @@ func (s *WorldServer) InitNodeIdentity() {
 	numCPU := uint32(runtime.NumCPU())
 
 	s.nodeEntity = &pb.Entity{
-		Id: "node." + s.nodeID,
+		Id:    "node." + s.nodeID,
+		Label: &hostname,
 		Device: &pb.DeviceComponent{
+			Category: proto.String("Network"),
+			State:    pb.DeviceState_DeviceStateActive,
 			Node: &pb.NodeDevice{
 				Hostname: &hostname,
 				Os:       strPtr(runtime.GOOS),
@@ -172,17 +183,12 @@ func (s *WorldServer) GetHead(id string) *pb.Entity {
 }
 
 func (s *WorldServer) ListEntities(ctx context.Context, req *connect.Request[pb.ListEntitiesRequest]) (*connect.Response[pb.ListEntitiesResponse], error) {
-	ability := policy.For(s.policy, req.Peer().Addr)
-
 	s.l.RLock()
 	defer s.l.RUnlock()
 
 	el := make([]*pb.Entity, 0, len(s.head))
 	for _, v := range s.head {
 		if !s.matchesListEntitiesRequest(v, req.Msg) {
-			continue
-		}
-		if !ability.CanRead(ctx, v) {
 			continue
 		}
 		el = append(el, v)
@@ -204,10 +210,6 @@ func (s *WorldServer) GetEntity(ctx context.Context, req *connect.Request[pb.Get
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("entity with id %s not found", req.Msg.Id))
 	}
 
-	if !policy.For(s.policy, req.Peer().Addr).CanRead(ctx, entity) {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("policy denied read"))
-	}
-
 	response := &pb.GetEntityResponse{
 		Entity: entity,
 	}
@@ -222,16 +224,32 @@ func (s *WorldServer) GetLocalNode(ctx context.Context, req *connect.Request[pb.
 }
 
 func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityChangeRequest]) (*connect.Response[pb.EntityChangeResponse], error) {
-	ability := policy.For(s.policy, req.Peer().Addr)
+	s.l.Lock()
+	defer s.l.Unlock()
+
+	// Validate incoming entities against transformers before any merge.
 	for _, e := range req.Msg.Changes {
-		if err := ability.AuthorizeWrite(ctx, e); err != nil {
-			return nil, err
+		for _, tr := range s.transformers {
+			if err := tr.Validate(s.head, e); err != nil {
+				return nil, err
+			}
 		}
 	}
 
-	s.l.Lock()
-	defer s.l.Unlock()
+	configChanged := false
+	var changedIDs []string
+
 	for _, e := range req.Msg.Changes {
+
+		// Enforce lease: reject if entity is leased by a different controller.
+		if e.Lease != nil {
+			if existing, ok := s.head[e.Id]; ok && existing.Lease != nil {
+				if existing.Lease.Controller != e.Lease.Controller {
+					return nil, connect.NewError(connect.CodeFailedPrecondition,
+						fmt.Errorf("entity %s is leased by controller %s", e.Id, existing.Lease.Controller))
+				}
+			}
+		}
 
 		if e.Lifetime == nil {
 			e.Lifetime = &pb.Lifetime{}
@@ -241,7 +259,45 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 			e.Lifetime.From = timestamppb.Now()
 		}
 
-		// Stamp controller node so downstream consumers know which node produced this entity
+		_ = s.store.Push(ctx, Event{Entity: e})
+		if !s.frozen.Load() {
+			if existing, ok := s.head[e.Id]; ok {
+				// LWW: skip merge if the incoming entity is older than what we have.
+				if !isNewer(e.Lifetime, existing.Lifetime) {
+					continue
+				}
+				merged := mergeEntity(existing, e)
+				s.head[e.Id] = merged
+			} else {
+				s.head[e.Id] = e
+			}
+
+			// Stamp controller node after merge so we never clobber an
+			// existing Controller.Id with a synthetic empty Controller.
+			stored := s.head[e.Id]
+			if s.nodeID != "" {
+				if stored.Controller == nil {
+					stored.Controller = &pb.Controller{}
+				}
+				if stored.Controller.Node == nil {
+					stored.Controller.Node = &s.nodeID
+				}
+			}
+			changedIDs = append(changedIDs, e.Id)
+			if e.Config != nil {
+				configChanged = true
+			}
+		}
+	}
+
+	// Process replacements (full entity swap, no merge)
+	for _, e := range req.Msg.Replacements {
+		if e.Lifetime == nil {
+			e.Lifetime = &pb.Lifetime{}
+		}
+		if !e.Lifetime.From.IsValid() {
+			e.Lifetime.From = timestamppb.Now()
+		}
 		if s.nodeID != "" {
 			if e.Controller == nil {
 				e.Controller = &pb.Controller{}
@@ -253,14 +309,26 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 
 		_ = s.store.Push(ctx, Event{Entity: e})
 		if !s.frozen.Load() {
-			if existing, ok := s.head[e.Id]; ok {
-				merged := mergeEntity(existing, e)
-				s.head[e.Id] = merged
-			} else {
-				s.head[e.Id] = e
+			s.head[e.Id] = e
+			changedIDs = append(changedIDs, e.Id)
+			if e.Config != nil {
+				configChanged = true
 			}
-			s.bus.Dirty(e.Id, s.head[e.Id], pb.EntityChange_EntityChangeUpdated)
 		}
+	}
+
+	// Run transformers, then notify subscribers.
+	// Transformers must run after merge (to see latest state) but before
+	// Dirty (so subscribers see transformer-computed fields like Geo from PoseComponent).
+	for _, id := range changedIDs {
+		transform.RunTransformers(s.transformers, s.head, s.bus, id)
+	}
+	for _, id := range changedIDs {
+		s.bus.Dirty(id, s.head[id], pb.EntityChange_EntityChangeUpdated)
+	}
+
+	if configChanged {
+		s.notifyPersist()
 	}
 
 	response := &pb.EntityChangeResponse{
@@ -277,10 +345,6 @@ func (s *WorldServer) ExpireEntity(ctx context.Context, req *connect.Request[pb.
 	entity, exists := s.head[req.Msg.Id]
 	if !exists {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("entity with id %s not found", req.Msg.Id))
-	}
-
-	if err := policy.For(s.policy, req.Peer().Addr).AuthorizeWrite(ctx, entity); err != nil {
-		return nil, err
 	}
 
 	if entity.Lifetime == nil {
@@ -319,24 +383,16 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 		engine.StartPeriodicFlush(10 * time.Second)
 	}
 
-	// Load builtin defaults if no entities were loaded and defaults are not disabled
-	if !cfg.NoDefaults && engine.EntityCount() == 0 {
-		if err := engine.LoadFromBytes(builtin.DefaultWorld); err != nil {
+	// Load builtin defaults with a very old lifetime.from so they never
+	// overwrite entities that were persisted with a real timestamp.
+	if !cfg.NoDefaults {
+		if err := engine.LoadDefaults(builtin.DefaultWorld); err != nil {
 			slog.Warn("failed to load default world", "error", err)
 		}
 	}
 
 	// Initialize stable node identity (after loading world state)
 	engine.InitNodeIdentity()
-
-	// Set up OPA policy engine if specified
-	if cfg.PolicyFile != "" {
-		policyEngine, err := policy.NewEngine(cfg.PolicyFile)
-		if err != nil {
-			return "", fmt.Errorf("failed to load policy: %w", err)
-		}
-		engine.policy = policyEngine
-	}
 
 	// Initialize Prometheus exporter and OpenTelemetry metrics
 	promHandler, err := metrics.InitPrometheus()
@@ -366,9 +422,6 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	timelinePath, timelineHandler := _goconnect.NewTimelineServiceHandler(engine)
 	mux.Handle(timelinePath, timelineHandler)
 
-	controllerPath, controllerHandler := _goconnect.NewControllerServiceHandler(engine)
-	mux.Handle(controllerPath, controllerHandler)
-
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte("OK"))
@@ -376,6 +429,14 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 
 	// Prometheus metrics endpoint
 	mux.Handle("/metrics", promHandler)
+
+	// WHEP endpoint for RTSP-to-WebRTC bridging
+	whepHandler := whep.NewHandler(engine)
+	mux.Handle("POST /media/whep/{entityId}/{cameraIndex}", whepHandler)
+
+	// Image proxy endpoint for camera snapshots
+	imageHandler := whep.NewImageProxyHandler(engine)
+	mux.Handle("GET /media/image/{entityId}/{cameraIndex}", imageHandler)
 
 	webServer, err := view.NewWebServer()
 	if err != nil {
@@ -448,15 +509,45 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	return "localhost:" + port, nil
 }
 
+// lifetimeTime returns the effective timestamp for a Lifetime, preferring
+// Fresh over From. Returns the zero time if neither is set.
+func lifetimeTime(l *pb.Lifetime) time.Time {
+	if l == nil {
+		return time.Time{}
+	}
+	if l.Fresh != nil && l.Fresh.IsValid() {
+		return l.Fresh.AsTime()
+	}
+	if l.From != nil && l.From.IsValid() {
+		return l.From.AsTime()
+	}
+	return time.Time{}
+}
+
+// isNewer reports whether incoming is at least as new as existing.
+// When neither lifetime carries a usable timestamp the incoming entity wins,
+// so that callers without timestamps can still push updates.
+func isNewer(incoming, existing *pb.Lifetime) bool {
+	et := lifetimeTime(existing)
+	if et.IsZero() {
+		return true
+	}
+	it := lifetimeTime(incoming)
+	if it.IsZero() {
+		return true
+	}
+	return !it.Before(et)
+}
+
 // mergeEntity overwrites fields in dst with non-nil fields from src.
 // Components are replaced entirely, not recursively merged.
 func mergeEntity(dst, src *pb.Entity) *pb.Entity {
 	merged := proto.Clone(dst).(*pb.Entity)
 	srcV := reflect.ValueOf(src).Elem()
 	mergedV := reflect.ValueOf(merged).Elem()
-	for i := 0; i < srcV.NumField(); i++ {
+	for i := range srcV.NumField() {
 		sf := srcV.Field(i)
-		if sf.Kind() == reflect.Ptr && !sf.IsNil() {
+		if sf.Kind() == reflect.Pointer && !sf.IsNil() {
 			mf := mergedV.Field(i)
 			if mf.CanSet() {
 				mf.Set(sf)

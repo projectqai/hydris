@@ -8,11 +8,12 @@ import (
 // DeviceInfo describes a discovered device. Subsystem descriptors are optional —
 // a USB serial adapter would have both USB and Serial populated.
 type DeviceInfo struct {
-	Name   string            `json:"name"`
-	Label  string            `json:"label,omitempty"`
-	USB    *USBDescriptor    `json:"usb,omitempty"`
-	Serial *SerialDescriptor `json:"serial,omitempty"`
-	IP     *IPDescriptor     `json:"ip,omitempty"`
+	Name     string              `json:"name"`
+	Label    string              `json:"label,omitempty"`
+	USB      *USBDescriptor      `json:"usb,omitempty"`
+	Serial   *SerialDescriptor   `json:"serial,omitempty"`
+	IP       *IPDescriptor       `json:"ip,omitempty"`
+	Ethernet *EthernetDescriptor `json:"ethernet,omitempty"`
 }
 
 type USBDescriptor struct {
@@ -34,6 +35,11 @@ type SerialDescriptor struct {
 type IPDescriptor struct {
 	Host string `json:"host"`
 	Port uint32 `json:"port,omitempty"`
+}
+
+type EthernetDescriptor struct {
+	MACAddress string `json:"mac_address"`
+	Vendor     string `json:"vendor,omitempty"`
 }
 
 // BuildDeviceEntity creates a pb.Entity with a DeviceComponent from a DeviceInfo.
@@ -74,6 +80,14 @@ func BuildDeviceEntity(controllerName string, nodeEntityID string, info DeviceIn
 		}
 		if ip.Port > 0 {
 			dev.Ip.Port = proto.Uint32(ip.Port)
+		}
+	}
+	if eth := info.Ethernet; eth != nil {
+		dev.Ethernet = &pb.EthernetDevice{
+			MacAddress: proto.String(eth.MACAddress),
+		}
+		if eth.Vendor != "" {
+			dev.Ethernet.Vendor = proto.String(eth.Vendor)
 		}
 	}
 

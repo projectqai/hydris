@@ -5,13 +5,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/projectqai/hydris/policy"
 	pb "github.com/projectqai/proto/go"
 )
 
 type Consumer struct {
 	world   *WorldServer
-	ability *policy.Ability
 	limiter *pb.WatchBehavior
 	filter  *pb.EntityFilter
 
@@ -24,10 +22,9 @@ type Consumer struct {
 	keepalive   *time.Ticker
 }
 
-func NewConsumer(world *WorldServer, ability *policy.Ability, limiter *pb.WatchBehavior, filter *pb.EntityFilter) *Consumer {
+func NewConsumer(world *WorldServer, limiter *pb.WatchBehavior, filter *pb.EntityFilter) *Consumer {
 	c := &Consumer{
 		world:   world,
-		ability: ability,
 		limiter: limiter,
 		filter:  filter,
 		signal:  make(chan struct{}, 1),
@@ -150,11 +147,6 @@ func (c *Consumer) SenderLoop(ctx context.Context, send func(*pb.EntityChangeEve
 				entity = &pb.Entity{Id: entityID}
 			}
 			c.mu.Unlock()
-		}
-
-		// Check read policy
-		if entity != nil && c.ability != nil && !c.ability.CanRead(ctx, entity) {
-			continue
 		}
 
 		if priority == pb.Priority_PriorityFlash {

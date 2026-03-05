@@ -37,7 +37,7 @@ func assertContextErr(t *testing.T, err error) {
 }
 
 func TestConsumer_DirtyAndPop(t *testing.T) {
-	c := NewConsumer(nil, nil, nil, nil)
+	c := NewConsumer(nil, nil, nil)
 
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 	c.markDirty("e2", pb.Priority_PriorityImmediate, pb.EntityChange_EntityChangeUpdated, nil)
@@ -65,7 +65,7 @@ func TestConsumer_DirtyAndPop(t *testing.T) {
 }
 
 func TestConsumer_PriorityOrder(t *testing.T) {
-	c := NewConsumer(nil, nil, nil, nil)
+	c := NewConsumer(nil, nil, nil)
 
 	c.markDirty("low", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 	c.markDirty("high", pb.Priority_PriorityImmediate, pb.EntityChange_EntityChangeUpdated, nil)
@@ -85,7 +85,7 @@ func TestConsumer_MinPriorityFilter(t *testing.T) {
 	limiter := &pb.WatchBehavior{
 		MinPriority: ptr(pb.Priority_PriorityImmediate),
 	}
-	c := NewConsumer(nil, nil, limiter, nil)
+	c := NewConsumer(nil, limiter, nil)
 
 	c.markDirty("low", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 	c.markDirty("high", pb.Priority_PriorityImmediate, pb.EntityChange_EntityChangeUpdated, nil)
@@ -103,7 +103,7 @@ func TestConsumer_MinPriorityFilter(t *testing.T) {
 }
 
 func TestConsumer_Coalescing(t *testing.T) {
-	c := NewConsumer(nil, nil, nil, nil)
+	c := NewConsumer(nil, nil, nil)
 
 	// Multiple updates to same entity
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
@@ -123,7 +123,7 @@ func TestConsumer_Coalescing(t *testing.T) {
 }
 
 func TestConsumer_PriorityChange(t *testing.T) {
-	c := NewConsumer(nil, nil, nil, nil)
+	c := NewConsumer(nil, nil, nil)
 
 	// Entity starts low, then becomes high priority
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
@@ -142,7 +142,7 @@ func TestConsumer_PriorityChange(t *testing.T) {
 }
 
 func TestConsumer_Signal(t *testing.T) {
-	c := NewConsumer(nil, nil, nil, nil)
+	c := NewConsumer(nil, nil, nil)
 
 	// Signal channel should be non-blocking
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
@@ -161,8 +161,8 @@ func TestConsumer_Signal(t *testing.T) {
 func TestBus_Dirty(t *testing.T) {
 	bus := NewBus()
 
-	c1 := NewConsumer(nil, nil, nil, nil)
-	c2 := NewConsumer(nil, nil, nil, nil)
+	c1 := NewConsumer(nil, nil, nil)
+	c2 := NewConsumer(nil, nil, nil)
 
 	bus.Register(c1)
 	bus.Register(c2)
@@ -185,7 +185,7 @@ func TestBus_Dirty(t *testing.T) {
 func TestBus_Unregister(t *testing.T) {
 	bus := NewBus()
 
-	c := NewConsumer(nil, nil, nil, nil)
+	c := NewConsumer(nil, nil, nil)
 	bus.Register(c)
 
 	if len(bus.consumers) != 1 {
@@ -205,7 +205,7 @@ func TestSenderLoop_Basic(t *testing.T) {
 		"e2": {Id: "e2"},
 	}
 	world := testWorld(entities)
-	c := NewConsumer(world, nil, nil, nil)
+	c := NewConsumer(world, nil, nil)
 
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
@@ -240,7 +240,7 @@ func TestSenderLoop_Expiry(t *testing.T) {
 	}
 
 	world := testWorld(map[string]*pb.Entity{"e1": expired})
-	c := NewConsumer(world, nil, nil, nil)
+	c := NewConsumer(world, nil, nil)
 
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 
@@ -270,7 +270,7 @@ func TestSenderLoop_EntityGone(t *testing.T) {
 	// Entity not in head and change is Updated — should be skipped.
 	// Only GC sends EntityChangeExpired.
 	world := testWorld(map[string]*pb.Entity{}) // empty - entity is gone
-	c := NewConsumer(world, nil, nil, nil)
+	c := NewConsumer(world, nil, nil)
 
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 
@@ -303,7 +303,7 @@ func TestSenderLoop_BurstBypassesRateLimit(t *testing.T) {
 		"low":   {Id: "low", Priority: ptr(pb.Priority_PriorityRoutine)},
 	}
 	world := testWorld(entities)
-	c := NewConsumer(world, nil, limiter, nil)
+	c := NewConsumer(world, limiter, nil)
 
 	c.markDirty("burst", pb.Priority_PriorityFlash, pb.EntityChange_EntityChangeUpdated, nil)
 	c.markDirty("low", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
@@ -339,7 +339,7 @@ func TestSenderLoop_Filter(t *testing.T) {
 		"e2": {Id: "e2"},
 	}
 	world := testWorld(entities)
-	c := NewConsumer(world, nil, nil, filter)
+	c := NewConsumer(world, nil, filter)
 
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
@@ -376,7 +376,7 @@ func TestSenderLoop_SlowConsumerCoalesces(t *testing.T) {
 		"e1": {Id: "e1"},
 	}
 	world := testWorld(entities)
-	c := NewConsumer(world, nil, limiter, nil)
+	c := NewConsumer(world, limiter, nil)
 
 	// Producer sends 100 updates to same entity rapidly
 	for i := 0; i < 100; i++ {
@@ -414,7 +414,7 @@ func TestSenderLoop_SlowConsumerMultipleEntities(t *testing.T) {
 		"e3": {Id: "e3"},
 	}
 	world := testWorld(entities)
-	c := NewConsumer(world, nil, limiter, nil)
+	c := NewConsumer(world, limiter, nil)
 
 	// Mark all dirty
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
@@ -447,7 +447,7 @@ func TestBus_DirtyNeverBlocks(t *testing.T) {
 	limiter := &pb.WatchBehavior{
 		MaxRateHz: ptr(float32(1)),
 	}
-	c := NewConsumer(nil, nil, limiter, nil)
+	c := NewConsumer(nil, limiter, nil)
 	bus.Register(c)
 
 	entity := &pb.Entity{Id: "e1", Priority: ptr(pb.Priority_PriorityRoutine)}
@@ -473,7 +473,7 @@ func TestBus_ProducerFasterThanConsumer(t *testing.T) {
 
 	entities := map[string]*pb.Entity{}
 	world := testWorld(entities)
-	c := NewConsumer(world, nil, limiter, nil)
+	c := NewConsumer(world, limiter, nil)
 
 	bus := NewBus()
 	bus.Register(c)
@@ -528,7 +528,7 @@ func TestConsumer_BurstPriorityUnderLoad(t *testing.T) {
 		"burst": {Id: "burst", Priority: ptr(pb.Priority_PriorityFlash)},
 	}
 	world := testWorld(entities)
-	c := NewConsumer(world, nil, limiter, nil)
+	c := NewConsumer(world, limiter, nil)
 
 	// Add many low priority items
 	for i := 0; i < 100; i++ {
@@ -567,7 +567,7 @@ func TestConsumer_BurstPriorityUnderLoad(t *testing.T) {
 
 func TestBus_DirtyNilEntity(t *testing.T) {
 	bus := NewBus()
-	c := NewConsumer(nil, nil, nil, nil)
+	c := NewConsumer(nil, nil, nil)
 	bus.Register(c)
 
 	// Dirty with nil entity should use default priority
@@ -589,7 +589,7 @@ func TestBus_DirtyNilEntity(t *testing.T) {
 }
 
 func TestConsumer_PriorityReserved0(t *testing.T) {
-	c := NewConsumer(nil, nil, nil, nil)
+	c := NewConsumer(nil, nil, nil)
 
 	// PriorityReserved0 is 0, should be treated as valid (though unusual)
 	c.markDirty("e1", pb.Priority_PriorityUnspecified, pb.EntityChange_EntityChangeUpdated, nil)
@@ -605,7 +605,7 @@ func TestConsumer_MinPriorityAllowsReserved0(t *testing.T) {
 	limiter := &pb.WatchBehavior{
 		MinPriority: ptr(pb.Priority_PriorityUnspecified),
 	}
-	c := NewConsumer(nil, nil, limiter, nil)
+	c := NewConsumer(nil, limiter, nil)
 
 	c.markDirty("e1", pb.Priority_PriorityUnspecified, pb.EntityChange_EntityChangeUpdated, nil)
 
@@ -617,7 +617,7 @@ func TestConsumer_MinPriorityAllowsReserved0(t *testing.T) {
 
 func TestSenderLoop_ContextAlreadyCancelled(t *testing.T) {
 	world := testWorld(map[string]*pb.Entity{"e1": {Id: "e1"}})
-	c := NewConsumer(world, nil, nil, nil)
+	c := NewConsumer(world, nil, nil)
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -647,7 +647,7 @@ func TestSenderLoop_ContextCancelledDuringRateLimit(t *testing.T) {
 		"e2": {Id: "e2"},
 	}
 	world := testWorld(entities)
-	c := NewConsumer(world, nil, limiter, nil)
+	c := NewConsumer(world, limiter, nil)
 
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
@@ -675,7 +675,7 @@ func TestSenderLoop_ContextCancelledDuringRateLimit(t *testing.T) {
 
 func TestBus_ConcurrentDirty(t *testing.T) {
 	bus := NewBus()
-	c := NewConsumer(nil, nil, nil, nil)
+	c := NewConsumer(nil, nil, nil)
 	bus.Register(c)
 
 	// Concurrent Dirty from multiple goroutines
@@ -720,7 +720,7 @@ func TestSenderLoop_AllEntitiesFiltered(t *testing.T) {
 		"e2": {Id: "e2"},
 	}
 	world := testWorld(entities)
-	c := NewConsumer(world, nil, nil, filter)
+	c := NewConsumer(world, nil, filter)
 
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
@@ -746,7 +746,7 @@ func TestSenderLoop_EntityReMarkedDuringLoop(t *testing.T) {
 		"e1": {Id: "e1", Label: ptr("v0")},
 	}
 	world := testWorld(entities)
-	c := NewConsumer(world, nil, nil, nil)
+	c := NewConsumer(world, nil, nil)
 
 	version := 0
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
@@ -798,7 +798,7 @@ func TestBus_UnregisterDuringSenderLoop(t *testing.T) {
 	world := testWorld(entities)
 
 	bus := NewBus()
-	c := NewConsumer(world, nil, nil, nil)
+	c := NewConsumer(world, nil, nil)
 	bus.Register(c)
 
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
@@ -824,7 +824,7 @@ func TestConsumer_RateLimiterZero(t *testing.T) {
 	limiter := &pb.WatchBehavior{
 		MaxRateHz: ptr(float32(0)),
 	}
-	c := NewConsumer(nil, nil, limiter, nil)
+	c := NewConsumer(nil, limiter, nil)
 
 	if c.rateLimiter != nil {
 		t.Error("rateLimiter should be nil when max=0")
@@ -845,7 +845,7 @@ func TestExpireEntityPreservesComponents(t *testing.T) {
 	world := testWorld(map[string]*pb.Entity{device.Id: device})
 
 	filter := &pb.EntityFilter{Component: []uint32{50}}
-	c := NewConsumer(world, nil, nil, filter)
+	c := NewConsumer(world, nil, filter)
 	world.bus.Register(c)
 	defer world.bus.Unregister(c)
 
@@ -902,7 +902,7 @@ func TestExpireEntityPreservesComponents(t *testing.T) {
 
 func TestSenderLoop_SendError(t *testing.T) {
 	world := testWorld(map[string]*pb.Entity{"e1": {Id: "e1"}})
-	c := NewConsumer(world, nil, nil, nil)
+	c := NewConsumer(world, nil, nil)
 	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 
 	ctx := context.Background()
@@ -921,7 +921,7 @@ func TestNewConsumer_Keepalive(t *testing.T) {
 	limiter := &pb.WatchBehavior{
 		KeepaliveIntervalMs: ptr(uint32(2000)),
 	}
-	c := NewConsumer(nil, nil, limiter, nil)
+	c := NewConsumer(nil, limiter, nil)
 	if c.keepalive == nil {
 		t.Error("keepalive ticker should be created")
 	}
@@ -933,7 +933,7 @@ func TestNewConsumer_KeepaliveMinimum(t *testing.T) {
 	limiter := &pb.WatchBehavior{
 		KeepaliveIntervalMs: ptr(uint32(100)),
 	}
-	c := NewConsumer(nil, nil, limiter, nil)
+	c := NewConsumer(nil, limiter, nil)
 	if c.keepalive == nil {
 		t.Error("keepalive ticker should be created even for small values")
 	}
@@ -944,7 +944,7 @@ func TestNewConsumer_KeepaliveZero(t *testing.T) {
 	limiter := &pb.WatchBehavior{
 		KeepaliveIntervalMs: ptr(uint32(0)),
 	}
-	c := NewConsumer(nil, nil, limiter, nil)
+	c := NewConsumer(nil, limiter, nil)
 	if c.keepalive != nil {
 		t.Error("keepalive should be nil when interval is 0")
 	}
@@ -960,7 +960,7 @@ func TestSenderLoop_Keepalive(t *testing.T) {
 	limiter := &pb.WatchBehavior{
 		KeepaliveIntervalMs: ptr(uint32(1000)),
 	}
-	c := NewConsumer(world, nil, limiter, nil)
+	c := NewConsumer(world, limiter, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()

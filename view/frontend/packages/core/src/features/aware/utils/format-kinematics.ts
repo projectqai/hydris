@@ -1,4 +1,4 @@
-import type { KinematicsEnu } from "@projectqai/proto/world";
+import type { AngularVelocity, KinematicsEnu } from "@projectqai/proto/world";
 
 export function calculateGroundSpeed(velocityEnu?: KinematicsEnu): number | undefined {
   if (!velocityEnu) return undefined;
@@ -45,4 +45,14 @@ export function formatAcceleration(accelerationEnu?: KinematicsEnu): string {
   const magnitude = Math.sqrt(east * east + north * north + up * up);
   if (magnitude === 0) return "—";
   return `${magnitude.toFixed(2)} m/s²`;
+}
+
+export function formatAngularRate(radPerSec: number): string {
+  const degPerSec = (radPerSec * 180) / Math.PI;
+  return `${degPerSec.toFixed(1)} °/s`;
+}
+
+export function hasAngularVelocity(av?: AngularVelocity): boolean {
+  if (!av) return false;
+  return av.rollRate !== 0 || av.pitchRate !== 0 || av.yawRate !== 0;
 }

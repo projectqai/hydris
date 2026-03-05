@@ -14,6 +14,7 @@ import (
 	"github.com/projectqai/hydris/builtin/controller"
 	"github.com/projectqai/hydris/goclient"
 	pb "github.com/projectqai/proto/go"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -84,25 +85,55 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	schema, _ := structpb.NewStruct(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"url":            map[string]any{"type": "string", "description": "Base URL for hexdb.io"},
-			"administrative": map[string]any{"type": "boolean", "description": "Also enrich AdministrativeComponent from aircraft API"},
+			"url": map[string]any{
+				"type":           "string",
+				"title":          "Base URL",
+				"description":    "Base URL for hexdb.io API",
+				"ui:placeholder": "e.g. https://hexdb.io",
+				"ui:order":       0,
+			},
+			"administrative": map[string]any{
+				"type":        "boolean",
+				"title":       "Enrich Administrative Data",
+				"description": "Also look up registration, owner, and type from the aircraft API",
+				"default":     false,
+				"ui:order":    1,
+			},
 		},
 	})
 
-	if err := controller.PublishDevice(ctx, controllerName+".service", controllerName, []*pb.Configurable{
-		{Key: "hexdb.enrich.v0", Schema: schema},
-	}, nil, nil); err != nil {
+	entityID := controllerName + ".service"
+
+	if err := controller.Push(ctx,
+		&pb.Entity{
+			Id:    entityID,
+			Label: proto.String("HexDB"),
+			Controller: &pb.Controller{
+				Id: &controllerName,
+			},
+			Device: &pb.DeviceComponent{
+				Category: proto.String("Feeds"),
+			},
+			Configurable: &pb.ConfigurableComponent{
+				Schema: schema,
+			},
+			Interactivity: &pb.InteractivityComponent{
+				Icon: proto.String("camera"),
+			},
+		},
+	); err != nil {
 		return fmt.Errorf("publish device: %w", err)
 	}
 
-	return controller.Run1to1(ctx, controllerName, func(ctx context.Context, config *pb.Entity, _ *pb.Entity) error {
+	return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+		ready()
 		baseURL := defaultBaseURL
 		enrichAdmin := false
-		if config.Config != nil && config.Config.Value != nil && config.Config.Value.Fields != nil {
-			if v, ok := config.Config.Value.Fields["url"]; ok && v.GetStringValue() != "" {
+		if entity.Config != nil && entity.Config.Value != nil && entity.Config.Value.Fields != nil {
+			if v, ok := entity.Config.Value.Fields["url"]; ok && v.GetStringValue() != "" {
 				baseURL = v.GetStringValue()
 			}
-			if v, ok := config.Config.Value.Fields["administrative"]; ok {
+			if v, ok := entity.Config.Value.Fields["administrative"]; ok {
 				enrichAdmin = v.GetBoolValue()
 			}
 		}
@@ -111,6 +142,9 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 }
 
 func runEnricher(ctx context.Context, logger *slog.Logger, baseURL string, enrichAdmin bool) error {
+	var seenCount, enrichedCount uint64
+	var latencyMs float32
+
 	grpcConn, err := builtin.BuiltinClientConn()
 	if err != nil {
 		return fmt.Errorf("gRPC connection: %w", err)
@@ -137,6 +171,19 @@ func runEnricher(ctx context.Context, logger *slog.Logger, baseURL string, enric
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
+	pushMetrics := func() {
+		_, _ = worldClient.Push(ctx, &pb.EntityChangeRequest{
+			Changes: []*pb.Entity{{
+				Id: "hexdb.service",
+				Metric: &pb.MetricComponent{Metrics: []*pb.Metric{
+					{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("entities enriched"), Id: proto.Uint32(1), Val: &pb.Metric_Uint64{Uint64: enrichedCount}},
+					{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("entities seen"), Id: proto.Uint32(2), Val: &pb.Metric_Uint64{Uint64: seenCount}},
+					{Kind: pb.MetricKind_MetricKindLatency.Enum(), Unit: pb.MetricUnit_MetricUnitMillisecond, Label: proto.String("lookup latency"), Id: proto.Uint32(3), Val: &pb.Metric_Float{Float: latencyMs}},
+				}},
+			}},
+		})
+	}
+
 	logger.Info("watching for transponder entities", "baseURL", baseURL, "administrative", enrichAdmin)
 
 	for {
@@ -154,18 +201,20 @@ func runEnricher(ctx context.Context, logger *slog.Logger, baseURL string, enric
 			continue
 		}
 
+		seenCount++
 		icaoHex := fmt.Sprintf("%06x", *entity.Transponder.Adsb.IcaoAddress)
 
 		enriched := &pb.Entity{Id: entity.Id}
 		changed := false
 
+		lookupStart := time.Now()
 		imageURL, err := resolveImageURL(ctx, httpClient, baseURL+"/hex-image?hex="+icaoHex)
 		if err == nil {
 			enriched.Camera = &pb.CameraComponent{
-				Cameras: []*pb.Camera{{
+				Streams: []*pb.MediaStream{{
 					Label:    icaoHex,
 					Url:      imageURL,
-					Protocol: pb.CameraProtocol_CameraProtocolImage,
+					Protocol: pb.MediaStreamProtocol_MediaStreamProtocolImage,
 				}},
 			}
 			changed = true
@@ -195,7 +244,10 @@ func runEnricher(ctx context.Context, logger *slog.Logger, baseURL string, enric
 			}
 		}
 
+		latencyMs = float32(time.Since(lookupStart).Milliseconds())
+
 		if !changed {
+			pushMetrics()
 			continue
 		}
 
@@ -204,9 +256,12 @@ func runEnricher(ctx context.Context, logger *slog.Logger, baseURL string, enric
 		})
 		if err != nil {
 			logger.Error("failed to push enrichment", "entityID", entity.Id, "error", err)
+			pushMetrics()
 			continue
 		}
 
+		enrichedCount++
+		pushMetrics()
 		logger.Debug("enriched entity", "entityID", entity.Id, "icao", icaoHex)
 	}
 }

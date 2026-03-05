@@ -1,10 +1,26 @@
 ---
-id: meshtastic.config.radio1
+id: meshtastic.service
 config:
-    controller: meshtastic
-    key: meshtastic.usb.v0
-    value:
-        channel: 0
-        hop_limit: 3
-        send_format: hydris
-
+  value:
+    autoconfig: true
+---
+id: lorawan.service
+config:
+  value:
+    autoconfig: true
+---
+id: netscan.service
+config:
+  value:
+    enabled: true
+---
+id: reolink.service
+config:
+  value:
+    auto_probe: true
+    username: admin
+---
+id: serial.service
+config:
+  value:
+    enabled: true

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/projectqai/hydris/cmd"
 	pb "github.com/projectqai/proto/go"
 
 	"github.com/spf13/cobra"
@@ -27,7 +26,7 @@ func init() {
 	}
 
 	nodeCmd.AddCommand(infoCmd)
-	cmd.CMD.AddCommand(nodeCmd)
+	CMD.AddCommand(nodeCmd)
 }
 
 func runNodeInfo(cmd *cobra.Command, args []string) error {

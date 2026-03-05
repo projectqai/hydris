@@ -9,7 +9,7 @@ export type ShortcutRegistration = {
   priority: number;
 };
 
-export type KeyboardContextValue = {
+type KeyboardContextValue = {
   register: (shortcut: ShortcutRegistration) => () => void;
 };
 

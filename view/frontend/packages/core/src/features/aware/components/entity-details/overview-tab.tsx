@@ -1,4 +1,5 @@
 import { InfoRow } from "@hydris/ui/info-row";
+import { useThemeColors } from "@hydris/ui/lib/theme";
 import { usePanelContext } from "@hydris/ui/panels";
 import type { Entity } from "@projectqai/proto/world";
 import * as Clipboard from "expo-clipboard";
@@ -9,10 +10,11 @@ import {
   Copy,
   Gauge,
   MapPin,
-  Maximize2,
   Mountain,
   PauseCircle,
+  PictureInPicture2,
   Radio,
+  RotateCw,
   TrendingUp,
   Video,
   Zap,
@@ -24,6 +26,7 @@ import { toast } from "sonner-native";
 import { useShallow } from "zustand/react/shallow";
 
 import { formatAltitude, formatTime } from "../../../../lib/api/use-track-utils";
+import { useCameraPaneContext } from "../../camera-pane-context";
 import { usePIPContext } from "../../pip-context";
 import { useEntityStore } from "../../store/entity-store";
 import {
@@ -31,12 +34,15 @@ import {
   calculateGroundSpeed,
   calculateVerticalRate,
   formatAcceleration,
+  formatAngularRate,
   formatCourse,
   formatSpeed,
   formatVerticalRate,
+  hasAngularVelocity,
 } from "../../utils/format-kinematics";
-import { toVideoProtocol } from "../video-stream/types";
+import { resolveStreamUrl } from "../video-stream/resolve-stream-url";
 import { VideoStream } from "../video-stream/video-stream";
+import { EntityLinkRow } from "./entity-link-row";
 
 type OverviewTabProps = {
   entity: Entity;
@@ -52,6 +58,7 @@ type PositionEditorProps = {
 };
 
 function PositionEditor({ entity }: PositionEditorProps) {
+  const t = useThemeColors();
   if (!entity.geo) return null;
 
   /* Edit position functionality disabled - can't edit track positions
@@ -103,23 +110,23 @@ function PositionEditor({ entity }: PositionEditorProps) {
   if (isEditing) {
     return (
       <View className="px-3 pt-3 pb-2">
-        <Text className="text-foreground/50 mb-1.5 font-mono text-[11px] tracking-widest uppercase">
+        <Text className="text-foreground/75 mb-1.5 font-mono text-11 tracking-widest uppercase">
           {entity.geo ? "Edit Position" : "Add Position"}
         </Text>
         <View className="gap-1.5">
           <View className="gap-0.5">
-            <Text className="font-sans-medium text-foreground/50 mb-0.5 text-[11px]">Latitude</Text>
+            <Text className="font-sans-medium text-foreground/75 mb-0.5 text-11">Latitude</Text>
             <TextInput
               value={lat}
               onChangeText={(text) => handleTextChange(text, setLat)}
               className="border-foreground/20 bg-foreground/5 text-foreground/90 focus:border-foreground/40 rounded border px-2 py-1.5 font-mono text-sm focus:outline-none"
               keyboardType="numeric"
               selectTextOnFocus
-              placeholderTextColor="rgba(255, 255, 255, 0.3)"
+              placeholderTextColor={t.placeholder}
             />
           </View>
           <View className="gap-0.5">
-            <Text className="font-sans-medium text-foreground/50 mb-0.5 text-[11px]">
+            <Text className="font-sans-medium text-foreground/75 mb-0.5 text-11">
               Longitude
             </Text>
             <TextInput
@@ -128,11 +135,11 @@ function PositionEditor({ entity }: PositionEditorProps) {
               className="border-foreground/20 bg-foreground/5 text-foreground/90 focus:border-foreground/40 rounded border px-2 py-1.5 font-mono text-sm focus:outline-none"
               keyboardType="numeric"
               selectTextOnFocus
-              placeholderTextColor="rgba(255, 255, 255, 0.3)"
+              placeholderTextColor={t.placeholder}
             />
           </View>
           <View className="gap-0.5">
-            <Text className="font-sans-medium text-foreground/50 mb-0.5 text-[11px]">
+            <Text className="font-sans-medium text-foreground/75 mb-0.5 text-11">
               Altitude (m)
             </Text>
             <TextInput
@@ -141,7 +148,7 @@ function PositionEditor({ entity }: PositionEditorProps) {
               className="border-foreground/20 bg-foreground/5 text-foreground/90 focus:border-foreground/40 rounded border px-2 py-1.5 font-mono text-sm focus:outline-none"
               keyboardType="numeric"
               selectTextOnFocus
-              placeholderTextColor="rgba(255, 255, 255, 0.3)"
+              placeholderTextColor={t.placeholder}
             />
           </View>
         </View>
@@ -152,7 +159,7 @@ function PositionEditor({ entity }: PositionEditorProps) {
               disabled={isPending}
               className="border-foreground/20 bg-foreground/5 hover:bg-foreground/10 active:bg-foreground/10 flex-1 items-center justify-center rounded border py-2.5"
             >
-              <Text className="font-sans-medium text-foreground/70 text-xs leading-none">
+              <Text className="font-sans-medium text-foreground/75 text-xs leading-none">
                 Cancel
               </Text>
             </Pressable>
@@ -181,15 +188,17 @@ function PositionEditor({ entity }: PositionEditorProps) {
   return (
     <View className="px-3 pt-3 pb-2">
       <View className="mb-1 flex-row items-center justify-between">
-        <Text className="text-foreground/50 font-mono text-[11px] tracking-widest uppercase">
+        <Text className="text-foreground/75 text-11 font-mono tracking-widest uppercase">
           Position
         </Text>
         <Pressable
           onPress={copyAllCoords}
           hitSlop={8}
+          accessibilityLabel="Copy coordinates"
+          accessibilityRole="button"
           className="hover:opacity-70 active:opacity-50"
         >
-          <Copy size={12} color="rgba(255, 255, 255, 0.4)" strokeWidth={2} />
+          <Copy size={12} color={t.iconMuted} strokeWidth={2} />
         </Pressable>
       </View>
       <InfoRow
@@ -208,7 +217,7 @@ function PositionEditor({ entity }: PositionEditorProps) {
         onPress={startEditing}
         className="border-foreground/10 bg-foreground/5 hover:bg-foreground/10 active:bg-foreground/10 mt-1.5 flex-row items-center justify-center gap-1.5 rounded border py-1"
       >
-        <Text className="font-sans-medium text-foreground/60 text-xs">Edit</Text>
+        <Text className="font-sans-medium text-foreground/75 text-xs">Edit</Text>
       </Pressable>
       */}
     </View>
@@ -216,6 +225,7 @@ function PositionEditor({ entity }: PositionEditorProps) {
 }
 
 function DetectionRow({ detection }: { detection: Entity }) {
+  const t = useThemeColors();
   const classification = detection.detection?.classification || "Unknown";
   const azimuth = detection.bearing?.azimuth;
   const time = detection.detection?.lastMeasured;
@@ -224,13 +234,11 @@ function DetectionRow({ detection }: { detection: Entity }) {
     <View className="flex-row items-center justify-between py-1.5">
       <View className="flex-row items-center gap-2">
         <View className="w-5 items-center">
-          <Radio size={15} color="rgba(255, 255, 255, 0.5)" strokeWidth={2} />
+          <Radio size={15} color={t.iconMuted} strokeWidth={2} />
         </View>
         <View>
-          <Text className="font-sans-medium text-foreground/60 text-xs">{classification}</Text>
-          {time && (
-            <Text className="text-foreground/40 font-mono text-[10px]">{formatTime(time)}</Text>
-          )}
+          <Text className="font-sans-medium text-foreground/75 text-xs">{classification}</Text>
+          {time && <Text className="text-foreground/75 text-10 font-mono">{formatTime(time)}</Text>}
         </View>
       </View>
       {azimuth !== undefined && (
@@ -248,6 +256,7 @@ function hasEnuData(enu: { east?: number; north?: number; up?: number } | undefi
 function KinematicsSection({ entity }: { entity: Entity }) {
   const velocityEnu = entity.kinematics?.velocityEnu;
   const accelerationEnu = entity.kinematics?.accelerationEnu;
+  const angularVelocity = entity.kinematics?.angularVelocityBody;
   const courseFromBearing = entity.bearing?.azimuth;
 
   const groundSpeed = calculateGroundSpeed(velocityEnu);
@@ -256,13 +265,14 @@ function KinematicsSection({ entity }: { entity: Entity }) {
 
   const showVelocityEnu = hasEnuData(velocityEnu);
   const showAcceleration = hasEnuData(accelerationEnu);
+  const showAngularVelocity = hasAngularVelocity(angularVelocity);
 
   if (!entity.kinematics) return null;
 
   return (
     <>
       <View className="border-foreground/10 border-t px-3 pt-3 pb-2">
-        <Text className="text-foreground/50 mb-1 font-mono text-[11px] tracking-widest uppercase">
+        <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
           Velocity
         </Text>
         <InfoRow icon={Zap} label="Ground Speed" value={formatSpeed(groundSpeed)} />
@@ -285,7 +295,7 @@ function KinematicsSection({ entity }: { entity: Entity }) {
 
       {showVelocityEnu && velocityEnu && (
         <View className="border-foreground/10 border-t px-3 pt-3 pb-2">
-          <Text className="text-foreground/50 mb-1 font-mono text-[11px] tracking-widest uppercase">
+          <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
             Velocity ENU
           </Text>
           <InfoRow label="East" value={`${velocityEnu.east?.toFixed(2) ?? "—"} m/s`} />
@@ -296,7 +306,7 @@ function KinematicsSection({ entity }: { entity: Entity }) {
 
       {showAcceleration && accelerationEnu && (
         <View className="border-foreground/10 border-t px-3 pt-3 pb-2">
-          <Text className="text-foreground/50 mb-1 font-mono text-[11px] tracking-widest uppercase">
+          <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
             Acceleration
           </Text>
           <InfoRow
@@ -309,18 +319,40 @@ function KinematicsSection({ entity }: { entity: Entity }) {
           <InfoRow label="Up" value={`${accelerationEnu.up?.toFixed(2) ?? "—"} m/s²`} />
         </View>
       )}
+
+      {showAngularVelocity && angularVelocity && (
+        <View className="border-foreground/10 border-t px-3 pt-3 pb-2">
+          <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
+            Angular Velocity
+          </Text>
+          <InfoRow
+            icon={RotateCw}
+            label="Roll"
+            value={formatAngularRate(angularVelocity.rollRate)}
+          />
+          <InfoRow label="Pitch" value={formatAngularRate(angularVelocity.pitchRate)} />
+          <InfoRow label="Yaw" value={formatAngularRate(angularVelocity.yawRate)} />
+        </View>
+      )}
     </>
   );
 }
 
 export function OverviewTab({ entity }: OverviewTabProps) {
+  const t = useThemeColors();
   const { openPIP, isInPIP } = usePIPContext();
+  const cameraPaneContext = useCameraPaneContext();
   const { rightPanelCollapsed } = usePanelContext();
   const [isPanelExpanded, setIsPanelExpanded] = useState(true);
   const sensorDetections = useEntityStore(
-    useShallow((s) =>
-      Array.from(s.entities.values()).filter((e) => e.detection?.detectorEntityId === entity.id),
-    ),
+    useShallow((s) => {
+      const result: Entity[] = [];
+      for (const id of s.detectionEntityIds) {
+        const e = s.entities.get(id);
+        if (e?.detection?.detectorEntityId === entity.id) result.push(e);
+      }
+      return result;
+    }),
   );
 
   useAnimatedReaction(
@@ -338,7 +370,7 @@ export function OverviewTab({ entity }: OverviewTabProps) {
       <View>
         {entity.controller && (
           <View className="px-3 pt-3 pb-2">
-            <Text className="text-foreground/50 mb-1 font-mono text-[11px] tracking-widest uppercase">
+            <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
               Controller
             </Text>
             <InfoRow label="ID" value={entity.controller.id} onCopy />
@@ -349,23 +381,32 @@ export function OverviewTab({ entity }: OverviewTabProps) {
 
         <KinematicsSection entity={entity} />
 
-        {(entity.detection?.classification || entity.detection?.detectorEntityId) && (
+        {!!(entity.detection?.classification || entity.detection?.detectorEntityId) && (
           <View className="border-foreground/10 border-t px-3 pt-3 pb-2">
-            <Text className="text-foreground/50 mb-1 font-mono text-[11px] tracking-widest uppercase">
+            <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
               Detection
             </Text>
-            {entity.detection?.classification && (
+            {!!entity.detection?.classification && (
               <InfoRow label="Classification" value={entity.detection.classification} />
             )}
-            {entity.detection?.detectorEntityId && (
-              <InfoRow label="Detected By" value={entity.detection.detectorEntityId} onCopy />
+            {!!entity.detection?.detectorEntityId && (
+              <EntityLinkRow label="Detected By" entityId={entity.detection.detectorEntityId} />
             )}
+          </View>
+        )}
+
+        {!!entity.track?.tracker && (
+          <View className="border-foreground/10 border-t px-3 pt-3 pb-2">
+            <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
+              Track
+            </Text>
+            <EntityLinkRow label="Tracked By" entityId={entity.track.tracker} />
           </View>
         )}
 
         {sensorDetections.length > 0 && (
           <View className="border-foreground/10 border-t px-3 pt-3 pb-2">
-            <Text className="text-foreground/50 mb-1 font-mono text-[11px] tracking-widest uppercase">
+            <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
               Detections ({sensorDetections.length})
             </Text>
             <View>
@@ -376,51 +417,55 @@ export function OverviewTab({ entity }: OverviewTabProps) {
           </View>
         )}
 
-        {entity.camera && entity.camera.cameras.length > 0 && (
+        {entity.camera && entity.camera.streams.length > 0 && (
           <View className="border-foreground/10 border-t px-3 pt-3 pb-2">
-            <Text className="text-foreground/50 mb-1.5 font-mono text-[11px] tracking-widest uppercase">
+            <Text className="text-foreground/75 text-11 mb-1.5 font-mono tracking-widest uppercase">
               Video Feeds
             </Text>
             <View className="gap-2">
-              {entity.camera.cameras.map((camera, index) => {
-                const isThisCameraPaused = isInPIP(entity.id, camera.url);
+              {entity.camera.streams.map((stream, index) => {
+                const resolved = resolveStreamUrl(stream, entity.id, index);
+                const isInPIPWindow = isInPIP(entity.id, resolved.url);
+                const isInPane = cameraPaneContext?.isInPane(entity.id) ?? false;
+                const isPaused = isInPIPWindow || isInPane;
 
                 return (
-                  <View key={index} className="gap-1">
+                  <View key={stream.url} className="gap-1">
                     <View className="flex-row items-center justify-between">
-                      <View className="flex-row items-center gap-1.5">
-                        <View className="opacity-50">
-                          <Video size={12} color="white" strokeWidth={1.5} />
-                        </View>
-                        <Text className="text-foreground/70 font-mono text-xs">
-                          {camera.label || `CAM-${index + 1}`}
+                      <View className="min-w-0 flex-1 flex-row items-center gap-1.5">
+                        <Video
+                          size={12}
+                          color={t.iconSubtle}
+                          strokeWidth={1.5}
+                          className="shrink-0"
+                        />
+                        <Text className="text-foreground/75 font-mono text-xs" numberOfLines={1}>
+                          {stream.label || `CAM-${index + 1}`}
                         </Text>
                       </View>
                       <Pressable
-                        onPress={() => openPIP(entity, camera)}
+                        onPress={() => openPIP(entity, stream, index)}
                         hitSlop={8}
-                        className="focus-visible:outline-none active:opacity-50"
+                        accessibilityLabel="Open in picture-in-picture"
+                        accessibilityRole="button"
+                        className="active:opacity-50"
                       >
-                        <Maximize2 size={12} color="rgba(255, 255, 255, 0.3)" strokeWidth={1.5} />
+                        <PictureInPicture2 size={12} color={t.iconMuted} strokeWidth={1.5} />
                       </Pressable>
                     </View>
                     <View className="border-foreground/5 bg-background relative aspect-video overflow-hidden rounded border">
-                      {isPanelExpanded && !isThisCameraPaused && (
+                      {isPanelExpanded && !isPaused && (
                         <VideoStream
-                          url={camera.url}
-                          protocol={toVideoProtocol(camera.protocol)}
+                          url={resolved.url}
+                          protocol={resolved.protocol}
                           objectFit="cover"
                         />
                       )}
-                      {isThisCameraPaused && (
+                      {isPaused && (
                         <View className="bg-background absolute inset-0 items-center justify-center">
-                          <PauseCircle
-                            size={24}
-                            color="rgba(255, 255, 255, 0.5)"
-                            strokeWidth={1.5}
-                          />
-                          <Text className="text-foreground/50 mt-1 font-sans text-xs">
-                            Playing in PIP
+                          <PauseCircle size={24} color={t.iconMuted} strokeWidth={1.5} />
+                          <Text className="text-foreground/75 mt-1 font-sans text-xs">
+                            {isInPIPWindow ? "Playing in PIP" : "Viewing in Pane"}
                           </Text>
                         </View>
                       )}
