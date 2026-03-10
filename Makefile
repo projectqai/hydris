@@ -1,4 +1,4 @@
-.PHONY: all build clean frontend aio android all pre-release release install-tools
+.PHONY: all build clean frontend aio android all pre-release release install-tools docker
 
 VERSION ?= $(shell git describe --always --dirty --tags)
 
@@ -42,6 +42,11 @@ android: gen frontend android_
 	@echo adb install -r view/frontend/apps/foss/android/app/build/outputs/apk/release/app-release.apk 
 android_:
 	cd android && go mod tidy && go install golang.org/x/mobile/cmd/gomobile && gomobile init && gomobile bind -target=android/arm64 -androidapi 24 -ldflags "-checklinkname=0" -o hydris.aar
+
+docker: aio
+	cp hydris hydris-$$(go env GOARCH)
+	docker build -t hydris:$(VERSION) .
+	rm -f hydris-$$(go env GOARCH)
 
 pre-release: vet
 	@[ -z "$$(git status --porcelain)" ]                                || (echo "FAIL: working tree is dirty" && false)

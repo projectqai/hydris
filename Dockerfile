@@ -1,16 +1,7 @@
-# Build stage
-FROM golang:1.25-alpine AS builder
-RUN apk add --no-cache git make npm unzip curl bash
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
-WORKDIR /build
-COPY . .
-RUN make aio
-
-# Runtime stage
 FROM alpine:latest
+ARG TARGETARCH
 RUN apk --no-cache add ca-certificates
 WORKDIR /app
-COPY --from=builder /build/hydris .
+COPY hydris-${TARGETARCH:-amd64} hydris
 EXPOSE 50051
 ENTRYPOINT ["./hydris"]
