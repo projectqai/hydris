@@ -3,7 +3,7 @@ import type { PaneContent } from "@hydris/ui/layout/types";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import uFuzzy from "@leeoniya/ufuzzy";
-import type { Entity } from "@projectqai/proto/world";
+import { type Entity, LinkStatus } from "@projectqai/proto/world";
 import {
   AlertTriangle,
   Camera,
@@ -11,6 +11,8 @@ import {
   Info,
   List,
   Map,
+  MessageSquare,
+  Radar,
   Search,
   Video,
   X,
@@ -28,7 +30,9 @@ const WIDGET_OPTIONS = [
   { id: "mapPane", label: "Map", description: "Live entity map", icon: Map },
   { id: "entityList", label: "List", description: "Entity browser", icon: List },
   { id: "entityDetails", label: "Details", description: "Selected entity", icon: Info },
+  { id: "contactReports", label: "Contacts", description: "Sensor detections", icon: Radar },
   { id: "alerts", label: "Alerts", description: "Active alerts", icon: AlertTriangle },
+  { id: "chat", label: "Chat", description: "Team messaging", icon: MessageSquare },
 ] as const;
 
 type Tab = "widgets" | "cameras" | "embed";
@@ -116,7 +120,7 @@ export function WidgetPickerModal({
           alignSelf: "center",
           marginTop: "10%",
           width: "95%",
-          maxWidth: 560,
+          maxWidth: 640,
           borderRadius: 10,
           backgroundColor: t.card,
           borderWidth: 1,
@@ -192,7 +196,7 @@ function WidgetsTab({
 }) {
   const t = useThemeColors();
   return (
-    <View className="flex-row flex-wrap gap-3 p-4">
+    <View className="flex-row flex-wrap gap-2.5 p-4">
       {WIDGET_OPTIONS.map((widget) => {
         const isActive = currentComponentId === widget.id;
         return (
@@ -201,7 +205,7 @@ function WidgetsTab({
             onPress={() => onSelect(widget.id)}
             tabIndex={-1}
             className={cn(
-              "max-w-[50%] flex-[1_1_47%] items-center rounded-lg border pt-7 pb-5",
+              "flex-[0_0_31%] items-center rounded-lg border py-5",
               isActive
                 ? "border-surface-overlay/12 bg-surface-overlay/8"
                 : "border-surface-overlay/6 bg-surface-overlay/2 hover:bg-surface-overlay/5 active:bg-surface-overlay/8",
@@ -209,12 +213,12 @@ function WidgetsTab({
           >
             <View
               className={cn(
-                "mb-4 size-12 items-center justify-center rounded-lg",
+                "mb-3 size-10 items-center justify-center rounded-lg",
                 isActive ? "bg-surface-overlay/10" : "bg-surface-overlay/6",
               )}
             >
               <widget.icon
-                size={24}
+                size={20}
                 strokeWidth={1.5}
                 color={isActive ? t.controlFgActive : t.iconMuted}
               />
@@ -227,7 +231,7 @@ function WidgetsTab({
             >
               {widget.label}
             </Text>
-            <Text className="text-muted-foreground mt-1 text-center font-sans text-xs">
+            <Text className="text-muted-foreground mt-0.5 text-center font-sans text-xs">
               {widget.description}
             </Text>
           </Pressable>
@@ -303,7 +307,7 @@ function CamerasTab({
           filteredCameras.map((entity) => {
             const isActive = currentEntityId === entity.id;
             const name = getEntityName(entity);
-            const isOnline = (entity.camera?.streams ?? []).some((s) => !!s.url);
+            const isOnline = entity.link?.status === LinkStatus.LinkStatusConnected;
 
             return (
               <Pressable

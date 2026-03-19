@@ -122,6 +122,7 @@ type RadioHandshake struct {
 	NodeNum       uint32
 	LongName      string
 	ShortName     string
+	PublicKey     []byte
 	Channels      []*meshpb.Chan
 	Configs       []*meshpb.RadioConfig
 	ModuleConfigs []*meshpb.ModConfig
@@ -154,6 +155,7 @@ func (r *Radio) init() (*RadioHandshake, error) {
 			if v.Node != nil && v.Node.GetNum() == cfg.NodeNum && v.Node.Peer != nil {
 				cfg.LongName = v.Node.Peer.GetLongName()
 				cfg.ShortName = v.Node.Peer.GetShortName()
+				cfg.PublicKey = v.Node.Peer.GetPublicKey()
 			}
 		case *meshpb.FromRadio_Config:
 			cfg.Configs = append(cfg.Configs, v.Config)

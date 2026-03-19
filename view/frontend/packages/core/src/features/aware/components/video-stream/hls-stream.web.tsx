@@ -4,11 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { ConnectionOverlay } from "./connection-overlay";
 import type { ConnectionState, StreamComponentProps } from "./types";
 
-function resolveUrl(url: string): string {
-  const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost";
-  return new URL(url, origin).href;
-}
-
 export function HLSStream({ url, objectFit = "cover" }: StreamComponentProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -19,19 +14,24 @@ export function HLSStream({ url, objectFit = "cover" }: StreamComponentProps) {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-
-    const resolvedUrl = resolveUrl(url);
     setConnectionState("connecting");
     setError(null);
 
     if (video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = resolvedUrl;
-      video.addEventListener("loadeddata", () => setConnectionState("connected"));
-      video.addEventListener("error", () => {
+      const onLoaded = () => setConnectionState("connected");
+      const onError = () => {
         setConnectionState("failed");
         setError("Video playback failed");
-      });
+      };
+      video.addEventListener("loadeddata", onLoaded);
+      video.addEventListener("error", onError);
+      video.src = url;
       video.play().catch(() => {});
+
+      return () => {
+        video.removeEventListener("loadeddata", onLoaded);
+        video.removeEventListener("error", onError);
+      };
     } else if (Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
@@ -39,7 +39,7 @@ export function HLSStream({ url, objectFit = "cover" }: StreamComponentProps) {
       });
 
       hlsRef.current = hls;
-      hls.loadSource(resolvedUrl);
+      hls.loadSource(url);
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {

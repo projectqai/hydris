@@ -17,7 +17,16 @@ export function HLSStream({ url, objectFit = "cover" }: StreamComponentProps) {
 
   const handleError = (e: OnVideoErrorData) => {
     setConnectionState("failed");
-    setError(e.error?.errorString || "Video playback failed");
+    const raw = e.error?.errorString ?? "";
+    if (raw.includes("BAD_HTTP_STATUS")) {
+      setError("Stream unavailable (server rejected request)");
+    } else if (raw.includes("IO_NETWORK") || raw.includes("TIMEOUT")) {
+      setError("Network error — check connection");
+    } else if (raw.includes("PARSING") || raw.includes("UNSUPPORTED")) {
+      setError("Unsupported stream format");
+    } else {
+      setError("Video playback failed");
+    }
   };
 
   const handleRetry = () => {
@@ -30,7 +39,7 @@ export function HLSStream({ url, objectFit = "cover" }: StreamComponentProps) {
     <View className="relative h-full w-full bg-black/20">
       <Video
         key={retryKey}
-        source={{ uri: url }}
+        source={{ uri: url, type: "m3u8" }}
         style={{ width: "100%", height: "100%" }}
         resizeMode={objectFit === "cover" ? ResizeMode.COVER : ResizeMode.CONTAIN}
         onLoad={handleLoad}

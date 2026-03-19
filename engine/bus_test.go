@@ -19,12 +19,13 @@ func ptr[T any](v T) *T { return &v }
 // testWorld creates a WorldServer with the given entities for testing
 func testWorld(entities map[string]*pb.Entity) *WorldServer {
 	w := &WorldServer{
-		bus:   NewBus(),
-		head:  make(map[string]*pb.Entity),
-		store: NewStore(),
+		bus:      NewBus(),
+		head:     make(map[string]*entityState),
+		headView: make(map[string]*pb.Entity),
+		store:    NewStore(),
 	}
-	for id, e := range entities {
-		w.head[id] = e
+	for _, e := range entities {
+		w.initEntity(e)
 	}
 	return w
 }
@@ -500,7 +501,7 @@ func TestBus_ProducerFasterThanConsumer(t *testing.T) {
 		id := fmt.Sprintf("e%d", i)
 		entity := &pb.Entity{Id: id, Priority: ptr(pb.Priority_PriorityRoutine)}
 		world.l.Lock()
-		world.head[id] = entity
+		world.setEntity(id, entity, nil)
 		world.l.Unlock()
 		bus.Dirty(id, entity, pb.EntityChange_EntityChangeUpdated)
 	}
@@ -534,7 +535,7 @@ func TestConsumer_BurstPriorityUnderLoad(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		id := fmt.Sprintf("low%d", i)
 		world.l.Lock()
-		world.head[id] = &pb.Entity{Id: id, Priority: ptr(pb.Priority_PriorityRoutine)}
+		world.setEntity(id, &pb.Entity{Id: id, Priority: ptr(pb.Priority_PriorityRoutine)}, nil)
 		world.l.Unlock()
 		c.markDirty(id, pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 	}
@@ -768,7 +769,7 @@ func TestSenderLoop_EntityReMarkedDuringLoop(t *testing.T) {
 			if version == 0 {
 				version++
 				world.l.Lock()
-				world.head["e1"] = &pb.Entity{Id: "e1", Label: ptr("v1")}
+				world.setEntity("e1", &pb.Entity{Id: "e1", Label: ptr("v1")}, nil)
 				world.l.Unlock()
 				c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
 			}
@@ -865,14 +866,11 @@ func TestExpireEntityPreservesComponents(t *testing.T) {
 		assertContextErr(t, senderErr)
 	}()
 
-	// Simulate what ExpireEntity does: set Until in-place on the existing entity.
-	world.l.Lock()
-	entity := world.head[device.Id]
-	entity.Lifetime = &pb.Lifetime{
-		Until: timestamppb.New(time.Now().Add(-time.Second)),
+	// Expire the entity using the proper API path.
+	_, err := world.ExpireEntity(context.Background(), peerRequest(&pb.ExpireEntityRequest{Id: device.Id}))
+	if err != nil {
+		t.Fatalf("ExpireEntity failed: %v", err)
 	}
-	world.bus.Dirty(entity.Id, entity, pb.EntityChange_EntityChangeUpdated)
-	world.l.Unlock()
 
 	// GC picks up the expired entity and fires EntityChangeExpired.
 	time.Sleep(20 * time.Millisecond)
@@ -897,6 +895,174 @@ func TestExpireEntityPreservesComponents(t *testing.T) {
 	}
 	if !gotExpired {
 		t.Error("never received EntityChangeExpired through component-50 filter")
+	}
+}
+
+func TestPartialComponentExpiry_Unobserved(t *testing.T) {
+	// Entity has Device + Geo. Consumer filters on component 50 (Device).
+	// Only Device expires via per-component lifetime. After GC the entity
+	// still exists (Geo survives) but no longer matches the filter, so
+	// the consumer must receive EntityChangeUnobserved.
+	past := time.Now().Add(-time.Second)
+	entity := &pb.Entity{
+		Id: "sensor.1",
+		Device: &pb.DeviceComponent{
+			Serial: &pb.SerialDevice{Path: proto.String("/dev/ttyACM0")},
+		},
+		Geo: &pb.GeoSpatialComponent{Latitude: 48.0, Longitude: 11.0},
+	}
+
+	world := testWorld(map[string]*pb.Entity{entity.Id: entity})
+
+	// Manually set Device to expire in the past, Geo permanent.
+	es := world.head[entity.Id]
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentDevice)] = componentMeta{fresh: past, until: past}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = componentMeta{fresh: past}
+
+	filter := &pb.EntityFilter{Component: []uint32{uint32(pb.EntityComponent_EntityComponentDevice)}}
+	c := NewConsumer(world, nil, filter)
+	world.bus.Register(c)
+	defer world.bus.Unregister(c)
+
+	// Seed observed set — simulate that we already sent this entity.
+	c.observed[entity.Id] = struct{}{}
+
+	var mu sync.Mutex
+	var sent []*pb.EntityChangeEvent
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	go func() {
+		_ = c.SenderLoop(ctx, func(ev *pb.EntityChangeEvent) error {
+			mu.Lock()
+			sent = append(sent, ev)
+			mu.Unlock()
+			return nil
+		})
+	}()
+
+	// GC should expire Device but keep Geo.
+	time.Sleep(20 * time.Millisecond)
+	world.gc()
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var gotUnobserved bool
+	for _, ev := range sent {
+		if ev.T == pb.EntityChange_EntityChangeUnobserved {
+			gotUnobserved = true
+			if ev.Entity == nil {
+				t.Error("Unobserved event should carry entity")
+			}
+		}
+	}
+	if !gotUnobserved {
+		t.Errorf("expected EntityChangeUnobserved after Device expired; got events: %v", sent)
+	}
+
+	// Entity should still exist in head (Geo survives).
+	if world.head[entity.Id] == nil {
+		t.Error("entity should still exist in head after partial expiry")
+	}
+	if world.head[entity.Id].entity.Device != nil {
+		t.Error("Device component should have been cleared")
+	}
+	if world.head[entity.Id].entity.Geo == nil {
+		t.Error("Geo component should survive")
+	}
+}
+
+func TestPartialComponentExpiry_ReappearAfterPush(t *testing.T) {
+	// Same setup as TestPartialComponentExpiry_Unobserved: Device expires,
+	// consumer gets Unobserved. Then a new Push adds Device back — the
+	// consumer must receive EntityChangeUpdated again.
+	past := time.Now().Add(-time.Second)
+	entity := &pb.Entity{
+		Id: "sensor.1",
+		Device: &pb.DeviceComponent{
+			Serial: &pb.SerialDevice{Path: proto.String("/dev/ttyACM0")},
+		},
+		Geo: &pb.GeoSpatialComponent{Latitude: 48.0, Longitude: 11.0},
+	}
+
+	world := testWorld(map[string]*pb.Entity{entity.Id: entity})
+
+	// Device expires in the past, Geo permanent.
+	es := world.head[entity.Id]
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentDevice)] = componentMeta{fresh: past, until: past}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = componentMeta{fresh: past}
+
+	filter := &pb.EntityFilter{Component: []uint32{uint32(pb.EntityComponent_EntityComponentDevice)}}
+	c := NewConsumer(world, nil, filter)
+	world.bus.Register(c)
+	defer world.bus.Unregister(c)
+
+	// Seed observed set.
+	c.observed[entity.Id] = struct{}{}
+
+	var mu sync.Mutex
+	var sent []*pb.EntityChangeEvent
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = c.SenderLoop(ctx, func(ev *pb.EntityChangeEvent) error {
+			mu.Lock()
+			sent = append(sent, ev)
+			mu.Unlock()
+			return nil
+		})
+	}()
+
+	// Phase 1: GC expires Device → Unobserved.
+	time.Sleep(20 * time.Millisecond)
+	world.gc()
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	var gotUnobserved bool
+	for _, ev := range sent {
+		if ev.T == pb.EntityChange_EntityChangeUnobserved {
+			gotUnobserved = true
+		}
+	}
+	mu.Unlock()
+	if !gotUnobserved {
+		t.Fatal("prerequisite failed: expected EntityChangeUnobserved after Device expired")
+	}
+
+	// Phase 2: Push Device back onto the entity.
+	_, err := world.Push(context.Background(), peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{{
+			Id: entity.Id,
+			Device: &pb.DeviceComponent{
+				Serial: &pb.SerialDevice{Path: proto.String("/dev/ttyACM1")},
+			},
+		}},
+	}))
+	if err != nil {
+		t.Fatalf("Push failed: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var gotUpdated bool
+	for _, ev := range sent {
+		if ev.T == pb.EntityChange_EntityChangeUpdated && ev.Entity != nil && ev.Entity.Device != nil {
+			gotUpdated = true
+			if ev.Entity.Device.Serial.GetPath() != "/dev/ttyACM1" {
+				t.Errorf("expected new device path, got %s", ev.Entity.Device.Serial.GetPath())
+			}
+		}
+	}
+	if !gotUpdated {
+		t.Errorf("expected EntityChangeUpdated with Device after re-push; got events: %v", sent)
 	}
 }
 

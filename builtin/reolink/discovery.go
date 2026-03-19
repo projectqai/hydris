@@ -305,7 +305,7 @@ func probeOnvifDevices(ctx context.Context, logger *slog.Logger) []string {
 		logger.Error("ws-discovery: listen", "error", err)
 		return nil
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck // best-effort UDP cleanup
 
 	msg := []byte(wsDiscoveryProbeMessage())
 	if _, err := conn.WriteToUDP(msg, addr); err != nil {

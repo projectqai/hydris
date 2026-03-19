@@ -23,9 +23,12 @@ export function IframeStream({ url }: StreamComponentProps) {
     <View className="relative h-full w-full bg-black/20">
       <WebView
         key={retryKey}
-        source={{ uri: embedUrl }}
+        source={{ uri: embedUrl, headers: { Referer: "https://hydris.app" } }}
         allowsInlineMediaPlayback
         mediaPlaybackRequiresUserAction={false}
+        javaScriptEnabled
+        domStorageEnabled
+        allowsFullscreenVideo
         onLoad={() => setConnectionState("connected")}
         onError={(e) => {
           setConnectionState("failed");

@@ -7,11 +7,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/x/term"
+	"github.com/mattn/go-runewidth"
 	"github.com/projectqai/hydris/goclient"
 	pb "github.com/projectqai/proto/go"
 
@@ -34,6 +38,7 @@ var (
 	debugMaxRateHz   float64
 	debugMinPriority string
 	debugKeepaliveMs uint32
+	watchFilterID    string
 )
 
 func init() {
@@ -60,22 +65,16 @@ func init() {
 	lsCmd.Flags().StringVar(&filterBBox, "bbox", "", "filter by bounding box: lon1,lat1,lon2,lat2")
 	lsCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table, yaml, json")
 
-	observeCmd := &cobra.Command{
-		Use:     "o",
-		Aliases: []string{"observe"},
-		Short:   "observe entities within a geometry",
-		RunE:    runObserve,
+	watchCmd := &cobra.Command{
+		Use:     "watch",
+		Aliases: []string{"debug", "w"},
+		Short:   "subscribe to change events and print as JSON",
+		RunE:    runWatch,
 	}
-
-	debugCmd := &cobra.Command{
-		Use:     "debug",
-		Aliases: []string{"d"},
-		Short:   "subscribe to all change events and print as JSON",
-		RunE:    runDebug,
-	}
-	debugCmd.Flags().Float64Var(&debugMaxRateHz, "max-rate-hz", 0, "max message rate in hz (0 = unlimited)")
-	debugCmd.Flags().StringVar(&debugMinPriority, "min-priority", "", "minimum priority level: routine, immediate, flash")
-	debugCmd.Flags().Uint32Var(&debugKeepaliveMs, "keepalive-ms", 0, "keepalive interval in ms (0 = only actual changes)")
+	watchCmd.Flags().Float64Var(&debugMaxRateHz, "max-rate-hz", 0, "max message rate in hz (0 = unlimited)")
+	watchCmd.Flags().StringVar(&debugMinPriority, "min-priority", "", "minimum priority level: routine, immediate, flash")
+	watchCmd.Flags().Uint32Var(&debugKeepaliveMs, "keepalive-ms", 0, "keepalive interval in ms (0 = only actual changes)")
+	watchCmd.Flags().StringVar(&watchFilterID, "id", "", "filter by entity ID (exact match)")
 
 	getCmd := &cobra.Command{
 		Use:   "get [entity-id]",
@@ -132,61 +131,23 @@ func init() {
 	}
 
 	ECCMD.AddCommand(lsCmd)
-	ECCMD.AddCommand(observeCmd)
-	ECCMD.AddCommand(debugCmd)
+	ECCMD.AddCommand(watchCmd)
 	ECCMD.AddCommand(getCmd)
 	ECCMD.AddCommand(putCmd)
 	ECCMD.AddCommand(editCmd)
 	ECCMD.AddCommand(rmCmd)
 	ECCMD.AddCommand(confCmd)
+	resetCmd := &cobra.Command{
+		Use:   "reset",
+		Short: "hard reset: atomically clear all entities, persistence, and HTTP connections",
+		RunE:  runReset,
+	}
+
 	ECCMD.AddCommand(clearCmd)
 	ECCMD.AddCommand(dtCmd)
+	ECCMD.AddCommand(resetCmd)
 
 	CMD.AddCommand(ECCMD)
-}
-
-func runObserve(cmd *cobra.Command, args []string) error {
-	world := pb.NewWorldServiceClient(conn)
-
-	stream, err := goclient.WatchEntitiesWithRetry(cmd.Context(), world, &pb.ListEntitiesRequest{
-		Filter: &pb.EntityFilter{
-			Geo: &pb.GeoFilter{
-				Geo: &pb.GeoFilter_Geometry{
-					Geometry: &pb.Geometry{
-						Planar: &pb.PlanarGeometry{
-							Plane: &pb.PlanarGeometry_Polygon{
-								Polygon: &pb.PlanarPolygon{
-									Outer: &pb.PlanarRing{
-										Points: []*pb.PlanarPoint{
-											{Longitude: 13.08, Latitude: 52.34},
-											{Longitude: 13.76, Latitude: 52.34},
-											{Longitude: 13.76, Latitude: 52.68},
-											{Longitude: 13.08, Latitude: 52.68},
-											{Longitude: 13.08, Latitude: 52.34},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to list entities: %w", err)
-	}
-
-	for {
-		m, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			panic(err)
-		}
-		printEntitiesTable([]*pb.Entity{m.Entity}, "")
-	}
 }
 
 func intSliceToUint32(ints []int) []uint32 {
@@ -452,20 +413,64 @@ func runLS(cmd *cobra.Command, args []string) error {
 	}
 }
 
+func humanDuration(d time.Duration) string {
+	if d < 0 {
+		d = -d
+	}
+	switch {
+	case d < time.Second:
+		return "<1s"
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		m := int(d.Minutes())
+		s := int(d.Seconds()) - m*60
+		if s == 0 {
+			return fmt.Sprintf("%dm", m)
+		}
+		return fmt.Sprintf("%dm%ds", m, s)
+	case d < 24*time.Hour:
+		h := int(d.Hours())
+		m := int(d.Minutes()) - h*60
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh%dm", h, m)
+	case d < 365*24*time.Hour:
+		days := int(math.Round(d.Hours() / 24))
+		return fmt.Sprintf("%dd", days)
+	default:
+		return ">1y"
+	}
+}
+
+func termWidth() int {
+	for _, f := range []*os.File{os.Stdout, os.Stderr, os.Stdin} {
+		if w, _, err := term.GetSize(f.Fd()); err == nil && w > 0 {
+			return w
+		}
+	}
+	return 0
+}
+
 func printEntitiesTable(entities []*pb.Entity, localNodeID string) {
 	if len(entities) == 0 {
 		fmt.Println("No entities found")
 		return
 	}
 
-	tbl := table.New("ID", "Label", "State", "Latitude", "Longitude", "Local")
+	now := time.Now()
+
+	// All columns in display order; rightmost are dropped first.
+	headers := []string{"CH", "ID", "Label", "State", "Seen", "Expire", "Latitude", "Longitude"}
+	var rows [][]string
 
 	for _, entity := range entities {
 		if entity == nil {
 			continue
 		}
-		lat := "N/A"
-		lon := "N/A"
+		lat := ""
+		lon := ""
 		if entity.Geo != nil {
 			lat = fmt.Sprintf("%.6f", entity.Geo.Latitude)
 			lon = fmt.Sprintf("%.6f", entity.Geo.Longitude)
@@ -500,21 +505,94 @@ func printEntitiesTable(entities []*pb.Entity, localNodeID string) {
 				}
 			}
 		}
+		if runewidth.StringWidth(state) > 24 {
+			state = runewidth.Truncate(state, 23, "…")
+		}
 		label := ""
 		if entity.Label != nil {
 			label = *entity.Label
-		}
-
-		local := ""
-		if localNodeID != "" && entity.Controller != nil && entity.Controller.Node != nil {
-			if *entity.Controller.Node == localNodeID {
-				local = "yes"
-			} else {
-				local = "no"
+			if runewidth.StringWidth(label) > 16 {
+				label = runewidth.Truncate(label, 15, "…")
 			}
 		}
 
-		tbl.AddRow(entity.Id, label, state, lat, lon, local)
+		fresh := ""
+		until := ""
+		if entity.Lifetime != nil {
+			if entity.Lifetime.Fresh != nil {
+				t := entity.Lifetime.Fresh.AsTime()
+				d := now.Sub(t)
+				fresh = humanDuration(d) + " ago"
+			}
+			if entity.Lifetime.Until != nil {
+				t := entity.Lifetime.Until.AsTime()
+				d := t.Sub(now)
+				if d > 0 {
+					until = "in " + humanDuration(d)
+				} else {
+					until = humanDuration(-d) + " ago"
+				}
+			}
+		}
+
+		prefix := "▪ "
+		ch := ""
+		if entity.Routing != nil && len(entity.Routing.Channels) > 0 {
+			ch = fmt.Sprintf("%d", len(entity.Routing.Channels))
+			isRemote := localNodeID != "" && entity.Controller != nil && entity.Controller.Node != nil && *entity.Controller.Node != localNodeID
+			if isRemote {
+				prefix = "⇣ "
+			} else {
+				prefix = "⇡ "
+			}
+		}
+		ch = prefix + ch
+
+		rows = append(rows, []string{ch, entity.Id, label, state, fresh, until, lat, lon})
+	}
+
+	// Calculate how many columns fit in the terminal.
+	// Drop columns from the right until the table fits.
+	width := termWidth()
+	padding := 2
+	numCols := len(headers)
+
+	// Precompute max display width per column.
+	colWidths := make([]int, len(headers))
+	for col := 0; col < len(headers); col++ {
+		colWidths[col] = runewidth.StringWidth(headers[col])
+		for _, row := range rows {
+			if rw := runewidth.StringWidth(row[col]); rw > colWidths[col] {
+				colWidths[col] = rw
+			}
+		}
+	}
+
+	if width > 0 {
+		for numCols > 1 {
+			total := 0
+			for col := 0; col < numCols; col++ {
+				total += colWidths[col] + padding
+			}
+			if total <= width {
+				break
+			}
+			numCols--
+		}
+	}
+
+	ifaces := make([]interface{}, numCols)
+	for i := 0; i < numCols; i++ {
+		ifaces[i] = headers[i]
+	}
+	tbl := table.New(ifaces...)
+
+	for _, row := range rows {
+		vals := make([]interface{}, numCols)
+		for i := 0; i < numCols; i++ {
+			vals[i] = row[i]
+		}
+		tbl.AddRow(vals...)
 	}
 
 	tbl.Print()
@@ -559,10 +637,16 @@ func printEntitiesJSON(entities []*pb.Entity) error {
 	return nil
 }
 
-func runDebug(cmd *cobra.Command, args []string) error {
+func runWatch(cmd *cobra.Command, args []string) error {
 	world := pb.NewWorldServiceClient(conn)
 
 	req := &pb.ListEntitiesRequest{}
+
+	if watchFilterID != "" {
+		req.Filter = &pb.EntityFilter{
+			Id: &watchFilterID,
+		}
+	}
 
 	// Build WatchBehavior if any flags are set
 	if debugMaxRateHz != 0 || debugMinPriority != "" || debugKeepaliveMs != 0 {
@@ -865,5 +949,15 @@ func runClear(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Println("Clear complete")
+	return nil
+}
+
+func runReset(cmd *cobra.Command, args []string) error {
+	client := pb.NewWorldServiceClient(conn)
+	_, err := client.HardReset(context.Background(), &pb.HardResetRequest{})
+	if err != nil {
+		return fmt.Errorf("hard reset failed: %w", err)
+	}
+	fmt.Println("Hard reset complete")
 	return nil
 }

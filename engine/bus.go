@@ -29,6 +29,17 @@ func (b *Bus) Unregister(c *Consumer) {
 	delete(b.consumers, c)
 }
 
+// CloseAll cancels all consumers, forcing their WatchEntities streams to terminate.
+func (b *Bus) CloseAll() {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for c := range b.consumers {
+		if c.cancel != nil {
+			c.cancel()
+		}
+	}
+}
+
 func (b *Bus) Dirty(entityID string, entity *pb.Entity, change pb.EntityChange) {
 	priority := pb.Priority_PriorityRoutine
 	if entity != nil && entity.Priority != nil {

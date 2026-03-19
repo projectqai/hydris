@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,45 @@ func ValidatePath(path string) error {
 
 var LocalPermissions Permissions
 
+// sharedMux is an HTTP mux that builtins can register handlers on.
+// The engine mounts this mux so that builtin HTTP endpoints are served
+// on the main engine port without needing separate listeners.
+var sharedMux sync.Mutex
+var currentMux = http.NewServeMux()
+
+// Handle registers an HTTP handler on the shared builtin mux.
+func Handle(pattern string, handler http.Handler) {
+	sharedMux.Lock()
+	defer sharedMux.Unlock()
+	currentMux.Handle(pattern, handler)
+}
+
+// HandleFunc registers an HTTP handler function on the shared builtin mux.
+func HandleFunc(pattern string, handler http.HandlerFunc) {
+	sharedMux.Lock()
+	defer sharedMux.Unlock()
+	currentMux.HandleFunc(pattern, handler)
+}
+
+// HTTPHandler returns a handler that delegates to the current shared mux.
+// The indirection allows ResetHTTPHandlers to swap the underlying mux.
+func HTTPHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sharedMux.Lock()
+		mux := currentMux
+		sharedMux.Unlock()
+		mux.ServeHTTP(w, r)
+	})
+}
+
+// ResetHTTPHandlers replaces the shared mux so that restarting builtins
+// can re-register their HTTP routes without conflicting with old patterns.
+func ResetHTTPHandlers() {
+	sharedMux.Lock()
+	defer sharedMux.Unlock()
+	currentMux = http.NewServeMux()
+}
+
 const bufSize = 1024 * 1024
 
 var (
@@ -100,7 +140,46 @@ func Register(name string, run func(ctx context.Context, logger *slog.Logger, se
 	})
 }
 
+var (
+	builtinCancel context.CancelFunc
+	builtinMu     sync.Mutex
+	builtinParent context.Context
+	builtinServer string
+)
+
 func StartAll(ctx context.Context, serverURL string) {
+	builtinMu.Lock()
+	builtinParent = ctx
+	builtinServer = serverURL
+	builtinMu.Unlock()
+
+	startAllInternal(ctx, serverURL)
+}
+
+// RestartAll cancels all running builtins and starts them again.
+func RestartAll() {
+	builtinMu.Lock()
+	cancel := builtinCancel
+	parent := builtinParent
+	serverURL := builtinServer
+	builtinMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+
+	// Give goroutines a moment to exit.
+	time.Sleep(100 * time.Millisecond)
+
+	startAllInternal(parent, serverURL)
+}
+
+func startAllInternal(parent context.Context, serverURL string) {
+	ctx, cancel := context.WithCancel(parent)
+	builtinMu.Lock()
+	builtinCancel = cancel
+	builtinMu.Unlock()
+
 	for _, b := range builtins {
 		builtin := b // capture loop variable
 		go func() {
@@ -110,7 +189,6 @@ func StartAll(ctx context.Context, serverURL string) {
 			for {
 				select {
 				case <-ctx.Done():
-					logger.Info("Stopping (context cancelled)")
 					return
 				default:
 				}
@@ -118,7 +196,6 @@ func StartAll(ctx context.Context, serverURL string) {
 				err := builtin.Run(ctx, logger, serverURL)
 
 				if ctx.Err() != nil {
-					// Context cancelled, don't restart
 					return
 				}
 

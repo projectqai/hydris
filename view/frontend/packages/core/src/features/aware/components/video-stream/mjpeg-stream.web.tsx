@@ -3,11 +3,10 @@ import { useEffect, useId, useRef, useState } from "react";
 import { ConnectionOverlay } from "./connection-overlay";
 import type { ConnectionState, StreamComponentProps } from "./types";
 
-function resolveUrl(url: string, instanceId: string): string {
-  const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost";
-  const resolved = new URL(url, origin);
-  resolved.searchParams.set("_instance", instanceId);
-  return resolved.href;
+function appendInstanceParam(url: string, instanceId: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set("_instance", instanceId);
+  return parsed.href;
 }
 
 export function MJPEGStream({ url, objectFit = "cover" }: StreamComponentProps) {
@@ -20,7 +19,7 @@ export function MJPEGStream({ url, objectFit = "cover" }: StreamComponentProps) 
     const img = imgRef.current;
     if (!img) return;
 
-    img.src = resolveUrl(url, instanceId);
+    img.src = appendInstanceParam(url, instanceId);
 
     return () => {
       img.src = "";
@@ -42,7 +41,7 @@ export function MJPEGStream({ url, objectFit = "cover" }: StreamComponentProps) 
     setConnectionState("connecting");
     setError(null);
     if (imgRef.current) {
-      imgRef.current.src = resolveUrl(url, instanceId);
+      imgRef.current.src = appendInstanceParam(url, instanceId);
     }
   };
 

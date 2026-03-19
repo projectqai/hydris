@@ -1,0 +1,26 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - os.Setenv
+        - os.RemoveAll
+        - os.Remove
+        - io.Copy
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (net.Conn).Close
+        - (*github.com/dop251/goja.Runtime).Set
+        - (*github.com/dop251/goja.Runtime).RunScript
+        - (*github.com/dop251/goja.Object).Set
+        - (*github.com/pion/webrtc/v4.PeerConnection).Close
+        - net/http.Post

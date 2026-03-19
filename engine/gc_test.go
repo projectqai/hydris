@@ -102,6 +102,73 @@ func TestGC_FrozenTimeline(t *testing.T) {
 	}
 }
 
+func TestGC_NoLifetimeComponentDoesNotPreventExpiry(t *testing.T) {
+	past := time.Now().Add(-time.Second)
+
+	// Entity has Geo (with lifetime+until) and Administrative (no lifetime).
+	// Simulates adsblol + adsbdb enrichment scenario.
+	entity := &pb.Entity{
+		Id:             "e1",
+		Geo:            &pb.GeoSpatialComponent{Latitude: 48},
+		Administrative: &pb.AdministrativeComponent{Id: ptr("REG-123")},
+		Lifetime: &pb.Lifetime{
+			From:  timestamppb.New(past),
+			Until: timestamppb.New(past),
+		},
+	}
+
+	w := testWorld(map[string]*pb.Entity{"e1": entity})
+
+	// Geo has a real lifetime that expires. Administrative has noLifetime.
+	es := w.head["e1"]
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = componentMeta{fresh: past, until: past}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentAdministrative)] = componentMeta{noLifetime: true}
+
+	w.gc()
+
+	if w.GetHead("e1") != nil {
+		t.Error("entity should be expired; noLifetime component should not keep it alive")
+	}
+}
+
+func TestGC_NoLifetimeComponentKeptWhenTrackedSurvives(t *testing.T) {
+	past := time.Now().Add(-time.Second)
+	future := time.Now().Add(time.Hour)
+
+	entity := &pb.Entity{
+		Id:             "e1",
+		Geo:            &pb.GeoSpatialComponent{Latitude: 48},
+		Track:          &pb.TrackComponent{Tracker: ptr("t1")},
+		Administrative: &pb.AdministrativeComponent{Id: ptr("REG-123")},
+		Lifetime: &pb.Lifetime{
+			From: timestamppb.New(past),
+		},
+	}
+
+	w := testWorld(map[string]*pb.Entity{"e1": entity})
+
+	es := w.head["e1"]
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = componentMeta{fresh: past, until: past}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentTrack)] = componentMeta{fresh: past, until: future}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentAdministrative)] = componentMeta{noLifetime: true}
+
+	w.gc()
+
+	e := w.GetHead("e1")
+	if e == nil {
+		t.Fatal("entity should survive; Track component is still alive")
+	}
+	if e.Geo != nil {
+		t.Error("expired Geo should be removed")
+	}
+	if e.Track == nil {
+		t.Error("Track should still be present")
+	}
+	if e.Administrative == nil {
+		t.Error("Administrative (noLifetime) should be kept when entity survives")
+	}
+}
+
 func TestGC_NoLifetimeUntil(t *testing.T) {
 	entity := &pb.Entity{
 		Id: "e1",

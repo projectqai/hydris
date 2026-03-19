@@ -94,7 +94,9 @@ func parseRadioSettings(fields map[string]*structpb.Value, currentState map[stri
 	}
 	if v, ok := fields["radio_tx_power"]; ok {
 		n := v.GetNumberValue()
-		if !sameNum("radio_tx_power", n) {
+		// Skip zero — the UI fills in 0 as a schema default for fields
+		// the user never touched. Zero means "max legal default" anyway.
+		if n != 0 && !sameNum("radio_tx_power", n) {
 			n32 := int32(n)
 			rs.txPower = &n32
 			any = true
@@ -102,7 +104,10 @@ func parseRadioSettings(fields map[string]*structpb.Value, currentState map[stri
 	}
 	if v, ok := fields["radio_tx_enabled"]; ok {
 		b := v.GetBoolValue()
-		if !sameBool("radio_tx_enabled", b) {
+		// Only process when true — the UI fills in false as a default.
+		// Disabling TX is destructive; require explicit true→false via
+		// a config that already had tx_enabled=true previously.
+		if b && !sameBool("radio_tx_enabled", b) {
 			rs.txEnabled = &b
 			any = true
 		}
@@ -123,7 +128,8 @@ func parseRadioSettings(fields map[string]*structpb.Value, currentState map[stri
 	}
 	if v, ok := fields["position_interval_secs"]; ok {
 		n := v.GetNumberValue()
-		if !sameNum("position_interval_secs", n) {
+		// Skip zero — means "use default 15min", same as not setting it.
+		if n != 0 && !sameNum("position_interval_secs", n) {
 			n32 := uint32(n)
 			rs.positionIntervalSecs = &n32
 			any = true
@@ -131,7 +137,9 @@ func parseRadioSettings(fields map[string]*structpb.Value, currentState map[stri
 	}
 	if v, ok := fields["position_smart"]; ok {
 		b := v.GetBoolValue()
-		if !sameBool("position_smart", b) {
+		// Only process when true — false is the proto default and the
+		// UI fills it in for untouched fields.
+		if b && !sameBool("position_smart", b) {
 			rs.positionSmart = &b
 			any = true
 		}
@@ -181,6 +189,12 @@ func parseRadioSettings(fields map[string]*structpb.Value, currentState map[stri
 // applyRadioConfig sends admin messages to configure the radio based on the
 // desired settings. It reads the current config from the handshake, merges
 // user values, and sends only changed sections.
+//
+// LoRa config changes (region, preset, tx power, tx enabled) require a
+// transactional edit (BeginEditSettings / CommitEditSettings) which causes
+// the device firmware to save and reboot. All other changes (device role,
+// position, owner, channel) are sent as individual admin messages and take
+// effect without rebooting the device.
 func applyRadioConfig(logger *slog.Logger, radio *Radio, handshake *RadioHandshake, desired *radioSettings) error {
 	if desired == nil {
 		return nil
@@ -203,11 +217,13 @@ func applyRadioConfig(logger *slog.Logger, radio *Radio, handshake *RadioHandsha
 		}
 	}
 
-	// Build changed sections.
-	var adminMsgs []*meshpb.AdminMsg
+	// Separate LoRa changes (require transaction + device reboot) from
+	// soft changes (can be applied individually without reboot).
+	var loraMsgs []*meshpb.AdminMsg
+	var softMsgs []*meshpb.AdminMsg
 
 	if lora := mergeLora(logger, curLora, desired); lora != nil {
-		adminMsgs = append(adminMsgs, &meshpb.AdminMsg{
+		loraMsgs = append(loraMsgs, &meshpb.AdminMsg{
 			PayloadVariant: &meshpb.AdminMsg_SetConfig{
 				SetConfig: &meshpb.CfgSet{
 					PayloadVariant: &meshpb.CfgSet_Lora{Lora: lora},
@@ -217,7 +233,7 @@ func applyRadioConfig(logger *slog.Logger, radio *Radio, handshake *RadioHandsha
 	}
 
 	if dev := mergeDevice(logger, curDevice, desired); dev != nil {
-		adminMsgs = append(adminMsgs, &meshpb.AdminMsg{
+		softMsgs = append(softMsgs, &meshpb.AdminMsg{
 			PayloadVariant: &meshpb.AdminMsg_SetConfig{
 				SetConfig: &meshpb.CfgSet{
 					PayloadVariant: &meshpb.CfgSet_Device{Device: dev},
@@ -227,7 +243,7 @@ func applyRadioConfig(logger *slog.Logger, radio *Radio, handshake *RadioHandsha
 	}
 
 	if pos := mergePosition(logger, curPosition, desired); pos != nil {
-		adminMsgs = append(adminMsgs, &meshpb.AdminMsg{
+		softMsgs = append(softMsgs, &meshpb.AdminMsg{
 			PayloadVariant: &meshpb.AdminMsg_SetConfig{
 				SetConfig: &meshpb.CfgSet{
 					PayloadVariant: &meshpb.CfgSet_Position{Position: pos},
@@ -237,47 +253,57 @@ func applyRadioConfig(logger *slog.Logger, radio *Radio, handshake *RadioHandsha
 	}
 
 	if owner := buildOwner(logger, handshake, desired); owner != nil {
-		adminMsgs = append(adminMsgs, &meshpb.AdminMsg{
+		softMsgs = append(softMsgs, &meshpb.AdminMsg{
 			PayloadVariant: &meshpb.AdminMsg_SetOwner{SetOwner: owner},
 		})
 	}
 
 	if ch := buildChannel(logger, handshake, desired); ch != nil {
-		adminMsgs = append(adminMsgs, &meshpb.AdminMsg{
+		softMsgs = append(softMsgs, &meshpb.AdminMsg{
 			PayloadVariant: &meshpb.AdminMsg_SetChannel{SetChannel: ch},
 		})
 	}
 
-	if len(adminMsgs) == 0 {
+	if len(loraMsgs) == 0 && len(softMsgs) == 0 {
 		logger.Info("No radio config changes to apply")
 		return nil
 	}
 
-	logger.Info("Applying radio config", "sections", len(adminMsgs))
-
-	// Begin edit transaction.
-	logger.Info("Beginning radio config transaction")
-	if err := sendAdminPacket(radio, nodeNum, &meshpb.AdminMsg{
-		PayloadVariant: &meshpb.AdminMsg_BeginEditSettings{BeginEditSettings: true},
-	}); err != nil {
-		return fmt.Errorf("begin edit: %w", err)
+	// Apply soft changes individually — no transaction, no reboot.
+	if len(softMsgs) > 0 {
+		logger.Info("Applying soft radio config (no reboot)", "sections", len(softMsgs))
+		for _, msg := range softMsgs {
+			if err := sendAdminPacket(radio, nodeNum, msg); err != nil {
+				return fmt.Errorf("send admin: %w", err)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 	}
-	time.Sleep(100 * time.Millisecond)
 
-	for i, msg := range adminMsgs {
-		logger.Info("Sending config section", "index", i+1, "total", len(adminMsgs))
-		if err := sendAdminPacket(radio, nodeNum, msg); err != nil {
-			return fmt.Errorf("send admin: %w", err)
+	// Apply LoRa changes in a transaction — device will save and reboot.
+	if len(loraMsgs) > 0 {
+		logger.Info("Applying LoRa config (device will reboot)", "sections", len(loraMsgs))
+
+		if err := sendAdminPacket(radio, nodeNum, &meshpb.AdminMsg{
+			PayloadVariant: &meshpb.AdminMsg_BeginEditSettings{BeginEditSettings: true},
+		}); err != nil {
+			return fmt.Errorf("begin edit: %w", err)
 		}
 		time.Sleep(100 * time.Millisecond)
-	}
 
-	// Commit — device will save and may reboot.
-	logger.Info("Committing radio config")
-	if err := sendAdminPacket(radio, nodeNum, &meshpb.AdminMsg{
-		PayloadVariant: &meshpb.AdminMsg_CommitEditSettings{CommitEditSettings: true},
-	}); err != nil {
-		return fmt.Errorf("commit edit: %w", err)
+		for _, msg := range loraMsgs {
+			if err := sendAdminPacket(radio, nodeNum, msg); err != nil {
+				return fmt.Errorf("send admin: %w", err)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		logger.Info("Committing LoRa config")
+		if err := sendAdminPacket(radio, nodeNum, &meshpb.AdminMsg{
+			PayloadVariant: &meshpb.AdminMsg_CommitEditSettings{CommitEditSettings: true},
+		}); err != nil {
+			return fmt.Errorf("commit edit: %w", err)
+		}
 	}
 
 	logger.Info("Radio config applied successfully")

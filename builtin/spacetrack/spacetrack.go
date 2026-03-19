@@ -529,8 +529,9 @@ func positionToEntity(position *SatellitePosition, tle *sgp4.TLE, entityID, labe
 	velVar := velUncertaintyMs * velUncertaintyMs
 
 	entity := &pb.Entity{
-		Id:    entityID,
-		Label: &label,
+		Id:      entityID,
+		Label:   &label,
+		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 		Lifetime: &pb.Lifetime{
 			From:  timestamppb.Now(),
 			Until: timestamppb.New(time.Now().Add(expires * 2)),
@@ -630,7 +631,8 @@ func orbitMissionEntity(tle *sgp4.TLE, satelliteEntityID string, controllerName 
 	}
 
 	entity := &pb.Entity{
-		Id: missionID,
+		Id:      missionID,
+		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 		Lifetime: &pb.Lifetime{
 			From:  timestamppb.Now(),
 			Until: timestamppb.New(time.Now().Add(expires * 2)),

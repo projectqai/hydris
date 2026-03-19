@@ -49,6 +49,9 @@ export function getTrailSegments(
       case "config":
         label = "Configuration";
         break;
+      case "command-group":
+        label = mode.groupLabel;
+        break;
       default:
         label = "Root";
         break;
@@ -83,6 +86,7 @@ export const COMMAND_SUBCATEGORIES: { id: string; label: string }[] = [
   { id: "overlay", label: "Overlays" },
   { id: "preset", label: "Presets" },
   { id: "selection", label: "Selection" },
+  { id: "world", label: "World" },
 ];
 
 export const DIMENSION_ICON: Record<string, LucideIcon> = {

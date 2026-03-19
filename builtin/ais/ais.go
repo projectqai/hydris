@@ -493,7 +493,7 @@ func processAISPacket(ctx context.Context, logger *slog.Logger, packet ais.Packe
 			return false
 		}
 
-		entityID := fmt.Sprintf("ais.%d", mmsi)
+		entityID := fmt.Sprintf("mmsi:%d", mmsi)
 		controllerID := controllerName
 
 		mission := &pb.MissionComponent{}
@@ -544,6 +544,7 @@ func processAISPacket(ctx context.Context, logger *slog.Logger, packet ais.Packe
 			Transponder: &pb.TransponderComponent{
 				Ais: transponderAIS,
 			},
+			Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 		}
 
 		name := strings.TrimSpace(msg.Name)
@@ -580,7 +581,7 @@ func checkGeoFilter(vessel *AISVessel, config *StreamConfig) bool {
 }
 
 func VesselToEntity(vessel *AISVessel, controllerName string, trackerID string, expires time.Duration) *pb.Entity {
-	entityID := fmt.Sprintf("ais.%d", vessel.MMSI)
+	entityID := fmt.Sprintf("mmsi:%d", vessel.MMSI)
 
 	altitude := 0.0
 	sidc := vesselTypeToSIDC(vessel.Type)
@@ -626,6 +627,7 @@ func VesselToEntity(vessel *AISVessel, controllerName string, trackerID string, 
 		Track: &pb.TrackComponent{
 			Tracker: &trackerID,
 		},
+		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 	}
 
 	entity.Transponder = &pb.TransponderComponent{
@@ -714,6 +716,7 @@ func SelfToEntity(rmc nmea.RMC, controllerName string, trackerID string, config 
 		Track: &pb.TrackComponent{
 			Tracker: &trackerID,
 		},
+		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 	}
 
 	if rmc.Course >= 0 && rmc.Course < 360 {

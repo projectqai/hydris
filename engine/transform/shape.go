@@ -55,18 +55,18 @@ func (st *ShapeTransformer) Resolve(head map[string]*pb.Entity, changedID string
 			delete(st.managed, changedID)
 			st.removeChild(changedID)
 		}
-		// If it was a parent, re-resolve all dependents (they'll fail to find parent geo)
+		// If it was a parent, expire all dependent shape entities whose
+		// only purpose is their LocalShapeComponent (they can no longer be resolved).
 		if children, ok := st.byParent[changedID]; ok {
 			delete(st.byParent, changedID)
 			for _, childID := range children {
-				if child := head[childID]; child != nil {
-					// Parent gone — remove engine-managed GeoShapeComponent
-					child.Shape = nil
-					delete(st.managed, childID)
+				delete(st.managed, childID)
+				if head[childID] != nil {
+					remove = append(remove, childID)
 				}
 			}
 		}
-		return nil, nil
+		return nil, remove
 	}
 
 	// If entity has LocalShapeComponent with RelativeTo, resolve it
@@ -144,27 +144,51 @@ func transformLocalToWGS84(local *pb.LocalGeometry, lat, lon float64, q *pb.Quat
 			Plane: &pb.PlanarGeometry_Point{
 				Point: transformPoint(v.Point, lat, lon, q),
 			},
+			LineStyle: local.LineStyle,
 		}
 	case *pb.LocalGeometry_Line:
 		return &pb.PlanarGeometry{
 			Plane: &pb.PlanarGeometry_Line{
 				Line: transformRing(v.Line, lat, lon, q),
 			},
+			LineStyle: local.LineStyle,
 		}
 	case *pb.LocalGeometry_Polygon:
 		return &pb.PlanarGeometry{
 			Plane: &pb.PlanarGeometry_Polygon{
 				Polygon: transformPolygon(v.Polygon, lat, lon, q),
 			},
+			LineStyle: local.LineStyle,
 		}
 	case *pb.LocalGeometry_Circle:
 		return &pb.PlanarGeometry{
 			Plane: &pb.PlanarGeometry_Circle{
 				Circle: transformCircle(v.Circle, lat, lon, q),
 			},
+			LineStyle: local.LineStyle,
 		}
+	case *pb.LocalGeometry_Collection:
+		return transformCollection(v.Collection, lat, lon, q, local.LineStyle)
 	}
 	return nil
+}
+
+func transformCollection(c *pb.LocalGeometryCollection, lat, lon float64, q *pb.Quaternion, lineStyle *pb.LineStyle) *pb.PlanarGeometry {
+	planarGeometries := make([]*pb.PlanarGeometry, 0, len(c.Geometries))
+	for _, g := range c.Geometries {
+		p := transformLocalToWGS84(g, lat, lon, q)
+		if p != nil {
+			planarGeometries = append(planarGeometries, p)
+		}
+	}
+	return &pb.PlanarGeometry{
+		Plane: &pb.PlanarGeometry_Collection{
+			Collection: &pb.PlanarGeometryCollection{
+				Geometries: planarGeometries,
+			},
+		},
+		LineStyle: lineStyle,
+	}
 }
 
 func transformPoint(p *pb.LocalPoint, lat, lon float64, q *pb.Quaternion) *pb.PlanarPoint {

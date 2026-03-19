@@ -25,6 +25,7 @@ export interface MapViewRef {
     filterJson: string,
     coverageVisible: boolean,
     shapesVisible: boolean,
+    detectionsVisible: boolean,
     trackHistoryVisible: boolean,
   ) => void;
   pushRangeRing: (centerJson: string | null, active: boolean) => void;
@@ -53,6 +54,7 @@ type MapViewProps = {
   initialZoom?: number;
   coverageVisible?: boolean;
   shapesVisible?: boolean;
+  detectionsVisible?: boolean;
   trackHistoryVisible?: boolean;
   onReady?: () => Promise<void>;
   onEntityClick?: (id: string | null) => Promise<void>;
@@ -75,6 +77,7 @@ export default function MapView({
   initialZoom,
   coverageVisible = false,
   shapesVisible = true,
+  detectionsVisible = false,
   trackHistoryVisible = false,
   onReady,
   onEntityClick,
@@ -115,6 +118,7 @@ export default function MapView({
   const [pushedFilterJson, setPushedFilterJson] = useState<string>(filterJson ?? "");
   const [pushedCoverageVisible, setPushedCoverageVisible] = useState(coverageVisible);
   const [pushedShapesVisible, setPushedShapesVisible] = useState(shapesVisible);
+  const [pushedDetectionsVisible, setPushedDetectionsVisible] = useState(detectionsVisible);
   const [pushedTrackHistoryVisible, setPushedTrackHistoryVisible] = useState(trackHistoryVisible);
   const [pushedRangeRingCenter, setPushedRangeRingCenter] = useState<GeoPosition | null>(null);
   const [pushedRangeRingsActive, setPushedRangeRingsActive] = useState(false);
@@ -132,7 +136,7 @@ export default function MapView({
     ? JSON.parse(pushedFilterJson)
     : undefined;
   const resolvedFilter = filter ?? {
-    tracks: { blue: true, red: true, neutral: true, unknown: true },
+    tracks: { blue: true, red: true, neutral: true, unknown: true, unclassified: true },
     sensors: {},
   };
 
@@ -251,12 +255,14 @@ export default function MapView({
           filterJson: string,
           coverageVisible: boolean,
           shapesVisible: boolean,
+          detectionsVisible: boolean,
           trackHistoryVisible: boolean,
         ) => {
           setPushedBaseLayer(baseLayer as BaseLayer);
           setPushedFilterJson(filterJson);
           setPushedCoverageVisible(coverageVisible);
           setPushedShapesVisible(shapesVisible);
+          setPushedDetectionsVisible(detectionsVisible);
           setPushedTrackHistoryVisible(trackHistoryVisible);
         },
         pushRangeRing: (centerJson: string | null, active: boolean) => {
@@ -335,6 +341,7 @@ export default function MapView({
         initialView={initialView}
         coverageVisible={pushedCoverageVisible}
         shapesVisible={pushedShapesVisible}
+        detectionsVisible={pushedDetectionsVisible}
         trackHistoryVisible={pushedTrackHistoryVisible}
         rangeRingCenter={pushedRangeRingCenter}
         rangeRingsActive={pushedRangeRingsActive}

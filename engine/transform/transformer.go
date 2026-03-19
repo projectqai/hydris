@@ -20,8 +20,9 @@ type Bus interface {
 }
 
 // RunTransformers runs all transformers for a changed entity, applying upserts and
-// removes to head and notifying the bus.
-func RunTransformers(transformers []Transformer, head map[string]*pb.Entity, bus Bus, changedID string) {
+// removes to head and notifying the bus. Returns the IDs of upserted and removed
+// entities so callers can sync secondary stores.
+func RunTransformers(transformers []Transformer, head map[string]*pb.Entity, bus Bus, changedID string) (upserted, removed []string) {
 	changedIDs := []string{changedID}
 	for _, t := range transformers {
 		var newIDs []string
@@ -31,14 +32,18 @@ func RunTransformers(transformers []Transformer, head map[string]*pb.Entity, bus
 				head[e.Id] = e
 				bus.Dirty(e.Id, e, pb.EntityChange_EntityChangeUpdated)
 				newIDs = append(newIDs, e.Id)
+				upserted = append(upserted, e.Id)
 			}
 			for _, rid := range remove {
 				if e, ok := head[rid]; ok {
 					delete(head, rid)
 					bus.Dirty(rid, e, pb.EntityChange_EntityChangeExpired)
+					removed = append(removed, rid)
+					newIDs = append(newIDs, rid)
 				}
 			}
 		}
 		changedIDs = append(changedIDs, newIDs...)
 	}
+	return upserted, removed
 }

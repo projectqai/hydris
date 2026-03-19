@@ -83,6 +83,7 @@ export type ConfigTreeMatch = {
   configState: DeviceNode["configState"];
   isConfigurable: boolean;
   breadcrumb: string[];
+  ranges: number[];
 };
 
 export type ConfigTreeResult = {
@@ -163,6 +164,16 @@ export function filterConfigTree(tree: CategoryGroup[], query: string, max = 50)
     const itemIdx = info.idx[infoIdx]!;
     const node = flat[itemIdx]!;
 
+    const labelIdxs = uf.filter([node.label], q);
+    let labelRanges: number[] = [];
+    if (labelIdxs && labelIdxs.length > 0) {
+      const labelInfo = uf.info(labelIdxs, [node.label], q);
+      labelRanges = labelInfo.ranges[0] ?? [];
+    }
+    if (labelRanges.length === 0) {
+      labelRanges = [0, node.label.length];
+    }
+
     matches.push({
       entityId: node.entityId,
       label: node.label,
@@ -170,6 +181,7 @@ export function filterConfigTree(tree: CategoryGroup[], query: string, max = 50)
       configState: node.configState,
       isConfigurable: node.isConfigurable,
       breadcrumb: node.breadcrumb,
+      ranges: labelRanges,
     });
 
     matchedKeys.add(node.entityId);

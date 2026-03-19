@@ -82,6 +82,7 @@ func TrackToEntity(track *cat62.Track, sourcePrefix string, controllerName strin
 		Track: &pb.TrackComponent{
 			Tracker: &trackerID,
 		},
+		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 	}
 
 	if label != nil {

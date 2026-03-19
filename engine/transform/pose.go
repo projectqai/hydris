@@ -115,6 +115,10 @@ func (pt *PoseTransformer) resolvePose(head map[string]*pb.Entity, childID strin
 }
 
 func (pt *PoseTransformer) resolveCartesian(child *pb.Entity, c *pb.CartesianOffset, parentLat, parentLon float64, parentAlt *float64, parentQ *pb.Quaternion) {
+	// Cartesian offsets don't produce bearing — clear any stale value
+	// left by a prior resolvePolar call on this entity.
+	child.Bearing = nil
+
 	east, north, up := c.EastM, c.NorthM, c.GetUpM()
 	hasAlt := c.UpM != nil
 
@@ -125,8 +129,9 @@ func (pt *PoseTransformer) resolveCartesian(child *pb.Entity, c *pb.CartesianOff
 
 	geo := enuToWGS84(east, north, up, hasAlt, parentLat, parentLon)
 	child.Geo = &pb.GeoSpatialComponent{
-		Latitude:  geo.Latitude,
-		Longitude: geo.Longitude,
+		Latitude:   geo.Latitude,
+		Longitude:  geo.Longitude,
+		Covariance: c.Covariance,
 	}
 	if hasAlt && parentAlt != nil {
 		alt := *parentAlt + up
@@ -199,6 +204,12 @@ func (pt *PoseTransformer) resolvePolar(child *pb.Entity, p *pb.PolarOffset, par
 		alt := *parentAlt + up
 		child.Geo.Altitude = &alt
 	}
+
+	// Propagate polar covariance to geo via Jacobian transform.
+	// PolarOffset covariance: mxx = azimuth variance (deg²), mzz = range variance (m²).
+	if p.Covariance != nil {
+		child.Geo.Covariance = polarCovToENU(azRad, rng, p.Covariance)
+	}
 }
 
 // composeOrientation sets the child's absolute OrientationComponent by composing
@@ -269,6 +280,45 @@ func composeQuaternions(a, b *pb.Quaternion) *pb.Quaternion {
 		return b
 	default:
 		return nil
+	}
+}
+
+// polarCovToENU converts a PolarOffset covariance matrix to an ENU position
+// covariance via the Jacobian of the polar→ENU transform.
+// azRad is the azimuth in radians, rng is the range in meters.
+// Input covariance: mxx = azimuth variance (deg²), mzz = range variance (m²).
+// Output: 2×2 ENU position covariance (mxx, mxy, myy in m²).
+func polarCovToENU(azRad, rng float64, cov *pb.CovarianceMatrix) *pb.CovarianceMatrix {
+	azVar := cov.GetMxx() // azimuth variance in deg²
+	rVar := cov.GetMzz()  // range variance in m²
+	if azVar <= 0 && rVar <= 0 {
+		return nil
+	}
+
+	// Jacobian of [east, north] w.r.t. [azimuth_rad, range]:
+	//   dE/daz_rad = range * cos(az)    dE/dr = sin(az)
+	//   dN/daz_rad = -range * sin(az)   dN/dr = cos(az)
+	// Since azVar is in deg², convert: σ²_rad = σ²_deg * (π/180)²
+	deg2rad2 := (math.Pi / 180.0) * (math.Pi / 180.0)
+	azVarRad := azVar * deg2rad2
+
+	sinAz := math.Sin(azRad)
+	cosAz := math.Cos(azRad)
+
+	dEdAz := rng * cosAz
+	dNdAz := -rng * sinAz
+	dEdR := sinAz
+	dNdR := cosAz
+
+	// P_enu = J · diag(azVarRad, rVar) · Jᵀ
+	mxx := dEdAz*dEdAz*azVarRad + dEdR*dEdR*rVar
+	mxy := dEdAz*dNdAz*azVarRad + dEdR*dNdR*rVar
+	myy := dNdAz*dNdAz*azVarRad + dNdR*dNdR*rVar
+
+	return &pb.CovarianceMatrix{
+		Mxx: &mxx,
+		Mxy: &mxy,
+		Myy: &myy,
 	}
 }
 

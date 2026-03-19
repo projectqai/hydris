@@ -128,6 +128,15 @@ describe("classifyEvent", () => {
     expect(deletes.has("a")).toBe(false);
   });
 
+  it("unobserved then re-observed — ends in updates", () => {
+    const { updates, deletes } = classify([
+      { entity: entity("a"), t: Unobserved },
+      { entity: entity("a"), t: Updated },
+    ]);
+    expect(updates.has("a")).toBe(true);
+    expect(deletes.has("a")).toBe(false);
+  });
+
   it("last-writer-wins: later update replaces earlier", () => {
     const v1 = entity("a");
     const v2 = entity("a");

@@ -37,7 +37,7 @@ export function circleToPolygon(
   radiusM: number,
   innerRadiusM?: number,
   segments = 64,
-): ShapeGeometry {
+): Extract<ShapeGeometry, { type: "polygon" }> {
   const outer = buildRing(center, radiusM, segments);
   const holes = innerRadiusM ? [buildRing(center, innerRadiusM, segments)] : undefined;
   return { type: "polygon", outer, holes };

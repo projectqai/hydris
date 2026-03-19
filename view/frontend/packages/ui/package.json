@@ -26,6 +26,7 @@
     "./floating-window": "./src/floating-window/floating-window.tsx",
     "./command-palette/palette-reducer": "./src/command-palette/palette-reducer.ts",
     "./command-palette/use-list-nav": "./src/command-palette/use-list-nav.ts",
+    "./command-palette/hold-to-confirm-pressable": "./src/command-palette/hold-to-confirm-pressable.tsx",
     "./command-palette/highlight-text": "./src/command-palette/highlight-text.tsx",
     "./layout/types": "./src/layout/types.ts",
     "./layout/tree-utils": "./src/layout/tree-utils.ts",

@@ -337,7 +337,8 @@ func runEndpoint(ctx context.Context, logger *slog.Logger, entity *pb.Entity) er
 
 func baseEntity(entityID, controllerName, trackerID string, startedAt *timestamppb.Timestamp, expiry time.Duration) *pb.Entity {
 	return &pb.Entity{
-		Id: entityID,
+		Id:      entityID,
+		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 		Controller: &pb.Controller{
 			Id: &controllerName,
 		},
@@ -582,14 +583,14 @@ func gpsRawToEntity(entityID, controllerName, trackerID string, startedAt *times
 	// EPE ≈ HDOP * 5m (typical UERE), variance = EPE²
 	if msg.Eph != 65535 {
 		hdop := float64(msg.Eph) / 100.0
-		posVar := math.Pow(hdop*5.0, 2)
+		posVar := (hdop * 5.0) * (hdop * 5.0)
 		geo.Covariance = &pb.CovarianceMatrix{
 			Mxx: &posVar,
 			Myy: &posVar,
 		}
 		if msg.Epv != 65535 {
 			vdop := float64(msg.Epv) / 100.0
-			altVar := math.Pow(vdop*5.0, 2)
+			altVar := (vdop * 5.0) * (vdop * 5.0)
 			geo.Covariance.Mzz = &altVar
 		}
 	}

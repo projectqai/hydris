@@ -86,12 +86,30 @@ func handleConn(ctx context.Context, conn net.Conn, serverURL string, logger *sl
 					}
 				}
 
+				if cot.IsChatCoT(data) {
+					entity, err := cot.CoTChatToEntity(buffer[:n], "tak", trackerID)
+					if err != nil {
+						logger.Error("Error parsing GeoChat CoT", "clientID", clientID, "error", err)
+					} else if entity != nil {
+						entity.Routing = &pb.Routing{Channels: []*pb.Channel{{}}}
+						entity.Id = fmt.Sprintf("tak.%s", entity.Id)
+
+						if _, err := client.Push(ctx, &pb.EntityChangeRequest{Changes: []*pb.Entity{entity}}); err != nil {
+							logger.Error("Error pushing chat to Hydris", "clientID", clientID, "error", err)
+						} else {
+							logger.Info("Pushed chat entity", "clientID", clientID, "entityID", entity.Id)
+						}
+					}
+				}
+
 				if strings.Contains(data, `type="a-`) && !strings.Contains(data, `type="t-`) {
 					entity, err := cot.CoTToEntity(buffer[:n], "tak", trackerID)
 					if err != nil {
 						logger.Error("Error parsing CoT", "clientID", clientID, "error", err)
 					} else {
+						entity.Routing = &pb.Routing{Channels: []*pb.Channel{{}}}
 						entity.Id = fmt.Sprintf("tak.%s", entity.Id)
+						cot.SetControllerOrigin(entity, trackerID)
 						logger.Debug("Parsed entity", "clientID", clientID, "id", entity.Id,
 							"callsign", *entity.Label, "lat", entity.Geo.Latitude, "lon", entity.Geo.Longitude)
 
@@ -115,6 +133,7 @@ func handleConn(ctx context.Context, conn net.Conn, serverURL string, logger *sl
 
 	writer := bufio.NewWriter(conn)
 	sentCount := 0
+	connectedAt := time.Now()
 
 	for {
 		event, err := stream.Recv()
@@ -127,10 +146,22 @@ func handleConn(ctx context.Context, conn net.Conn, serverURL string, logger *sl
 			continue
 		}
 
+		// Anti-loop: don't reflect entities back to the connection that sent them
+		if event.Entity.Controller != nil && event.Entity.Controller.Origin != nil && *event.Entity.Controller.Origin == trackerID {
+			continue
+		}
+
+		// Don't replay old chat messages to newly connected clients
+		if isOldChat(event.Entity, connectedAt) {
+			continue
+		}
+
 		var cotXML []byte
 		var cotErr error
 		if event.T == pb.EntityChange_EntityChangeExpired {
 			cotXML, cotErr = cot.EntityDeleteCoT(event.Entity)
+		} else if event.Entity.Chat != nil {
+			cotXML, cotErr = cot.EntityToChatCoT(event.Entity)
 		} else {
 			cotXML, cotErr = cot.EntityToCoT(event.Entity)
 		}
@@ -607,6 +638,7 @@ func runUdpSend(ctx context.Context, logger *slog.Logger, serverURL string, enti
 	}
 
 	var entitiesSent uint64
+	startedAt := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -620,6 +652,10 @@ func runUdpSend(ctx context.Context, logger *slog.Logger, serverURL string, enti
 		}
 
 		if event.Entity == nil {
+			continue
+		}
+
+		if isOldChat(event.Entity, startedAt) {
 			continue
 		}
 
@@ -703,13 +739,33 @@ func runUdpReceive(ctx context.Context, logger *slog.Logger, serverURL string, e
 			logger.Debug("Received UDP datagram", "bytes", n, "data", string(buffer[:n]))
 		}
 
+		data := string(buffer[:n])
+
+		if cot.IsChatCoT(data) {
+			chatEnt, err := cot.CoTChatToEntity(buffer[:n], "tak", entity.Id)
+			if err != nil {
+				logger.Error("Error parsing GeoChat CoT", "error", err)
+			} else if chatEnt != nil {
+				chatEnt.Routing = &pb.Routing{Channels: []*pb.Channel{{}}}
+				chatEnt.Id = fmt.Sprintf("tak.%s", chatEnt.Id)
+				if _, err := client.Push(ctx, &pb.EntityChangeRequest{Changes: []*pb.Entity{chatEnt}}); err != nil {
+					logger.Error("Error pushing chat entity", "entityID", chatEnt.Id, "error", err)
+				} else {
+					logger.Info("Pushed chat entity", "entityID", chatEnt.Id)
+				}
+			}
+			continue
+		}
+
 		ent, err := cot.CoTToEntity(buffer[:n], "tak", entity.Id)
 		if err != nil {
 			logger.Error("Error parsing CoT", "error", err)
 			continue
 		}
 
+		ent.Routing = &pb.Routing{Channels: []*pb.Channel{{}}}
 		ent.Id = fmt.Sprintf("tak.%s", ent.Id)
+		cot.SetControllerOrigin(ent, entity.Id)
 
 		if _, err := client.Push(ctx, &pb.EntityChangeRequest{Changes: []*pb.Entity{ent}}); err != nil {
 			logger.Error("Error pushing entity", "entityID", ent.Id, "error", err)
@@ -797,6 +853,7 @@ func runMulticastBroadcaster(ctx context.Context, logger *slog.Logger, serverURL
 	}
 
 	var entitiesSent uint64
+	startedAt := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -810,6 +867,10 @@ func runMulticastBroadcaster(ctx context.Context, logger *slog.Logger, serverURL
 		}
 
 		if event.Entity == nil {
+			continue
+		}
+
+		if isOldChat(event.Entity, startedAt) {
 			continue
 		}
 
@@ -849,7 +910,22 @@ func entityToCoTBytes(event *pb.EntityChangeEvent) ([]byte, error) {
 	if event.T == pb.EntityChange_EntityChangeExpired {
 		return cot.EntityDeleteCoT(event.Entity)
 	}
+	if event.Entity.Chat != nil {
+		return cot.EntityToChatCoT(event.Entity)
+	}
 	return cot.EntityToCoT(event.Entity)
+}
+
+// isOldChat returns true if the entity is a chat message created before the
+// given cutoff time. Used to avoid replaying stale chat on new connections.
+func isOldChat(entity *pb.Entity, cutoff time.Time) bool {
+	if entity.Chat == nil {
+		return false
+	}
+	if entity.Lifetime != nil && entity.Lifetime.From != nil {
+		return entity.Lifetime.From.AsTime().Before(cutoff)
+	}
+	return false
 }
 
 func init() {

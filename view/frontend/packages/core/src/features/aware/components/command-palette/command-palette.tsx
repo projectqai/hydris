@@ -33,8 +33,10 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { Z } from "../../constants";
+import { useVersionLabel } from "../../store/version-store";
 import { buildCommands, type LayoutActions } from "./command-registry";
 import { CATEGORIES, getTrailSegments, type TrailSegment } from "./palette-helpers";
+import { CommandGroupView } from "./views/command-group-view";
 import { ConfigView } from "./views/config-view";
 import { DimensionView } from "./views/dimension-view";
 import { EntityActionsView } from "./views/entity-actions-view";
@@ -51,6 +53,8 @@ function getSearchPlaceholder(mode: PaletteMode): string | null {
       return "Search address or place...";
     case "config":
       return "Search by id or name...";
+    case "command-group":
+      return `Search ${mode.groupLabel.toLowerCase()}...`;
     default:
       return null;
   }
@@ -111,6 +115,12 @@ function FooterHint({ label, shortcut }: { label: string; shortcut: string }) {
   );
 }
 
+function VersionFooter() {
+  const label = useVersionLabel();
+  if (!label) return <View />;
+  return <Text className="text-muted-foreground font-mono text-[10px] leading-none">{label}</Text>;
+}
+
 export function CommandPalette({
   onClose,
   initialMode,
@@ -152,7 +162,8 @@ export function CommandPalette({
   const normalMaxHeight = isCompact ? windowHeight * 0.9 : windowHeight * 0.7;
   const configMaxHeight = isCompact ? windowHeight * 0.9 : windowHeight * 0.94;
 
-  const chromeHeight = isCompact ? 94 : 142;
+  const showFooter = Platform.OS === "web" && !isCompact;
+  const chromeHeight = showFooter ? 142 : 94;
   const contentHeight = Math.min(440, Math.max(200, normalMaxHeight - chromeHeight));
   const normalDialogHeight = contentHeight + chromeHeight;
 
@@ -438,14 +449,23 @@ export function CommandPalette({
           {mode.kind === "location-search" && (
             <LocationSearchView query={state.query} onClose={handleClose} />
           )}
+          {mode.kind === "command-group" && (
+            <CommandGroupView
+              groupId={mode.groupId}
+              query={state.query}
+              commands={commands}
+              onClose={handleClose}
+            />
+          )}
           {mode.kind === "config" && <ConfigView entityId={mode.entityId} query={state.query} />}
         </View>
 
-        {Platform.OS === "web" && !isCompact && (
+        {showFooter && (
           <View
             style={{ marginTop: "auto" }}
-            className="bg-surface-overlay/8 flex-row items-center justify-end px-4 py-3"
+            className="bg-surface-overlay/8 flex-row items-center justify-between px-4 py-3"
           >
+            <VersionFooter />
             <View className="flex-row items-center gap-3">
               <FooterHint label="navigate" shortcut={"\u2191\u2193"} />
               {mode.kind === "root" && <FooterHint label="select" shortcut={"\u21b5"} />}
@@ -453,6 +473,7 @@ export function CommandPalette({
               {mode.kind === "dimension" && <FooterHint label="select" shortcut={"\u21b5"} />}
               {mode.kind === "entity-actions" && <FooterHint label="run" shortcut={"\u21b5"} />}
               {mode.kind === "location-search" && <FooterHint label="go to" shortcut={"\u21b5"} />}
+              {mode.kind === "command-group" && <FooterHint label="toggle" shortcut={"\u21b5"} />}
               {mode.kind === "config" && <FooterHint label="select" shortcut={"\u21b5"} />}
               {state.stack.length > 0 && <FooterHint label="back" shortcut="Esc" />}
             </View>

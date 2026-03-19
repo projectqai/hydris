@@ -29,7 +29,7 @@ import type {
   ShapeFeature,
   ShapeProperties,
 } from "../../types";
-import { shapeToFeature } from "../../utils/shape-to-geojson";
+import { shapeToFeatures } from "../../utils/shape-to-geojson";
 
 const SECTOR_MIN_ZOOM = 12;
 
@@ -84,6 +84,7 @@ const createRasterStyle = (
   attribution: string,
   maxZoom = 20,
   paint: RasterPaint = {},
+  backgroundColor = "#000000",
 ): StyleSpecification => ({
   version: 8,
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
@@ -96,7 +97,10 @@ const createRasterStyle = (
       attribution,
     },
   },
-  layers: [{ id: "raster-layer", type: "raster", source: "raster", paint }],
+  layers: [
+    { id: "background", type: "background", paint: { "background-color": backgroundColor } },
+    { id: "raster-layer", type: "raster", source: "raster", paint },
+  ],
 });
 
 const STYLES: Record<BaseLayer, StyleSpecification> = {
@@ -117,11 +121,12 @@ const STYLES: Record<BaseLayer, StyleSpecification> = {
     BASE_LAYER_SOURCES.street.attribution,
     BASE_LAYER_SOURCES.street.maxZoom,
     { "raster-brightness-max": 0.87, "raster-brightness-min": 0.1 },
+    "#e8e0d8",
   ),
 };
 
 const DEFAULT_FILTER: EntityFilter = {
-  tracks: { blue: true, red: true, neutral: true, unknown: true },
+  tracks: { blue: true, red: true, neutral: true, unknown: true, unclassified: true },
   sensors: {},
 };
 
@@ -149,6 +154,7 @@ export type MapViewProps = {
   initialView?: { lat: number; lng: number; zoom: number };
   coverageVisible?: boolean;
   shapesVisible?: boolean;
+  detectionsVisible?: boolean;
   trackHistoryVisible?: boolean;
   rangeRingCenter?: GeoPosition | null;
   rangeRingsActive?: boolean;
@@ -173,6 +179,7 @@ export function MapView({
   initialView,
   coverageVisible = false,
   shapesVisible = true,
+  detectionsVisible = false,
   trackHistoryVisible = false,
   rangeRingCenter = null,
   rangeRingsActive = false,
@@ -311,14 +318,14 @@ export function MapView({
         const e = entityMap.get(id);
         if (!e?.shape) continue;
         const affiliation = e.affiliation ?? "unknown";
-        shapeFeatures.push(shapeToFeature(e.id, e.shape, affiliation, !!e.symbol));
+        shapeFeatures.push(...shapeToFeatures(e.id, e.shape, affiliation));
       }
       shapesCollectionRef.current = { type: "FeatureCollection", features: shapeFeatures };
     }
   }
 
   const integerZoom = Math.floor(viewState.zoom);
-  const showSectors = integerZoom >= SECTOR_MIN_ZOOM;
+  const showSectors = integerZoom >= SECTOR_MIN_ZOOM && detectionsVisible;
 
   const handleEntityClick = async (id: string) => {
     lastLayerClickTimeRef.current = Date.now();
@@ -351,6 +358,7 @@ export function MapView({
     filter,
     selectedId,
     shapesVisible,
+    detectionsVisible,
     zoom: viewState.zoom,
     pickable: !rangeRingsActive,
     onEntityClick: handleEntityClick,
@@ -372,7 +380,7 @@ export function MapView({
       const covEntity = entityMap.get(covId);
       if (covEntity?.shape) {
         coverageFeatures.push(
-          shapeToFeature(covId, covEntity.shape, covEntity.affiliation ?? "unknown", false),
+          ...shapeToFeatures(covId, covEntity.shape, covEntity.affiliation ?? "unknown"),
         );
       }
     }
@@ -392,15 +400,30 @@ export function MapView({
   if (selectedEntity?.trackPredictionId)
     selectedTrackShapeIds.add(selectedEntity.trackPredictionId);
 
+  // @TODO: enable when detection entities reliably have pose.parent
+  // const parentEntity = selectedEntity?.parentEntityId
+  //   ? entityMap.get(selectedEntity.parentEntityId)
+  //   : null;
+  // const pairingLineData =
+  //   selectedEntity && parentEntity
+  //     ? {
+  //         source: selectedEntity.position,
+  //         target: parentEntity.position,
+  //         affiliation: selectedEntity.affiliation ?? ("unknown" as const),
+  //       }
+  //     : null;
+
   const visibleShapes = shapesCollectionRef.current.features.filter((f) => {
     if (coverageShapeIds.has(f.properties.id)) return false;
     if (!filter.tracks[f.properties.affiliation]) return false;
+    if (f.properties.id === selectedId) return true;
     const entity = entityMap.get(f.properties.id);
+    if (entity?.isDetection) return detectionsVisible;
     if (!entity?.label) {
-      // Unlabeled shape (track history/prediction): show if toggle on or belongs to selected
+      // Track history/prediction follow their own toggle
       return trackHistoryVisible || selectedTrackShapeIds.has(f.properties.id);
     }
-    return shapesVisible || f.properties.id === selectedId;
+    return shapesVisible;
   });
 
   const handleShapeClick = (id: string) => {
@@ -454,6 +477,8 @@ export function MapView({
       onClick: handleShapeClick,
     }),
     ...(rangeRingResult?.layers ?? []),
+    // @TODO: enable when detection entities reliably have pose.parent
+    // createPairingLineLayer({ data: pairingLineData }),
     createSelectionLayer({
       data: selectionData,
     }),
@@ -461,6 +486,7 @@ export function MapView({
     createLabelLayer({
       data: labelData,
       visible: fontLoaded && labelData.length > 0,
+      baseLayer,
     }),
     ...(rangeRingResult ? [rangeRingResult.centerLayer] : []),
   ];

@@ -22,13 +22,27 @@ import (
 // The function must call ready() once it has validated the configuration
 // and is operational. If it returns an error without calling ready(),
 // the error is treated as a configuration validation failure.
+//
+// Returning nil without calling ready() signals that the configuration
+// was accepted but the controller is intentionally idle. The framework
+// sets the entity to Inactive and waits for the next config change.
 type RunFunc func(ctx context.Context, entity *pb.Entity, ready func()) error
 
 // Option configures optional behavior for Run.
 type Option func(*runConfig)
 
 type runConfig struct {
+	entity   *pb.Entity
 	onUpdate func(*pb.Entity)
+}
+
+// WithEntity provides the entity template for registration.
+// Run will push this entity with a heartbeat TTL and keep it alive.
+// If the controller crashes, the entity expires automatically.
+func WithEntity(e *pb.Entity) Option {
+	return func(c *runConfig) {
+		c.entity = e
+	}
 }
 
 // WithOnUpdate registers a callback that is invoked for every entity update
@@ -44,6 +58,9 @@ func WithOnUpdate(fn func(*pb.Entity)) Option {
 // Run watches a single entity by ID using WatchEntities and runs the
 // provided function when the entity has a Config. If the Config changes,
 // the running function is cancelled and restarted.
+//
+// Use WithEntity to provide the entity template. Run will push it with
+// a heartbeat TTL and keep it alive automatically.
 func Run(ctx context.Context, entityID string, run RunFunc, opts ...Option) error {
 	var cfg runConfig
 	for _, o := range opts {
@@ -58,6 +75,14 @@ func Run(ctx context.Context, entityID string, run RunFunc, opts ...Option) erro
 
 	worldClient := pb.NewWorldServiceClient(grpcConn)
 
+	// If an entity template was provided, register it.
+	if cfg.entity != nil {
+		cfg.entity.Id = entityID
+		_, _ = worldClient.Push(ctx, &pb.EntityChangeRequest{
+			Changes: []*pb.Entity{cfg.entity},
+		})
+	}
+
 	stream, err := goclient.WatchEntitiesWithRetry(ctx, worldClient, &pb.ListEntitiesRequest{
 		Filter: &pb.EntityFilter{
 			Id: &entityID,
@@ -67,46 +92,49 @@ func Run(ctx context.Context, entityID string, run RunFunc, opts ...Option) erro
 		return err
 	}
 
-	pushConfigurableState := func(entity *pb.Entity, state pb.ConfigurableState, errMsg string, applied bool) {
-		var cfg *pb.ConfigurableComponent
-		if entity.Configurable != nil {
-			cfg = proto.Clone(entity.Configurable).(*pb.ConfigurableComponent)
+	pushConfigurableState := func(current *pb.Entity, state pb.ConfigurableState, errMsg string, applied bool) {
+		var cfgComp *pb.ConfigurableComponent
+		if current.Configurable != nil {
+			cfgComp = proto.Clone(current.Configurable).(*pb.ConfigurableComponent)
 		} else {
-			cfg = &pb.ConfigurableComponent{}
+			cfgComp = &pb.ConfigurableComponent{}
 		}
-		cfg.State = state
+		cfgComp.State = state
 		if errMsg != "" {
-			cfg.Error = proto.String(errMsg)
+			cfgComp.Error = proto.String(errMsg)
 		} else {
-			cfg.Error = nil
+			cfgComp.Error = nil
 		}
-		if applied && entity.Config != nil {
-			cfg.AppliedVersion = entity.Config.Version
+		if applied && current.Config != nil {
+			cfgComp.AppliedVersion = current.Config.Version
 		}
 		_, _ = worldClient.Push(ctx, &pb.EntityChangeRequest{
 			Changes: []*pb.Entity{{
 				Id:           entityID,
-				Configurable: cfg,
+				Configurable: cfgComp,
 			}},
 		})
 	}
 
 	var cancel context.CancelFunc
 	var currentEntity *pb.Entity
+	entityExpired := false
 
 	stopRunning := func() {
 		if cancel != nil {
 			cancel()
 			cancel = nil
-			pushConfigurableState(currentEntity, pb.ConfigurableState_ConfigurableStateInactive, "", false)
+			if !entityExpired {
+				pushConfigurableState(currentEntity, pb.ConfigurableState_ConfigurableStateInactive, "", false)
+			}
 			currentEntity = nil
 		}
 	}
 
-	startRunning := func(entity *pb.Entity) {
+	startRunning := func(e *pb.Entity) {
 		var connCtx context.Context
 		connCtx, cancel = context.WithCancel(ctx)
-		currentEntity = entity
+		currentEntity = e
 
 		go func() {
 			for {
@@ -114,18 +142,26 @@ func Run(ctx context.Context, entityID string, run RunFunc, opts ...Option) erro
 					return
 				}
 
-				pushConfigurableState(entity, pb.ConfigurableState_ConfigurableStateStarting, "", false)
+				pushConfigurableState(e, pb.ConfigurableState_ConfigurableStateStarting, "", false)
 
 				readyCalled := false
 				ready := func() {
 					if !readyCalled {
 						readyCalled = true
-						pushConfigurableState(entity, pb.ConfigurableState_ConfigurableStateActive, "", true)
+						pushConfigurableState(e, pb.ConfigurableState_ConfigurableStateActive, "", true)
 					}
 				}
 
-				err := run(connCtx, entity, ready)
+				err := run(connCtx, e, ready)
 				if connCtx.Err() != nil {
+					return
+				}
+
+				// Returning nil without calling ready() means the config
+				// was accepted but the controller is intentionally idle.
+				if !readyCalled && err == nil {
+					pushConfigurableState(e, pb.ConfigurableState_ConfigurableStateInactive, "", true)
+					<-connCtx.Done()
 					return
 				}
 
@@ -135,7 +171,7 @@ func Run(ctx context.Context, entityID string, run RunFunc, opts ...Option) erro
 					slog.Error("connector error, restarting", "entity", entityID, "error", err)
 				}
 
-				pushConfigurableState(entity, pb.ConfigurableState_ConfigurableStateFailed, errMsg, true)
+				pushConfigurableState(e, pb.ConfigurableState_ConfigurableStateFailed, errMsg, true)
 
 				select {
 				case <-connCtx.Done():
@@ -160,22 +196,22 @@ func Run(ctx context.Context, entityID string, run RunFunc, opts ...Option) erro
 
 		switch event.T {
 		case pb.EntityChange_EntityChangeUpdated:
-			entity := event.Entity
-			if entity.Config == nil {
+			e := event.Entity
+			if e.Config == nil {
 				stopRunning()
 				continue
 			}
-			if currentEntity != nil && proto.Equal(currentEntity.Config, entity.Config) {
-				// Config unchanged — forward to onUpdate callback.
+			if currentEntity != nil && proto.Equal(currentEntity.Config, e.Config) {
 				if cfg.onUpdate != nil && cancel != nil {
-					cfg.onUpdate(entity)
+					cfg.onUpdate(e)
 				}
 				continue
 			}
 			stopRunning()
-			startRunning(entity)
+			startRunning(e)
 
 		case pb.EntityChange_EntityChangeExpired, pb.EntityChange_EntityChangeUnobserved:
+			entityExpired = true
 			stopRunning()
 		}
 	}

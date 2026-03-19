@@ -1,0 +1,138 @@
+# Sensor (parent for pose-based detections)
+---
+id: example.radar.1
+label: Radar Site Alpha
+geo:
+  latitude: 48.1
+  longitude: 11.5
+  altitude: 450
+symbol:
+  milStd2525C: SFGPUSR---
+
+---
+
+id: example.det.legacy
+label: Legacy Bearing
+detection:
+  detectorEntityId: example.radar.1
+  classification: fighter
+geo:
+  latitude: 48.20
+  longitude: 11.55
+bearing:
+  azimuth: 1
+  elevation: 10
+symbol:
+  milStd2525C: SHAP------
+
+
+
+
+---
+# Case 1: Direct geo + covariance (e.g. ADS-B, fused track)
+# AOU transformer produces an ellipse from the 2x2 covariance eigendecomposition.
+id: example.det.direct
+label: Direct Detection
+detection:
+  detectorEntityId: example.radar.1
+  classification: fighter
+geo:
+  latitude: 48.15
+  longitude: 11.55
+  covariance:
+    mxx: 250000
+    myy: 160000
+    mxy: 400
+symbol:
+  milStd2525C: SHAP------
+---
+# Case 2: Polar pose with range + covariance
+# PoseTransformer resolves geo, propagates polar covariance via Jacobian to geo.covariance.
+# AOU transformer then produces an ellipse from the resulting geo.covariance.
+id: example.det.polar
+label: Radar Detection
+detection:
+  detectorEntityId: example.radar.1
+  classification: helicopter
+classification:
+  identity: ClassificationIdentityHostile
+pose:
+  parent: example.radar.1
+  polar:
+    azimuth: 45
+    range: 15000
+    covariance:
+      mxx: 40
+      mzz: 100000
+---
+# Case 3: Cartesian pose with covariance
+# PoseTransformer resolves geo and copies ENU covariance directly to geo.covariance.
+# AOU transformer then produces an ellipse.
+id: example.det.cartesian
+label: Sonar Contact
+detection:
+  detectorEntityId: example.radar.1
+  classification: submarine
+pose:
+  parent: example.radar.1
+  cartesian:
+    east_m: 5000
+    north_m: 3000
+    covariance:
+      mxx: 900000
+      myy: 400000
+symbol:
+  milStd2525C: SUUP------
+---
+# Case 4: Bearing-only (no range, passive sensor)
+# PoseTransformer sets bearing but no geo.
+# AOU transformer produces a LocalShapeComponent (wedge) relative to the sensor.
+# ShapeTransformer then converts it to WGS84.
+id: example.det.bearingonly
+label: ESM Contact
+detection:
+  detectorEntityId: example.radar.1
+  classification: emitter
+pose:
+  parent: example.radar.1
+  polar:
+    azimuth: 270
+    covariance:
+      mxx: 25
+---
+# Case 5: Polar pose with range + LOB extending past detection
+# PoseTransformer resolves geo and sets bearing.
+# AOU transformer sees bearing → produces LOB with length = range + 2*sqrt(mzz).
+# mzz encodes the range measurement uncertainty (e.g. from range resolution).
+# note that it has a geo, which is intentionally wrong. it should be overloaded by the engine transformer
+id: example.det.radarlob
+label: Radar Plot
+detection:
+  detectorEntityId: example.radar.1
+  classification: drone
+geo:
+  latitude: 48.2
+  longitude: 11.5
+  altitude: 450
+pose:
+  parent: example.radar.1
+  polar:
+    azimuth: 120
+    range: 3500
+    azimuth_error_deg: 3.4
+    range_error_m: 200
+symbol:
+  milStd2525C: SUAPMFQH---
+---
+# Case 6: no offset, detection is somwhere around the sensor
+id: example.det.around
+label: Seismic Detection
+detection:
+  detectorEntityId: example.radar.1
+  classification: person
+pose:
+  parent: example.radar.1
+  cartesian:
+    covariance:
+      mxx: 4000000
+      myy: 4000000

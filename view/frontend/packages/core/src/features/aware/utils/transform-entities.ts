@@ -4,9 +4,16 @@ import type {
   EntityData,
   GeoPosition,
   ShapeGeometry,
+  ShapeLineStyle,
 } from "@hydris/map-engine/types";
 import { circleToPolygon } from "@hydris/map-engine/utils/geodesic-circle";
-import type { PlanarCircle, PlanarPolygon, PlanarRing } from "@projectqai/proto/geometry";
+import type {
+  PlanarCircle,
+  PlanarGeometry,
+  PlanarPolygon,
+  PlanarRing,
+} from "@projectqai/proto/geometry";
+import { LineStyle } from "@projectqai/proto/geometry";
 import type { Entity } from "@projectqai/proto/world";
 
 import type { TrackStatus } from "../../../lib/api/use-track-utils";
@@ -38,6 +45,7 @@ const AFFILIATION: Record<TrackStatus, Affiliation> = {
   Red: "red",
   Neutral: "neutral",
   Unknown: "unknown",
+  Unclassified: "unclassified",
 };
 
 function getAffiliation(entity: Entity): Affiliation {
@@ -71,9 +79,38 @@ function computeCentroid(positions: GeoPosition[]): GeoPosition {
   return { lat: sum.lat / positions.length, lng: sum.lng / positions.length };
 }
 
-function extractShape(entity: Entity): ShapeGeometry | undefined {
-  const plane = entity.shape?.geometry?.planar?.plane;
+export function shapeCentroid(shape: ShapeGeometry): GeoPosition | null {
+  switch (shape.type) {
+    case "point":
+      return shape.position;
+    case "polygon":
+      return computeCentroid(shape.outer);
+    case "polyline":
+      return computeCentroid(shape.points);
+    case "collection": {
+      for (const sub of shape.geometries) {
+        const c = shapeCentroid(sub);
+        if (c) return c;
+      }
+      return null;
+    }
+  }
+}
+
+const LINE_STYLE_MAP: Record<number, ShapeLineStyle> = {
+  [LineStyle.LineStyleDashed]: "dashed",
+  [LineStyle.LineStyleDotted]: "dotted",
+};
+
+function toLineStyle(style?: LineStyle): ShapeLineStyle | undefined {
+  if (style === undefined) return undefined;
+  return LINE_STYLE_MAP[style];
+}
+
+function extractGeometry(geom: PlanarGeometry): ShapeGeometry | undefined {
+  const { plane } = geom;
   if (!plane || plane.case === undefined) return undefined;
+  const lineStyle = toLineStyle(geom.lineStyle);
 
   switch (plane.case) {
     case "polygon": {
@@ -83,23 +120,40 @@ function extractShape(entity: Entity): ShapeGeometry | undefined {
         type: "polygon",
         outer: ringToPositions(poly.outer),
         holes: poly.holes.length ? poly.holes.map(ringToPositions) : undefined,
+        lineStyle,
       };
     }
     case "line":
-      return { type: "polyline", points: ringToPositions(plane.value as PlanarRing) };
+      return { type: "polyline", points: ringToPositions(plane.value as PlanarRing), lineStyle };
     case "circle": {
       const circle = plane.value as PlanarCircle;
       if (!circle.center || !circle.radiusM) return undefined;
       const center: GeoPosition = { lat: circle.center.latitude, lng: circle.center.longitude };
-      return circleToPolygon(center, circle.radiusM, circle.innerRadiusM);
+      const shape = circleToPolygon(center, circle.radiusM, circle.innerRadiusM);
+      if (lineStyle) shape.lineStyle = lineStyle;
+      return shape;
     }
     case "point": {
       const pt = plane.value as { latitude: number; longitude: number; altitude?: number };
       return { type: "point", position: { lat: pt.latitude, lng: pt.longitude, alt: pt.altitude } };
     }
+    case "collection": {
+      const geometries: ShapeGeometry[] = [];
+      for (const sub of plane.value.geometries) {
+        const g = extractGeometry(sub);
+        if (g) geometries.push(g);
+      }
+      return geometries.length ? { type: "collection", geometries } : undefined;
+    }
     default:
       return undefined;
   }
+}
+
+export function extractShape(entity: Entity): ShapeGeometry | undefined {
+  const planar = entity.shape?.geometry?.planar;
+  if (!planar) return undefined;
+  return extractGeometry(planar);
 }
 
 function transformEntity(entity: Entity): Omit<EntityData, "activeSectors"> | null {
@@ -117,14 +171,15 @@ function transformEntity(entity: Entity): Omit<EntityData, "activeSectors"> | nu
       lng: entity.geo.longitude,
       alt: entity.geo.altitude,
     };
-  } else if (shape!.type === "point") {
-    position = shape!.position;
   } else {
-    const pts = shape!.type === "polygon" ? shape!.outer : shape!.points;
-    position = computeCentroid(pts);
+    const pos = shapeCentroid(shape!);
+    if (!pos) return null;
+    position = pos;
   }
 
   const coverageIds = entity.sensor?.coverage;
+
+  const parentId = entity.pose?.parent;
 
   return {
     id: entity.id,
@@ -137,6 +192,8 @@ function transformEntity(entity: Entity): Omit<EntityData, "activeSectors"> | nu
     trackHistoryId: entity.track?.history,
     trackPredictionId: entity.track?.prediction,
     coverageEntityIds: coverageIds?.length ? coverageIds : undefined,
+    parentEntityId: parentId || undefined,
+    isDetection: entity.detection != null ? true : undefined,
   };
 }
 

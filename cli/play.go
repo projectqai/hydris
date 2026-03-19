@@ -794,7 +794,7 @@ func (m playModel) View() string {
 		MarginTop(1)
 
 	// Connection info
-	b.WriteString(fmt.Sprintf("connected to hydris at %s\n", m.grpcAddr))
+	fmt.Fprintf(&b, "connected to hydris at %s\n", m.grpcAddr)
 
 	// Current state
 	currentTime := m.player.GetCurrentTime()

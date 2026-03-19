@@ -229,11 +229,12 @@ function groupAndSort(
     }
   }
 
-  // leftover groups not declared in x-groups
-  for (const [key, arr] of byGroup) {
+  // leftover groups alphabetically for stable order
+  const leftoverKeys = [...byGroup.keys()].sort((a, b) => a.localeCompare(b));
+  for (const key of leftoverKeys) {
     sections.push({
       group: { key, title: key.charAt(0).toUpperCase() + key.slice(1) },
-      fields: arr.sort(sortByOrder),
+      fields: byGroup.get(key)!.sort(sortByOrder),
     });
   }
 

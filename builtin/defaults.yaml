@@ -1,4 +1,6 @@
 ---
+id: self
+---
 id: meshtastic.service
 config:
   value:
@@ -21,6 +23,16 @@ config:
     username: admin
 ---
 id: serial.service
+config:
+  value:
+    enabled: true
+---
+id: mediaserver.service
+config:
+  value:
+    share_remote: false
+---
+id: webcam.service
 config:
   value:
     enabled: true

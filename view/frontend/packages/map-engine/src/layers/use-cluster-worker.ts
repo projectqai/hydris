@@ -15,13 +15,16 @@ export type ClusterWorkerResult = {
 type UseClusterWorkerOptions = {
   entityMap: Map<string, EntityData>;
   filter: EntityFilter;
+  shapesVisible: boolean;
+  detectionsVisible: boolean;
   zoom: number;
   version: number;
   geoChanged: boolean;
 };
 
 export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorkerResult | null {
-  const { entityMap, filter, zoom, version, geoChanged } = options;
+  const { entityMap, filter, shapesVisible, detectionsVisible, zoom, version, geoChanged } =
+    options;
   const [result, setResult] = useState<ClusterWorkerResult | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const lastSentVersionRef = useRef<number>(-1);
@@ -31,8 +34,24 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
   const pendingUpdateRef = useRef<number | null>(null);
   const latestVersionRef = useRef<number>(-1);
 
-  const latestRef = useRef({ entityMap, filter, zoom, version, geoChanged });
-  latestRef.current = { entityMap, filter, zoom, version, geoChanged };
+  const latestRef = useRef({
+    entityMap,
+    filter,
+    zoom,
+    version,
+    geoChanged,
+    shapesVisible,
+    detectionsVisible,
+  });
+  latestRef.current = {
+    entityMap,
+    filter,
+    zoom,
+    version,
+    geoChanged,
+    shapesVisible,
+    detectionsVisible,
+  };
 
   useEffect(() => {
     const blob = new Blob([CLUSTER_WORKER_CODE], { type: "application/javascript" });
@@ -62,7 +81,7 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
     const integerZoom = Math.floor(zoom);
     const zoomChanged = integerZoom !== Math.floor(lastZoomRef.current);
     const versionChanged = version !== lastSentVersionRef.current;
-    const filterJson = JSON.stringify(filter.tracks);
+    const filterJson = JSON.stringify({ ...filter.tracks, shapesVisible, detectionsVisible });
     const filterChanged = filterJson !== lastFilterRef.current;
 
     if (!versionChanged && !zoomChanged && !filterChanged) return;
@@ -73,7 +92,15 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
     const doUpdate = () => {
       if (!workerRef.current) return;
 
-      const { entityMap: map, filter: f, zoom: z, version: v, geoChanged: geo } = latestRef.current;
+      const {
+        entityMap: map,
+        filter: f,
+        zoom: z,
+        version: v,
+        geoChanged: geo,
+        shapesVisible: sv,
+        detectionsVisible: dv,
+      } = latestRef.current;
 
       const dataUnchanged = v === lastSentVersionRef.current;
 
@@ -82,8 +109,15 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
         red: f.tracks.red,
         neutral: f.tracks.neutral,
         unknown: f.tracks.unknown,
+        unclassified: f.tracks.unclassified,
+        shapesVisible: sv,
+        detectionsVisible: dv,
       };
-      const currentFilterJson = JSON.stringify(f.tracks);
+      const currentFilterJson = JSON.stringify({
+        ...f.tracks,
+        shapesVisible: sv,
+        detectionsVisible: dv,
+      });
       const filterOnly = dataUnchanged && currentFilterJson !== lastFilterRef.current;
 
       lastSentVersionRef.current = v;
@@ -105,6 +139,8 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
       const count = map.size;
       const positions = new Float64Array(count * 2);
       const affiliations = new Uint8Array(count);
+      const hasShape = new Uint8Array(count);
+      const isDetection = new Uint8Array(count);
       const ids: string[] = [];
       const symbols: (string | null)[] = [];
 
@@ -113,6 +149,8 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
         positions[i * 2] = e.position.lat;
         positions[i * 2 + 1] = e.position.lng;
         affiliations[i] = AFFILIATION_CODE[e.affiliation ?? "unknown"];
+        hasShape[i] = e.shape ? 1 : 0;
+        isDetection[i] = e.isDetection ? 1 : 0;
         ids.push(e.id);
         symbols.push(e.symbol ?? null);
         i++;
@@ -122,6 +160,8 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
         {
           positions,
           affiliations,
+          hasShape,
+          isDetection,
           ids,
           symbols,
           count,
@@ -130,7 +170,7 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
           geoChanged: geo,
           version: v,
         },
-        [positions.buffer, affiliations.buffer],
+        [positions.buffer, affiliations.buffer, hasShape.buffer, isDetection.buffer],
       );
     };
 
@@ -153,7 +193,7 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
         pendingUpdateRef.current = null;
       }
     };
-  }, [entityMap, filter, zoom, version, geoChanged]);
+  }, [entityMap, filter, shapesVisible, detectionsVisible, zoom, version, geoChanged]);
 
   return result;
 }

@@ -1,0 +1,11 @@
+{
+  "name": "@hydris/builtin-adsbdb",
+  "version": "0.0.1",
+  "main": "index.ts",
+  "files": ["basic-ac-db.json.gz"],
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@projectqai/proto": ">=0.0.29"
+  }
+}

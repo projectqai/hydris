@@ -7,6 +7,8 @@ import (
 	"time"
 
 	pb "github.com/projectqai/proto/go"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // see https://github.com/deptofdefense/AndroidTacticalAssaultKit-CIV/tree/22d11cba15dd5cfe385c0d0790670bc7e9ab7df4/takcot/mitre
@@ -39,6 +41,27 @@ type Detail struct {
 	Milsym      *Milsym      `xml:"__milsym,omitempty"`
 	Link        *Link        `xml:"link,omitempty"`
 	ForceDelete *ForceDelete `xml:"__forcedelete,omitempty"`
+	Chat        *ChatDetail  `xml:"__chat,omitempty"`
+	Remarks     *Remarks     `xml:"remarks,omitempty"`
+}
+
+type ChatDetail struct {
+	XMLName        xml.Name  `xml:"__chat"`
+	SenderCallsign string    `xml:"senderCallsign,attr,omitempty"`
+	ChatGroup      ChatGroup `xml:"chatgrp"`
+}
+
+type ChatGroup struct {
+	UID0 string `xml:"uid0,attr"` // sender UID
+	UID1 string `xml:"uid1,attr"` // recipient UID or room name
+}
+
+type Remarks struct {
+	XMLName xml.Name `xml:"remarks"`
+	Source  string   `xml:"source,attr,omitempty"`
+	To      string   `xml:"to,attr,omitempty"`
+	Time    string   `xml:"time,attr,omitempty"`
+	Text    string   `xml:",chardata"`
 }
 
 type ForceDelete struct {
@@ -337,4 +360,171 @@ func padSIDC(sidc string) string {
 		return sidc[:sidcLength]
 	}
 	return sidc + strings.Repeat("*", sidcLength-len(sidc))
+}
+
+// CoTChatToEntity converts a GeoChat CoT XML event to a Hydris chat entity.
+func CoTChatToEntity(cotXML []byte, controllerName string, trackerID string) (*pb.Entity, error) {
+	var event Event
+	if err := xml.Unmarshal(cotXML, &event); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal CoT XML: %w", err)
+	}
+
+	if event.Detail.Remarks == nil || event.Detail.Remarks.Text == "" {
+		return nil, nil
+	}
+
+	callsign := event.Detail.Contact.Callsign
+	if callsign == "" && event.Detail.Chat != nil {
+		callsign = event.Detail.Chat.SenderCallsign
+	}
+	if callsign == "" {
+		callsign = event.UID
+	}
+
+	var senderUID, to *string
+	if event.Detail.Chat != nil {
+		if uid0 := event.Detail.Chat.ChatGroup.UID0; uid0 != "" {
+			s := "tak." + uid0
+			senderUID = &s
+		}
+		if uid1 := event.Detail.Chat.ChatGroup.UID1; uid1 != "" && uid1 != "All Chat Rooms" {
+			t := "tak." + uid1
+			to = &t
+		}
+	}
+
+	now := time.Now()
+	fromTime := now
+	if t, err := time.Parse(time.RFC3339, event.Time); err == nil {
+		fromTime = t
+	}
+	untilTime := fromTime.Add(3 * time.Hour)
+	if t, err := time.Parse(time.RFC3339, event.Stale); err == nil {
+		untilTime = t
+	}
+
+	hae := event.Point.Hae
+	entity := &pb.Entity{
+		Id:    event.UID,
+		Label: &callsign,
+		Controller: &pb.Controller{
+			Id:     &controllerName,
+			Origin: &trackerID,
+		},
+		Track: &pb.TrackComponent{
+			Tracker: &trackerID,
+		},
+		Geo: &pb.GeoSpatialComponent{
+			Latitude:  event.Point.Lat,
+			Longitude: event.Point.Lon,
+			Altitude:  &hae,
+		},
+		Chat: &pb.ChatComponent{
+			Sender:  senderUID,
+			To:      to,
+			Message: event.Detail.Remarks.Text,
+		},
+		Lifetime: &pb.Lifetime{
+			From:  timestamppb.New(fromTime),
+			Until: timestamppb.New(untilTime),
+			Fresh: timestamppb.New(now),
+		},
+	}
+
+	return entity, nil
+}
+
+// EntityToChatCoT converts a Hydris chat entity to a GeoChat CoT XML event.
+func EntityToChatCoT(entity *pb.Entity) ([]byte, error) {
+	if entity.Chat == nil {
+		return nil, nil
+	}
+
+	callsign := entity.Id
+	if entity.Label != nil && *entity.Label != "" {
+		callsign = *entity.Label
+	}
+
+	now := time.Now().UTC()
+	startTime := now
+	staleTime := now.Add(3 * time.Hour)
+
+	if entity.Lifetime != nil {
+		if entity.Lifetime.From != nil {
+			startTime = entity.Lifetime.From.AsTime()
+		}
+		if entity.Lifetime.Until != nil {
+			staleTime = entity.Lifetime.Until.AsTime()
+		}
+	}
+
+	senderUID := entity.Id
+	if entity.Chat.Sender != nil {
+		senderUID = *entity.Chat.Sender
+	}
+	recipientUID := "All Chat Rooms"
+	if entity.Chat.To != nil && *entity.Chat.To != "" {
+		recipientUID = *entity.Chat.To
+	}
+
+	var lat, lon, hae float64
+	if entity.Geo != nil {
+		lat = entity.Geo.Latitude
+		lon = entity.Geo.Longitude
+		if entity.Geo.Altitude != nil {
+			hae = *entity.Geo.Altitude
+		}
+	}
+
+	event := Event{
+		Version: "2.0",
+		Type:    "b-t-f",
+		How:     "h-g-i-g-o",
+		UID:     entity.Id,
+		Time:    now.Format(time.RFC3339),
+		Start:   startTime.Format(time.RFC3339),
+		Stale:   staleTime.Format(time.RFC3339),
+		Point: Point{
+			Lat: lat,
+			Lon: lon,
+			Hae: hae,
+			CE:  9999999.0,
+			LE:  9999999.0,
+		},
+		Detail: Detail{
+			Contact: Contact{Callsign: callsign},
+			Chat: &ChatDetail{
+				SenderCallsign: callsign,
+				ChatGroup: ChatGroup{
+					UID0: senderUID,
+					UID1: recipientUID,
+				},
+			},
+			Remarks: &Remarks{
+				Source: senderUID,
+				Time:   startTime.Format(time.RFC3339),
+				Text:   entity.Chat.Message,
+			},
+		},
+	}
+
+	xmlData, err := xml.MarshalIndent(event, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal chat XML: %w", err)
+	}
+
+	return append(xmlData, '\n'), nil
+}
+
+// IsChatCoT returns true if the CoT XML data contains a GeoChat message.
+func IsChatCoT(data string) bool {
+	return strings.Contains(data, "<__chat") || strings.Contains(data, `type="b-t-f"`)
+}
+
+// SetControllerOrigin sets controller.origin on an entity, used by CoTToEntity.
+func SetControllerOrigin(entity *pb.Entity, origin string) {
+	if entity.Controller == nil {
+		entity.Controller = &pb.Controller{}
+	}
+	entity.Controller.Origin = proto.String(origin)
 }

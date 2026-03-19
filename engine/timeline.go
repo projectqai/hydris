@@ -65,9 +65,10 @@ func (s *WorldServer) MoveTimeline(ctx context.Context, req *connect.Request[pb.
 	entities := s.store.GetEventsInTimeRange(req.Msg.At.AsTime())
 
 	s.l.Lock()
-	s.head = make(map[string]*pb.Entity)
+	s.head = make(map[string]*entityState)
+	s.headView = make(map[string]*pb.Entity)
 	for _, ev := range entities {
-		s.head[ev.Id] = ev
+		s.setEntity(ev.Id, ev, nil)
 	}
 	s.l.Unlock()
 

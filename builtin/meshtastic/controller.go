@@ -66,10 +66,10 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 			"description": "Format for outbound entities. Empty means no sending.",
 			"default":     "",
 			"oneOf": []interface{}{
-				map[string]interface{}{"const": "", "title": "Disabled"},
-				map[string]interface{}{"const": "cot", "title": "Cursor on Target (CoT)"},
-				map[string]interface{}{"const": "pli", "title": "Position Location Info (PLI)"},
-				map[string]interface{}{"const": "hydris", "title": "Hydris Native"},
+				map[string]interface{}{"const": "", "title": "Silent"},
+				map[string]interface{}{"const": "native", "title": "Native Meshtastic Only"},
+				map[string]interface{}{"const": "tak", "title": "TAK (ATAK compatible)"},
+				map[string]interface{}{"const": "hydris", "title": "Hydris"},
 			},
 			"ui:group": "messaging",
 			"ui:order": 2,
@@ -82,11 +82,11 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		"type": "object",
 		"ui:groups": []interface{}{
 			map[string]interface{}{"key": "messaging", "title": "Messaging"},
-			map[string]interface{}{"key": "radio", "title": "Radio"},
-			map[string]interface{}{"key": "device", "title": "Device"},
-			map[string]interface{}{"key": "position", "title": "Position"},
-			map[string]interface{}{"key": "identity", "title": "Identity"},
-			map[string]interface{}{"key": "channel", "title": "Channel"},
+			map[string]interface{}{"key": "radio", "title": "Radio", "collapsed": true},
+			map[string]interface{}{"key": "device", "title": "Device", "collapsed": true},
+			map[string]interface{}{"key": "position", "title": "Position", "collapsed": true},
+			map[string]interface{}{"key": "identity", "title": "Identity", "collapsed": true},
+			map[string]interface{}{"key": "channel", "title": "Channel", "collapsed": true},
 		},
 		"properties": defaultProps,
 	})
@@ -130,7 +130,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	}
 
 	// Watch the service entity's own config for autoconfig.
-	go controller.Run(ctx, "meshtastic.service", func(ctx context.Context, entity *pb.Entity, ready func()) error {
+	go controller.Run(ctx, "meshtastic.service", func(ctx context.Context, entity *pb.Entity, ready func()) error { //nolint:errcheck // fire-and-forget goroutine
 		ready()
 		return runAutoConfig(ctx, logger, entity)
 	})
@@ -221,6 +221,14 @@ func runInstance(parentCtx context.Context, logger *slog.Logger, entity *pb.Enti
 		if v, ok := config.Value.Fields["send_format"]; ok {
 			sendFormat = v.GetStringValue()
 		}
+	}
+
+	// Backward compat for old send format names
+	switch sendFormat {
+	case "pli", "meshtastic":
+		sendFormat = "native"
+	case "cot":
+		sendFormat = "tak"
 	}
 
 	// Resolve the serial path from the device entity.
@@ -320,6 +328,10 @@ func runInstance(parentCtx context.Context, logger *slog.Logger, entity *pb.Enti
 		} else {
 			cfg.Error = nil
 		}
+		// Confirm the config version so the UI knows changes were applied.
+		if cfgState == pb.ConfigurableState_ConfigurableStateActive && entity.Config != nil {
+			cfg.AppliedVersion = entity.Config.Version
+		}
 		if _, err := client.Push(ctx, &pb.EntityChangeRequest{
 			Changes: []*pb.Entity{{
 				Id: entity.Id,
@@ -401,6 +413,9 @@ func runInstance(parentCtx context.Context, logger *slog.Logger, entity *pb.Enti
 			cfg.State = pb.ConfigurableState_ConfigurableStateActive
 			cfg.Error = nil
 		}
+		if entity.Config != nil {
+			cfg.AppliedVersion = entity.Config.Version
+		}
 		if _, err := client.Push(ctx, &pb.EntityChangeRequest{
 			Changes: []*pb.Entity{{
 				Id: entity.Id,
@@ -444,6 +459,8 @@ func runInstance(parentCtx context.Context, logger *slog.Logger, entity *pb.Enti
 		_ = radio.Close()
 	}()
 
+	chatIDs := newMsgIDMap(256)
+
 	senderCount := 0
 	if sendFormat != "" {
 		senderCount = 1
@@ -451,7 +468,7 @@ func runInstance(parentCtx context.Context, logger *slog.Logger, entity *pb.Enti
 	errCh := make(chan error, 1+senderCount)
 
 	go func() {
-		errCh <- runReceiver(ctx, logger, grpcConn, radio, controllerID, radioDeviceID)
+		errCh <- runReceiver(ctx, logger, grpcConn, radio, controllerID, radioDeviceID, chatIDs)
 	}()
 
 	// Re-request config so the receiver picks up the cached node database.
@@ -462,7 +479,7 @@ func runInstance(parentCtx context.Context, logger *slog.Logger, entity *pb.Enti
 
 	if sendFormat != "" {
 		go func() {
-			errCh <- runSender(ctx, logger, grpcConn, radio, channel, hopLimit, sendFormat, localNodeID)
+			errCh <- runSender(ctx, logger, grpcConn, radio, channel, hopLimit, sendFormat, localNodeID, localNodeResp.Entity.Id, controllerID, chatIDs)
 		}()
 	}
 
@@ -504,8 +521,17 @@ func updateServiceState(ctx context.Context, logger *slog.Logger) {
 // buildRadioEntities creates a device entity for the connected radio,
 // based on the config received during init.
 func buildRadioEntities(cfg *RadioHandshake, deviceID, parentDeviceEntityID, configEntityID, label string) []*pb.Entity {
+	meshDev := &pb.MeshtasticDevice{
+		NodeNum:   &cfg.NodeNum,
+		LongName:  proto.String(cfg.LongName),
+		ShortName: proto.String(cfg.ShortName),
+	}
+	if len(cfg.PublicKey) > 0 {
+		meshDev.PublicKey = cfg.PublicKey
+	}
 	dev := &pb.DeviceComponent{
-		State: pb.DeviceState_DeviceStateActive,
+		State:      pb.DeviceState_DeviceStateActive,
+		Meshtastic: meshDev,
 	}
 	if parentDeviceEntityID != "" {
 		dev.Parent = proto.String(parentDeviceEntityID)

@@ -1,18 +1,15 @@
-const cache = new Map<string, string>();
+import { AFFILIATION_COLORS_HEX } from "../constants";
 
-const AFFILIATION_COLORS: Record<string, string> = {
-  blue: "#3B82F6",
-  red: "#CD1818",
-  neutral: "#3D8D7A",
-  unknown: "#F7EF81",
-};
+const cache = new Map<string, string>();
 
 export function generateSelectionFrame(affiliation: string, iconSize: number): string {
   const cacheKey = `${affiliation}:${iconSize}`;
   const cached = cache.get(cacheKey);
   if (cached) return cached;
 
-  const color = AFFILIATION_COLORS[affiliation] || AFFILIATION_COLORS.unknown;
+  const color =
+    AFFILIATION_COLORS_HEX[affiliation as keyof typeof AFFILIATION_COLORS_HEX] ||
+    AFFILIATION_COLORS_HEX.unknown;
   const padding = Math.round(iconSize * 0.1);
   const s = iconSize + padding * 2;
   const corner = Math.round(s * 0.2);

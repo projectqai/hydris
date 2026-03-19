@@ -57,11 +57,14 @@ func (h *modulePrefixHandler) Handle(ctx context.Context, r slog.Record) error {
 }
 
 func init() {
-	// Setup slog with colored output and module prefix
-	// must be imported by main before any other package's init() because they import this package
+	level := slog.LevelInfo
+	if os.Getenv("HYDRIS_DEBUG") != "" {
+		level = slog.LevelDebug
+	}
+
 	handler := &modulePrefixHandler{
 		handler: tint.NewHandler(os.Stderr, &tint.Options{
-			Level:      slog.LevelInfo,
+			Level:      level,
 			TimeFormat: time.Kitchen,
 		}),
 	}

@@ -23,11 +23,12 @@ func (s *WorldServer) RunTask(ctx context.Context, req *connect.Request[pb.RunTa
 	s.l.Lock()
 	defer s.l.Unlock()
 
-	entity, exists := s.head[entityID]
+	es, exists := s.head[entityID]
 	if !exists {
 		return nil, connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("entity %s not found", entityID))
 	}
+	entity := es.entity
 
 	if entity.Taskable == nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
@@ -112,7 +113,7 @@ func (s *WorldServer) runTaskPriorityQueue(entity *pb.Entity, req *connect.Reque
 		},
 	}
 
-	s.head[execID] = execEntity
+	s.setEntity(execID, execEntity, nil)
 	s.bus.Dirty(execID, execEntity, pb.EntityChange_EntityChangeUpdated)
 
 	return connect.NewResponse(&pb.RunTaskResponse{
@@ -143,7 +144,7 @@ func (s *WorldServer) runTaskSpawn(entity *pb.Entity) (*connect.Response[pb.RunT
 		},
 	}
 
-	s.head[execID] = execEntity
+	s.setEntity(execID, execEntity, nil)
 	s.bus.Dirty(execID, execEntity, pb.EntityChange_EntityChangeUpdated)
 
 	return connect.NewResponse(&pb.RunTaskResponse{

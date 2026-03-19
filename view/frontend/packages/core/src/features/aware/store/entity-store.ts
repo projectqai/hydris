@@ -1,14 +1,35 @@
-import type { Entity } from "@projectqai/proto/world";
+import type { Entity, GeoSpatialComponent } from "@projectqai/proto/world";
 import { create } from "zustand";
 
-import { getEntityName, isAsset, isExpired, isTrack } from "../../../lib/api/use-track-utils";
+import {
+  getEntityName,
+  isAsset,
+  isExpired,
+  isTrack,
+  timestampToMs,
+} from "../../../lib/api/use-track-utils";
 import { worldClient } from "../../../lib/api/world-client";
+import { createBackoff } from "../../../lib/backoff";
 import type { ChangeSet } from "../utils/transform-entities";
 import { accumulateChanges, resetDeltaState } from "../utils/transform-entities";
 import { classifyEvent } from "./process-events";
 
 const BATCH_INTERVAL_MS = 250;
 const DERIVED_STATE_INTERVAL_MS = 500;
+
+/**
+ * Component filter for listEntities/watchEntities.
+ * Ensures the engine emits Unobserved when a required component
+ * disappears before lifetime.until (per-component GC).
+ */
+export const ENTITY_STREAM_FILTER = {
+  or: [
+    { component: [11] }, // geo: tracks, assets, sensors
+    { component: [16, 17] }, // detection + bearing
+    { component: [50] }, // device: config tree
+    { component: [25] }, // shape: coverage, history, prediction
+  ],
+};
 
 let abortController: AbortController | null = null;
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -31,13 +52,7 @@ function hasGeoMoved(id: string, geo: Entity["geo"]): boolean {
 }
 
 function isDetectionEntity(entity: Entity): boolean {
-  const detectorId = entity.detection?.detectorEntityId;
-  return (
-    detectorId !== undefined &&
-    detectorId !== "" &&
-    entity.bearing?.azimuth !== undefined &&
-    entity.bearing?.elevation !== undefined
-  );
+  return entity.detection != null;
 }
 
 const EMPTY_CHANGE: ChangeSet = {
@@ -52,8 +67,12 @@ type EntityState = {
   detectionEntityIds: Set<string>;
   tracks: Entity[];
   assets: Entity[];
+  detections: Entity[];
   trackCount: number;
   assetCount: number;
+  selfGeo: GeoSpatialComponent | null;
+  hydrisVersion: string | null;
+  hydrisUpdateAvailable: string | null;
   isConnected: boolean;
   error: Error | null;
   lastChange: ChangeSet;
@@ -72,20 +91,26 @@ export const selectEntity = (id: string | null) => (state: EntityState) =>
 
 export const selectTracks = (state: EntityState) => state.tracks;
 export const selectAssets = (state: EntityState) => state.assets;
+export const selectDetections = (state: EntityState) => state.detections;
 export const selectTrackCount = (state: EntityState) => state.trackCount;
 export const selectAssetCount = (state: EntityState) => state.assetCount;
 export const selectLastChange = (state: EntityState) => state.lastChange;
 export const selectDetectionEntityIds = (state: EntityState) => state.detectionEntityIds;
+export const selectSelfGeo = (state: EntityState) => state.selfGeo;
 
 function computeDerivedState(entities: Map<string, Entity>) {
   const tracks: Entity[] = [];
   const assets: Entity[] = [];
+  const detections: Entity[] = [];
 
   for (const entity of entities.values()) {
     if (isExpired(entity)) continue;
+    if (isDetectionEntity(entity)) {
+      detections.push(entity);
+    }
     if (isTrack(entity)) {
       tracks.push(entity);
-    } else if (isAsset(entity)) {
+    } else if (isAsset(entity) && !isDetectionEntity(entity)) {
       assets.push(entity);
     }
   }
@@ -98,10 +123,14 @@ function computeDerivedState(entities: Map<string, Entity>) {
 
   tracks.sort(sortByName);
   assets.sort(sortByName);
+  detections.sort((a, b) => {
+    return timestampToMs(b.lifetime?.from) - timestampToMs(a.lifetime?.from);
+  });
 
   return {
     tracks,
     assets,
+    detections,
     trackCount: tracks.length,
     assetCount: assets.length,
   };
@@ -121,8 +150,12 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
   detectionEntityIds: new Set(),
   tracks: [],
   assets: [],
+  detections: [],
   trackCount: 0,
   assetCount: 0,
+  selfGeo: null as GeoSpatialComponent | null,
+  hydrisVersion: null as string | null,
+  hydrisUpdateAvailable: null as string | null,
   isConnected: false,
   error: null,
   lastChange: EMPTY_CHANGE,
@@ -133,8 +166,7 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
     abortController = new AbortController();
     set({ error: null });
 
-    const maxReconnectDuration = 60000;
-    let reconnectStartTime: number | null = null;
+    const backoff = createBackoff(250, 5000);
 
     const pendingUpdates = new Map<string, Entity>();
     const pendingDeletes = new Set<string>();
@@ -254,56 +286,66 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
       );
       set({ error: err, isConnected: false });
 
-      if (reconnectStartTime === null) {
-        reconnectStartTime = Date.now();
-      }
+      const delay = backoff.next();
 
-      const elapsed = Date.now() - reconnectStartTime;
+      reconnectTimeout = setTimeout(() => {
+        if (signal?.aborted) return;
 
-      if (elapsed < maxReconnectDuration) {
-        reconnectTimeout = setTimeout(() => {
-          if (signal?.aborted) return;
+        pendingUpdates.clear();
+        pendingDeletes.clear();
+        if (flushTimeout) {
+          clearTimeout(flushTimeout);
+          flushTimeout = null;
+        }
+        if (derivedStateTimeout) {
+          clearTimeout(derivedStateTimeout);
+          derivedStateTimeout = null;
+        }
+        flushScheduled = false;
 
-          pendingUpdates.clear();
-          pendingDeletes.clear();
-          if (flushTimeout) {
-            clearTimeout(flushTimeout);
-            flushTimeout = null;
-          }
-          if (derivedStateTimeout) {
-            clearTimeout(derivedStateTimeout);
-            derivedStateTimeout = null;
-          }
-          flushScheduled = false;
+        const state = useEntityStore.getState();
+        if (state.entities.size > 0) {
+          state.entities.clear();
+          state.detectionEntityIds.clear();
+          previousPositions.clear();
+          changeVersion++;
+          const lastChange: ChangeSet = {
+            version: changeVersion,
+            updatedIds: new Set(),
+            deletedIds: new Set(),
+            geoChanged: true,
+            fullClear: true,
+          };
+          accumulateChanges(lastChange);
+          set({
+            lastChange,
+            tracks: [],
+            assets: [],
+            trackCount: 0,
+            assetCount: 0,
+          });
+        }
 
-          const state = useEntityStore.getState();
-          if (state.entities.size > 0) {
-            state.entities.clear();
-            state.detectionEntityIds.clear();
-            previousPositions.clear();
-            changeVersion++;
-            const lastChange: ChangeSet = {
-              version: changeVersion,
-              updatedIds: new Set(),
-              deletedIds: new Set(),
-              geoChanged: true,
-              fullClear: true,
-            };
-            accumulateChanges(lastChange);
-            set({
-              lastChange,
-              tracks: [],
-              assets: [],
-              trackCount: 0,
-              assetCount: 0,
-            });
-          }
+        stream();
+      }, delay);
+    }
 
-          stream();
-        }, 1000);
-      } else {
-        console.error("[entity-store] max reconnect duration reached");
-      }
+    function fetchHydrisVersion() {
+      if (useEntityStore.getState().hydrisVersion) return;
+      worldClient.getLocalNode({}).then(
+        (res) => {
+          const node = res.entity?.device?.node;
+          const v = node?.hydrisVersion ?? null;
+          const update = node?.hydrisUpdateAvailable ?? null;
+          const geo = res.entity?.geo ?? null;
+          set({
+            ...(v ? { hydrisVersion: v } : {}),
+            ...(update ? { hydrisUpdateAvailable: update } : {}),
+            ...(geo ? { selfGeo: geo } : {}),
+          });
+        },
+        () => {},
+      );
     }
 
     async function stream() {
@@ -311,7 +353,10 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
       const signal = abortController.signal;
 
       try {
-        const { entities: initial } = await worldClient.listEntities({}, { signal });
+        const { entities: initial } = await worldClient.listEntities(
+          { filter: ENTITY_STREAM_FILTER },
+          { signal },
+        );
         if (signal.aborted) return;
 
         if (initial.length > 0) {
@@ -345,20 +390,22 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
               error: null,
             };
           });
-          reconnectStartTime = null;
+          backoff.reset();
         }
+
+        fetchHydrisVersion();
 
         let receivedFirst = initial.length > 0;
         let eventsSinceYield = 0;
         for await (const event of worldClient.watchEntities(
-          { behaviour: { maxRateHz: 10000 } },
+          { filter: ENTITY_STREAM_FILTER, behaviour: { maxRateHz: 10000 } },
           { signal },
         )) {
           if (signal.aborted) break;
 
           if (!receivedFirst) {
             set({ isConnected: true, error: null });
-            reconnectStartTime = null;
+            backoff.reset();
             receivedFirst = true;
           }
 
@@ -485,6 +532,7 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
       detectionEntityIds: new Set(),
       tracks: [],
       assets: [],
+      detections: [],
       trackCount: 0,
       assetCount: 0,
       isConnected: false,

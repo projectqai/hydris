@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sort"
 
 	pb "github.com/projectqai/proto/go"
 
@@ -9,7 +10,11 @@ import (
 )
 
 func (s *WorldServer) WatchEntities(ctx context.Context, req *connect.Request[pb.ListEntitiesRequest], stream *connect.ServerStream[pb.EntityChangeEvent]) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	consumer := NewConsumer(s, req.Msg.Behaviour, req.Msg.Filter)
+	consumer.cancel = cancel
 	s.bus.Register(consumer)
 	defer s.bus.Unregister(consumer)
 
@@ -20,16 +25,36 @@ func (s *WorldServer) WatchEntities(ctx context.Context, req *connect.Request[pb
 		return err
 	}
 
-	// Mark all current entities as dirty, since we don't know what the consumer missed
+	// Send initial snapshot sorted by Lifetime.From
 	s.l.RLock()
-	for id, e := range s.head {
-		priority := pb.Priority_PriorityRoutine
-		if e.Priority != nil {
-			priority = *e.Priority
+	var snapshot []*pb.Entity
+	for _, es := range s.head {
+		e := es.entity
+		if s.matchesEntityFilter(e, req.Msg.Filter) {
+			snapshot = append(snapshot, e)
 		}
-		consumer.markDirty(id, priority, pb.EntityChange_EntityChangeUpdated, e)
 	}
 	s.l.RUnlock()
+
+	sort.Slice(snapshot, func(i, j int) bool {
+		var ti, tj int64
+		if snapshot[i].Lifetime != nil && snapshot[i].Lifetime.From != nil {
+			ti = snapshot[i].Lifetime.From.AsTime().UnixNano()
+		}
+		if snapshot[j].Lifetime != nil && snapshot[j].Lifetime.From != nil {
+			tj = snapshot[j].Lifetime.From.AsTime().UnixNano()
+		}
+		return ti < tj
+	})
+
+	for _, e := range snapshot {
+		if err := stream.Send(&pb.EntityChangeEvent{
+			Entity: e,
+			T:      pb.EntityChange_EntityChangeUpdated,
+		}); err != nil {
+			return err
+		}
+	}
 
 	return consumer.SenderLoop(ctx, stream.Send)
 }

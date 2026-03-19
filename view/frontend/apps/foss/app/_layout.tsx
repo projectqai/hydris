@@ -16,7 +16,7 @@ import {
   Inter_700Bold,
 } from "@expo-google-fonts/inter";
 import { useFonts } from "expo-font";
-import { useKeepAwake } from "expo-keep-awake";
+import { activateKeepAwakeAsync } from "expo-keep-awake";
 import * as Linking from "expo-linking";
 import * as NavigationBar from "expo-navigation-bar";
 import { router, Stack } from "expo-router";
@@ -32,21 +32,28 @@ import { Toaster } from "sonner-native";
 
 SplashScreen.preventAutoHideAsync();
 
+if (process.env.EXPO_OS !== "web") {
+  activateKeepAwakeAsync();
+}
+
 import { useThemeStore } from "@hydris/core/features/aware/store/theme-store";
 import * as HydrisEngine from "@hydris/engine";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import Constants from "expo-constants";
 
 export default function RootLayout() {
-  useKeepAwake();
   const { colorScheme, setColorScheme } = useColorScheme();
   const t = useThemeColors();
-  const [fontsLoaded] = useFonts({
-    Inter: Inter_400Regular,
-    "Inter-Medium": Inter_500Medium,
-    "Inter-SemiBold": Inter_600SemiBold,
-    "Inter-Bold": Inter_700Bold,
-  });
+  const [fontsLoaded] = useFonts(
+    process.env.EXPO_OS !== "web"
+      ? {
+          Inter: Inter_400Regular,
+          "Inter-Medium": Inter_500Medium,
+          "Inter-SemiBold": Inter_600SemiBold,
+          "Inter-Bold": Inter_700Bold,
+        }
+      : {},
+  );
 
   const themePreference = useThemeStore((s) => s.preference);
 

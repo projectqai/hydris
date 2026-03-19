@@ -172,6 +172,7 @@ export function MapPane() {
         filterJson,
         visualization.coverage,
         visualization.shapes,
+        visualization.detections,
         visualization.trackHistory,
       );
     };
@@ -184,6 +185,7 @@ export function MapPane() {
     filterJson,
     visualization.coverage,
     visualization.shapes,
+    visualization.detections,
     visualization.trackHistory,
   ]);
 
@@ -236,6 +238,7 @@ export function MapPane() {
     <View style={{ flex: 1 }}>
       <View className="bg-background flex-1">
         <MapView
+          dom={{ style: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 } }}
           ref={localRef}
           flyToTarget={flyToTarget}
           zoomCommand={zoomCommand}
@@ -247,6 +250,7 @@ export function MapPane() {
           initialZoom={savedView?.zoom}
           coverageVisible={visualization.coverage}
           shapesVisible={visualization.shapes}
+          detectionsVisible={visualization.detections}
           trackHistoryVisible={visualization.trackHistory}
           onEntityClick={handleEntityClick}
           onMapClick={handleMapClick}

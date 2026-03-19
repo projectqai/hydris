@@ -386,12 +386,16 @@ func TestFlushToFile_PersistsConfigAndDevice(t *testing.T) {
 	if e.Device == nil {
 		t.Error("device should survive persistence")
 	}
-	// Other components should NOT be persisted
-	if e.Controller != nil {
-		t.Error("controller should be stripped from persisted stub")
+	// Controller and lifetime should survive persistence
+	if e.Controller == nil {
+		t.Error("controller should survive persistence")
 	}
-	if e.Label != nil {
-		t.Error("label should be stripped from persisted stub")
+	if e.Lifetime == nil {
+		t.Error("lifetime should survive persistence")
+	}
+	// Label should survive persistence
+	if e.Label == nil || *e.Label != "device" {
+		t.Error("label should survive persistence")
 	}
 }
 

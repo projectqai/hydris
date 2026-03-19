@@ -40,7 +40,7 @@ function buildDeviceNode(entity: Entity): DeviceNode {
 }
 
 function sortNodes(nodes: DeviceNode[]) {
-  nodes.sort((a, b) => a.label.localeCompare(b.label));
+  nodes.sort((a, b) => a.label.localeCompare(b.label) || a.entityId.localeCompare(b.entityId));
   for (const n of nodes) sortNodes(n.children);
 }
 

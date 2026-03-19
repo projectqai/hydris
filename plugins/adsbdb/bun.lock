@@ -1,0 +1,19 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "@hydris/builtin-adsbdb",
+      "dependencies": {
+        "@projectqai/proto": ">=0.0.29",
+      },
+    },
+  },
+  "packages": {
+    "@bufbuild/protobuf": ["@bufbuild/protobuf@2.11.0", "", {}, "sha512-sBXGT13cpmPR5BMgHE6UEEfEaShh5Ror6rfN3yEK5si7QVrtZg8LEPQb0VVhiLRUslD2yLnXtnRzG035J/mZXQ=="],
+
+    "@connectrpc/connect": ["@connectrpc/connect@2.1.1", "", { "peerDependencies": { "@bufbuild/protobuf": "^2.7.0" } }, "sha512-JzhkaTvM73m2K1URT6tv53k2RwngSmCXLZJgK580qNQOXRzZRR/BCMfZw3h+90JpnG6XksP5bYT+cz0rpUzUWQ=="],
+
+    "@projectqai/proto": ["@projectqai/proto@0.0.29", "", { "dependencies": { "@connectrpc/connect": "^2.0.0" }, "peerDependencies": { "@bufbuild/protobuf": "^2.10.1" } }, "sha512-BvR5CM7zwFnag5PngfF4KWgx89YlM8CAGLWig49SR4nm33GT18YLz0LzzeIoDRizxqWIZMQmaNhURvSYDxDOlQ=="],
+  }
+}

@@ -1,10 +1,10 @@
 import { create } from "zustand";
 
 export const DEFAULT_OVERLAYS = {
-  tracks: { blue: true, red: true, neutral: true, unknown: true },
+  tracks: { blue: true, red: true, neutral: true, unknown: true, unclassified: true },
   sensors: { online: true, degraded: true },
   network: { datalinks: true },
-  visualization: { coverage: false, shapes: true, trackHistory: false },
+  visualization: { coverage: false, shapes: true, detections: false, trackHistory: false },
 } as const;
 
 type OverlayCategory = keyof typeof DEFAULT_OVERLAYS;

@@ -14,6 +14,7 @@ import {
   getEntityName,
   getStatusBadgeVariant,
   getTrackStatus,
+  type TrackStatus,
 } from "../../../../lib/api/use-track-utils";
 import { useUrlParams } from "../../../../lib/use-url-params";
 import { useTabStore } from "../../store/tab-store";
@@ -25,7 +26,7 @@ import { OverviewTab } from "./overview-tab";
 type EntityDetailsContextValue = {
   entity: Entity;
   entityName: string;
-  status: "Blue" | "Red" | "Neutral" | "Unknown";
+  status: TrackStatus;
 };
 
 const EntityDetailsContext = createContext<EntityDetailsContextValue | null>(null);

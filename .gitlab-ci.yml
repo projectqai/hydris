@@ -1,9 +1,8 @@
 stages:
   - build
-  - release
 
 variables:
-  GO_VERSION: "1.25.5"
+  GO_VERSION: "1.25.8"
   PROTOC_VERSION: "28.3"
 
 .go-setup: &go-setup
@@ -39,10 +38,9 @@ vet:
     - *go-setup
     - *protoc-setup
     - *go-tools-setup
-    - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+    - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
     - go install golang.org/x/vuln/cmd/govulncheck@latest
   script:
-    - make gen
     - make vet
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
@@ -52,7 +50,7 @@ build:
   stage: build
   image: ubuntu:22.04
   before_script:
-    - apt-get update && apt-get install -y wget unzip curl sudo git rsync make
+    - apt-get update && apt-get install -y wget unzip curl sudo git rsync make libgtk-3-dev libwebkit2gtk-4.1-dev mingw-w64 zip
     - *node-setup
     - *go-setup
     - *protoc-setup
@@ -60,74 +58,32 @@ build:
     - *bun-setup
   script:
     - (cd view/frontend && bun i)
-    - make
+    - make frontend
     - |
       if [[ -n "$CI_COMMIT_TAG" ]]; then
         TAG_NAME=$CI_COMMIT_TAG
       else
         TAG_NAME=${CI_COMMIT_SHORT_SHA}
       fi
-    - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o hydris-linux-amd64-${TAG_NAME} .
-    - CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o hydris-linux-arm64-${TAG_NAME} .
-    - CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o hydris-windows-amd64-${TAG_NAME}.exe .
-    - CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o hydris-darwin-amd64-${TAG_NAME} .
-    - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o hydris-darwin-arm64-${TAG_NAME} .
+    - make cli
+    - make desktop
     - |
-      for f in hydris-linux-amd64-$TAG_NAME hydris-linux-arm64-$TAG_NAME hydris-windows-amd64-$TAG_NAME.exe hydris-darwin-amd64-$TAG_NAME hydris-darwin-arm64-$TAG_NAME; do
+      for f in bin/hydris-*; do
         curl --header "JOB-TOKEN: $CI_JOB_TOKEN" \
           --upload-file "$f" \
-          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/hydris/$TAG_NAME/$f"
+          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/hydris/$TAG_NAME/$(basename $f)"
       done
   artifacts:
     paths:
-      - hydris-linux-amd64-*
-      - hydris-linux-arm64-*
-      - hydris-windows-amd64-*.exe
-      - hydris-darwin-amd64-*
-      - hydris-darwin-arm64-*
+      - bin/
     expire_in: 7 days
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_COMMIT_TAG
 
-android:
-  stage: build
-  image: ubuntu:22.04
-  variables:
-    ANDROID_SDK_ROOT: "/opt/android-sdk"
-    ANDROID_HOME: "/opt/android-sdk"
-  before_script:
-    - apt-get update && apt-get install -y wget unzip curl sudo git rsync make openjdk-17-jdk
-    - *node-setup
-    - *go-setup
-    - *protoc-setup
-    - *go-tools-setup
-    - *bun-setup
-    # Install Android SDK
-    - mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
-    - wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
-    - unzip -q cmdline-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
-    - mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
-    - export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools
-    - yes | sdkmanager --licenses || true
-    - sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
-    - export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
-  script:
-    - export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools
-    - export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
-    - make android
-    - 'TAG_NAME=${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}'
-    - 'curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file view/frontend/apps/foss/android/app/build/outputs/apk/release/app-release.apk "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/hydris/$TAG_NAME/hydris-$TAG_NAME.apk"'
-  artifacts:
-    paths:
-      - view/frontend/apps/foss/android/app/build/outputs/apk/release/app-release.apk
-    expire_in: 7 days
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-    - if: $CI_COMMIT_TAG
 
 docker:
-  stage: release
+  stage: build
   image: docker:24
   services:
     - docker:24-dind
@@ -135,16 +91,17 @@ docker:
     - job: build
       artifacts: true
   variables:
-    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_DRIVER: overlay2
   before_script:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - docker buildx create --use --name multiarch --driver docker-container
+    - docker buildx create --use --name multiarch --driver docker-container --driver-opt network=host
   script:
     - |
-      TAG_NAME=${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}
-      cp hydris-linux-amd64-${TAG_NAME} hydris-amd64
-      cp hydris-linux-arm64-${TAG_NAME} hydris-arm64
-      chmod +x hydris-amd64 hydris-arm64
+      cp bin/hydris-cli-linux-amd64-* bin/hydris-amd64
+      cp bin/hydris-cli-linux-arm64-* bin/hydris-arm64
+      chmod +x bin/hydris-amd64 bin/hydris-arm64
     - |
       if [[ -n "$CI_COMMIT_TAG" ]]; then
         docker buildx build --platform linux/amd64,linux/arm64 \
@@ -162,12 +119,10 @@ docker:
     - if: $CI_COMMIT_TAG
 
 release:
-  stage: release
+  stage: build
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   needs:
     - job: build
-      artifacts: true
-    - job: android
       artifacts: true
   script:
     - echo "Creating release for $CI_COMMIT_TAG"
@@ -178,30 +133,25 @@ release:
       Release $CI_COMMIT_TAG
 
       ## Downloads
-      - Linux AMD64: hydris-linux-amd64-$CI_COMMIT_TAG
-      - Linux ARM64: hydris-linux-arm64-$CI_COMMIT_TAG
-      - Windows AMD64: hydris-windows-amd64-$CI_COMMIT_TAG.exe
-      - macOS AMD64: hydris-darwin-amd64-$CI_COMMIT_TAG
-      - macOS ARM64: hydris-darwin-arm64-$CI_COMMIT_TAG
-      - Android APK: app-release.apk
-
-      ## Docker Image
-      ```
-      docker run -p 50051:50051 -ti $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
-      ```
+      - CLI Linux AMD64: hydris-cli-linux-amd64-${CI_COMMIT_TAG}.tar.xz
+      - CLI Linux ARM64: hydris-cli-linux-arm64-${CI_COMMIT_TAG}.tar.xz
+      - CLI Windows AMD64: hydris-cli-windows-amd64-${CI_COMMIT_TAG}.zip
+      - CLI macOS ARM64: hydris-cli-macos-arm64-${CI_COMMIT_TAG}.tar.xz
+      - Desktop Windows: hydris-desktop-windows-amd64-${CI_COMMIT_TAG}.zip
+      - Desktop macOS ARM64: hydris-desktop-macos-arm64-${CI_COMMIT_TAG}.zip
     assets:
       links:
-        - name: "hydris-linux-amd64-$CI_COMMIT_TAG"
-          url: "${CI_JOB_URL}/artifacts/file/hydris-linux-amd64-${CI_COMMIT_TAG}"
-        - name: "hydris-linux-arm64-$CI_COMMIT_TAG"
-          url: "${CI_JOB_URL}/artifacts/file/hydris-linux-arm64-${CI_COMMIT_TAG}"
-        - name: "hydris-windows-amd64-$CI_COMMIT_TAG.exe"
-          url: "${CI_JOB_URL}/artifacts/file/hydris-windows-amd64-${CI_COMMIT_TAG}.exe"
-        - name: "hydris-darwin-amd64-$CI_COMMIT_TAG"
-          url: "${CI_JOB_URL}/artifacts/file/hydris-darwin-amd64-${CI_COMMIT_TAG}"
-        - name: "hydris-darwin-arm64-$CI_COMMIT_TAG"
-          url: "${CI_JOB_URL}/artifacts/file/hydris-darwin-arm64-${CI_COMMIT_TAG}"
-        - name: "app-release.apk"
-          url: "${CI_JOB_URL}/artifacts/file/view/frontend/apps/foss/android/app/build/outputs/apk/release/app-release.apk"
+        - name: "CLI Linux AMD64"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/hydris/${CI_COMMIT_TAG}/hydris-cli-linux-amd64-${CI_COMMIT_TAG}.tar.xz"
+        - name: "CLI Linux ARM64"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/hydris/${CI_COMMIT_TAG}/hydris-cli-linux-arm64-${CI_COMMIT_TAG}.tar.xz"
+        - name: "CLI Windows AMD64"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/hydris/${CI_COMMIT_TAG}/hydris-cli-windows-amd64-${CI_COMMIT_TAG}.zip"
+        - name: "CLI macOS ARM64"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/hydris/${CI_COMMIT_TAG}/hydris-cli-macos-arm64-${CI_COMMIT_TAG}.tar.xz"
+        - name: "Desktop Windows"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/hydris/${CI_COMMIT_TAG}/hydris-desktop-windows-amd64-${CI_COMMIT_TAG}.zip"
+        - name: "Desktop macOS ARM64"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/hydris/${CI_COMMIT_TAG}/hydris-desktop-macos-arm64-${CI_COMMIT_TAG}.zip"
   rules:
     - if: $CI_COMMIT_TAG

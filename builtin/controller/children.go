@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -41,9 +42,15 @@ func WatchChildren(ctx context.Context, serviceEntityID, controllerName string, 
 
 	worldClient := pb.NewWorldServiceClient(grpcConn)
 
+	localNodeResp, err := worldClient.GetLocalNode(ctx, &pb.GetLocalNodeRequest{})
+	if err != nil {
+		return fmt.Errorf("get local node: %w", err)
+	}
+	localNodeID := localNodeResp.Entity.Controller.GetNode()
+
 	stream, err := goclient.WatchEntitiesWithRetry(ctx, worldClient, &pb.ListEntitiesRequest{
 		Filter: &pb.EntityFilter{
-			Component: []uint32{50}, // DeviceComponent
+			Component: []uint32{uint32(pb.EntityComponent_EntityComponentDevice)},
 			Device: &pb.DeviceFilter{
 				Parent: &serviceEntityID,
 			},
@@ -82,6 +89,11 @@ func WatchChildren(ctx context.Context, serviceEntityID, controllerName string, 
 			_, running := children[entityID]
 			mu.Unlock()
 			if running {
+				continue
+			}
+
+			// Skip entities owned by a different node (e.g. federated in).
+			if n := event.Entity.Controller.GetNode(); n != "" && n != localNodeID {
 				continue
 			}
 

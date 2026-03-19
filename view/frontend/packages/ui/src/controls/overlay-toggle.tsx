@@ -4,13 +4,14 @@ import { Pressable, Text, View } from "react-native";
 import { useThemeColors } from "../lib/theme";
 import { cn } from "../lib/utils";
 
-export type ThemeColor = "red" | "yellow" | "blue" | "green";
+export type ThemeColor = "red" | "yellow" | "blue" | "green" | "gray";
 
 const colorClasses: Record<ThemeColor, string> = {
   red: "bg-red",
   yellow: "bg-yellow",
   blue: "bg-blue",
   green: "bg-green",
+  gray: "bg-gray-400",
 };
 
 export type OverlayToggleProps = {
@@ -40,7 +41,7 @@ export function OverlayToggle({
       )}
     >
       {Icon ? (
-        <Icon size={12} strokeWidth={1.5} color={isActive ? t.iconActive : t.iconSubtle} />
+        <Icon size={14} strokeWidth={1.5} color={isActive ? t.iconActive : t.iconSubtle} />
       ) : color ? (
         <View
           className={cn(

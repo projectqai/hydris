@@ -14,7 +14,9 @@ import { CameraPaneProvider } from "./camera-pane-context";
 import { CommandPalette } from "./components/command-palette/command-palette";
 import { PaneShell } from "./components/layout/pane-shell";
 import { WidgetPickerModal } from "./components/layout/widget-picker-modal";
+import { FloatingChatInput } from "./components/panes/floating-chat-input";
 import { TopBar } from "./components/top-bar/top-bar";
+import { useUpdateBanner } from "./components/update-banner";
 import { PRESETS } from "./constants";
 import { useDeepLink } from "./hooks/use-deep-link";
 import { useEscapeHandler } from "./hooks/use-escape-handler";
@@ -22,6 +24,7 @@ import { useLayoutManager } from "./hooks/use-layout-manager";
 import { PaletteContext, type PaletteContextValue } from "./palette-context";
 import { PIPProvider } from "./pip-context";
 import { PIPPlayer } from "./pip-player";
+import { useChatStore } from "./store/chat-store";
 import { useEntityStore } from "./store/entity-store";
 
 function AwareContent({ showWeather }: { showWeather?: boolean }) {
@@ -184,6 +187,7 @@ function AwareContent({ showWeather }: { showWeather?: boolean }) {
             }}
           />
         )}
+        <FloatingChatInput />
         <PIPPlayer minTop={70} />
       </View>
     </PaletteContext.Provider>
@@ -193,11 +197,19 @@ function AwareContent({ showWeather }: { showWeather?: boolean }) {
 export default function AwareScreen({ showWeather }: { showWeather?: boolean } = {}) {
   const startStream = useEntityStore((s) => s.startStream);
   const stopStream = useEntityStore((s) => s.stopStream);
+  const startChatStream = useChatStore((s) => s.startStream);
+  const stopChatStream = useChatStore((s) => s.stopStream);
 
   useEffect(() => {
     startStream();
-    return () => stopStream();
-  }, [startStream, stopStream]);
+    startChatStream();
+    return () => {
+      stopStream();
+      stopChatStream();
+    };
+  }, [startStream, stopStream, startChatStream, stopChatStream]);
+
+  useUpdateBanner();
 
   return (
     <KeyboardProvider>

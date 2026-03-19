@@ -32,6 +32,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   icon: "./assets/images/icon.png",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
+  androidStatusBar: {
+    translucent: true,
+    hidden: true,
+  },
   android: {
     adaptiveIcon: {
       backgroundColor: "#E6F4FE",
@@ -50,7 +54,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   },
   web: {
     bundler: "metro",
-    output: "static",
+    output: "single",
     favicon: "./assets/images/favicon.png",
   },
   plugins: [
@@ -64,15 +68,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       },
     ],
     ["app-icon-badge", appIconBadgeConfig],
-    [
-      "expo-navigation-bar",
-      {
-        visibility: "hidden",
-        behavior: "overlay-swipe",
-        position: "absolute",
-        backgroundColor: "#00000000",
-      },
-    ],
     [
       "expo-build-properties",
       {

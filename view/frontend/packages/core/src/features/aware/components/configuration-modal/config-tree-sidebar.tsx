@@ -1,6 +1,7 @@
 "use no memo";
 
 import { Badge } from "@hydris/ui/badge";
+import { HighlightText } from "@hydris/ui/command-palette/highlight-text";
 import { useListNav } from "@hydris/ui/command-palette/use-list-nav";
 import { useKeyboardShortcut } from "@hydris/ui/keyboard";
 import { useThemeColors } from "@hydris/ui/lib/theme";
@@ -39,6 +40,7 @@ type TreeItem = {
   configState: ConfigStateLabel | null;
   isCategoryHeader?: boolean;
   isConfigurable?: boolean;
+  ranges?: number[];
 };
 
 function TreeRow({
@@ -89,6 +91,7 @@ function TreeRow({
   return (
     <Pressable
       ref={ref}
+      onPress={contentPress}
       tabIndex={-1}
       className={cn(
         "min-h-11 flex-row items-center pl-3 outline-none",
@@ -120,11 +123,7 @@ function TreeRow({
         <View className="w-10" />
       )}
 
-      <Pressable
-        onPress={contentPress}
-        tabIndex={-1}
-        className="flex-1 flex-row items-center gap-2 py-1.5 pr-3 outline-none"
-      >
+      <View className="flex-1 flex-row items-center gap-2 py-1.5 pr-3">
         {Icon ? (
           <Icon
             size={14}
@@ -138,61 +137,42 @@ function TreeRow({
             color={isSelected || isHighlighted ? t.controlFgActive : t.iconDefault}
           />
         )}
-        <Text
+        <HighlightText
+          text={item.label}
+          ranges={item.ranges ?? []}
           className={cn(
             "flex-1 font-sans text-sm",
             isSelected || isHighlighted ? "text-foreground" : "text-foreground/70",
           )}
-          numberOfLines={1}
-        >
-          {item.label}
-        </Text>
+          highlightClassName="text-blue-foreground"
+        />
         {item.configState && (
           <Badge variant={getConfigStateBadgeVariant(item.configState)} size="sm">
             {item.configState}
           </Badge>
         )}
-      </Pressable>
+      </View>
     </Pressable>
   );
 }
 
 function computeDefaultCollapsed(tree: CategoryGroup[]): Set<string> {
-  const all = new Set<string>();
-  const open = new Set<string>();
+  const collapsed = new Set<string>();
 
-  const walkNodes = (nodes: DeviceNode[]): boolean => {
-    let found = false;
+  const walkNodes = (nodes: DeviceNode[]) => {
     for (const node of nodes) {
       if (node.children.length > 0) {
-        all.add(node.entityId);
-      }
-      if (node.configState !== null) {
-        found = true;
-        if (node.children.length > 0) {
-          open.add(node.entityId);
-        }
-      }
-      if (walkNodes(node.children)) {
-        found = true;
-        open.add(node.entityId);
+        collapsed.add(node.entityId);
+        walkNodes(node.children);
       }
     }
-    return found;
   };
 
   for (const category of tree) {
-    const categoryKey = `category:${category.category}`;
-    all.add(categoryKey);
-    if (walkNodes(category.roots)) {
-      open.add(categoryKey);
-    }
+    collapsed.add(`category:${category.category}`);
+    walkNodes(category.roots);
   }
 
-  const collapsed = new Set<string>();
-  for (const key of all) {
-    if (!open.has(key)) collapsed.add(key);
-  }
   return collapsed;
 }
 
@@ -248,6 +228,15 @@ function TreeView({
     });
   }, []);
 
+  const rangesByKey = useMemo(() => {
+    if (!isSearching) return null;
+    const map = new Map<string, number[]>();
+    for (const m of searchResult.matches) {
+      map.set(m.entityId, m.ranges);
+    }
+    return map;
+  }, [isSearching, searchResult]);
+
   const rows = useMemo(() => {
     const result: TreeItem[] = [];
 
@@ -270,6 +259,7 @@ function TreeView({
           hasChildren,
           configState: node.configState,
           isConfigurable: node.isConfigurable,
+          ranges: rangesByKey?.get(node.entityId),
         });
         if (hasChildren && !isCollapsed) {
           addNodes(node.children, depth + 1);
@@ -298,7 +288,7 @@ function TreeView({
     }
 
     return result;
-  }, [tree, collapsed, isSearching, searchResult]);
+  }, [tree, collapsed, isSearching, searchResult, rangesByKey]);
 
   const highlightedIndex = useMemo(() => {
     if (highlightedKey) {
@@ -457,6 +447,7 @@ type DrilldownItem = {
   configState: ConfigStateLabel | null;
   isConfigurable?: boolean;
   breadcrumb?: string[];
+  ranges?: number[];
 };
 
 function DrilldownRow({
@@ -480,6 +471,7 @@ function DrilldownRow({
   return (
     <Pressable
       ref={ref}
+      onPress={onTap}
       tabIndex={-1}
       className={cn(
         "min-h-[48px] flex-row items-center",
@@ -490,11 +482,7 @@ function DrilldownRow({
             : "hover:bg-glass active:bg-glass-hover",
       )}
     >
-      <Pressable
-        onPress={onTap}
-        tabIndex={-1}
-        className="flex-1 gap-0.5 py-2.5 pr-3 pl-4 outline-none"
-      >
+      <View className="flex-1 gap-0.5 py-2.5 pr-3 pl-4">
         <View className="flex-row items-center gap-3">
           {Icon ? (
             <Icon
@@ -509,15 +497,15 @@ function DrilldownRow({
               color={isSelected || isHighlighted ? t.controlFgActive : t.iconDefault}
             />
           )}
-          <Text
+          <HighlightText
+            text={item.label}
+            ranges={item.ranges ?? []}
             className={cn(
               "flex-1 font-sans text-sm",
               isSelected || isHighlighted ? "text-foreground" : "text-foreground/70",
             )}
-            numberOfLines={1}
-          >
-            {item.label}
-          </Text>
+            highlightClassName="text-blue-foreground"
+          />
           {item.configState && (
             <Badge variant={getConfigStateBadgeVariant(item.configState)} size="sm">
               {item.configState}
@@ -529,7 +517,7 @@ function DrilldownRow({
             {item.breadcrumb.join(" \u203A ")}
           </Text>
         )}
-      </Pressable>
+      </View>
 
       {onDrillIn && (
         <Pressable
@@ -618,6 +606,7 @@ function matchesToDrilldownItems(matches: ConfigTreeMatch[]): DrilldownItem[] {
     configState: m.configState,
     isConfigurable: m.isConfigurable,
     breadcrumb: m.breadcrumb.slice(0, -1),
+    ranges: m.ranges,
   }));
 }
 

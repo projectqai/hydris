@@ -9,22 +9,12 @@ import (
 	"sync"
 	"time"
 
-	_goconnect "github.com/projectqai/proto/go/_goconnect"
-
 	"github.com/projectqai/hydris/builtin"
-	_ "github.com/projectqai/hydris/builtin/adsbdb"
-	_ "github.com/projectqai/hydris/builtin/adsblol"
-	_ "github.com/projectqai/hydris/builtin/ais"
-	_ "github.com/projectqai/hydris/builtin/asterix"
-	_ "github.com/projectqai/hydris/builtin/federation"
-	_ "github.com/projectqai/hydris/builtin/hexdb"
-	_ "github.com/projectqai/hydris/builtin/mavlink"
+	"github.com/projectqai/hydris/pkg/plugin"
+	_ "github.com/projectqai/hydris/builtin/all"
 	meshtastic "github.com/projectqai/hydris/builtin/meshtastic"
-	_ "github.com/projectqai/hydris/builtin/playground"
-	_ "github.com/projectqai/hydris/builtin/reolink"
-	_ "github.com/projectqai/hydris/builtin/spacetrack"
-	_ "github.com/projectqai/hydris/builtin/tak"
 	"github.com/projectqai/hydris/engine"
+	"github.com/projectqai/hydris/pkg/media"
 	"github.com/projectqai/hydris/view"
 	"github.com/rs/cors"
 	"golang.org/x/net/http2"
@@ -78,6 +68,7 @@ func StartEngine() string {
 	worldFile := ""
 	if cacheDir := getAndroidCacheDir(); cacheDir != "" {
 		worldFile = cacheDir + "/world.yaml"
+		plugin.TempDir = cacheDir
 	}
 	slog.Info("StartEngine called", "worldFile", worldFile)
 	if globalService != nil {
@@ -115,18 +106,8 @@ func StartEngine() string {
 
 	service.engine.InitNodeIdentity()
 
-	mux := http.NewServeMux()
-
-	worldPath, worldHandler := _goconnect.NewWorldServiceHandler(service.engine)
-	mux.Handle(worldPath, worldHandler)
-
-	timelinePath, timelineHandler := _goconnect.NewTimelineServiceHandler(service.engine)
-	mux.Handle(timelinePath, timelineHandler)
-
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte("OK"))
-	})
+	bridges := media.NewBridgeManager()
+	mux := engine.NewAPIMux(service.engine, nil, bridges)
 
 	webServer, err := view.NewWebServer()
 	if err == nil {

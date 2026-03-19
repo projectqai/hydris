@@ -1,22 +1,18 @@
+import { AFFILIATION_COLORS_RGB } from "../constants";
 import type { Affiliation, ShapeFeature, ShapeGeometry, ShapeProperties } from "../types";
 
-const AFFILIATION_COLORS: Record<Affiliation, [number, number, number]> = {
-  blue: [59, 130, 246],
-  red: [205, 24, 24],
-  neutral: [61, 141, 122],
-  unknown: [247, 239, 129],
-};
-
-const NO_SYMBOL_COLOR: [number, number, number] = [156, 163, 175];
-
-export function shapeToFeature(
+function shapeToSingleFeature(
   id: string,
-  shape: ShapeGeometry,
+  shape: Exclude<ShapeGeometry, { type: "collection" }>,
   affiliation: Affiliation,
-  hasSymbol: boolean,
 ): ShapeFeature {
-  const color = hasSymbol ? AFFILIATION_COLORS[affiliation] : NO_SYMBOL_COLOR;
-  const properties: ShapeProperties = { id, color, affiliation };
+  const color = AFFILIATION_COLORS_RGB[affiliation];
+  const properties: ShapeProperties = {
+    id,
+    color,
+    affiliation,
+    lineStyle: shape.type === "point" ? undefined : shape.lineStyle,
+  };
 
   if (shape.type === "polygon") {
     const outer = shape.outer.map((p) => [p.lng, p.lat] as [number, number]);
@@ -59,4 +55,29 @@ export function shapeToFeature(
       coordinates: [shape.position.lng, shape.position.lat],
     },
   };
+}
+
+function collectFeatures(
+  id: string,
+  shape: ShapeGeometry,
+  affiliation: Affiliation,
+  out: ShapeFeature[],
+): void {
+  if (shape.type === "collection") {
+    for (const sub of shape.geometries) {
+      collectFeatures(id, sub, affiliation, out);
+    }
+  } else {
+    out.push(shapeToSingleFeature(id, shape, affiliation));
+  }
+}
+
+export function shapeToFeatures(
+  id: string,
+  shape: ShapeGeometry,
+  affiliation: Affiliation,
+): ShapeFeature[] {
+  const out: ShapeFeature[] = [];
+  collectFeatures(id, shape, affiliation, out);
+  return out;
 }

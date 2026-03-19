@@ -15,6 +15,7 @@ import {
   Link2,
   Map,
   PersonStanding,
+  Radar,
   Radius,
   Route,
   Satellite,
@@ -22,9 +23,10 @@ import {
   ZoomOut,
 } from "lucide-react-native";
 import type { RefObject } from "react";
-import { useRef, useState } from "react";
-import { Pressable, Text, View } from "react-native";
-import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
+import { useLayoutEffect, useRef, useState } from "react";
+import type { ViewStyle } from "react-native";
+import { Dimensions, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import Animated, { FadeIn } from "react-native-reanimated";
 import { toast } from "sonner-native";
 
 import {
@@ -46,12 +48,21 @@ import { useRangeRingStore } from "../../store/range-ring-store";
 import { useSelectionStore } from "../../store/selection-store";
 import { useTabStore } from "../../store/tab-store";
 
+// Portals menus to document.body so they escape pane overflow clipping.
+// Lazy-initialized to avoid Metro resolving react-dom for native bundles.
+let portalTo: ((children: React.ReactNode, container: Element) => React.ReactPortal) | null = null;
+function getPortalTo() {
+  if (portalTo === null && process.env.EXPO_OS === "web") {
+    portalTo = require("react-dom").createPortal;
+  }
+  return portalTo;
+}
+
 type NetworkType = "datalinks";
 type SensorStatus = "online" | "degraded";
-type TrackType = "red" | "neutral" | "unknown" | "blue";
-type VisualizationType = "coverage" | "shapes" | "trackHistory";
+type TrackType = "red" | "neutral" | "unknown" | "blue" | "unclassified";
+type VisualizationType = "coverage" | "shapes" | "detections" | "trackHistory";
 
-const BUTTON_SIZE = 40;
 const ICON_SIZE = 16;
 
 type LayerOption = {
@@ -77,6 +88,7 @@ const TRACK_OPTIONS: OverlayCategoryOption[] = [
   { id: "neutral", label: "Neutral", color: "green" },
   { id: "unknown", label: "Unknown", color: "yellow" },
   { id: "blue", label: "Blue", color: "blue" },
+  { id: "unclassified", label: "Unclassified", color: "gray" },
 ];
 
 const SENSOR_OPTIONS: OverlayCategoryOption[] = [
@@ -91,6 +103,7 @@ const NETWORK_OPTIONS: OverlayCategoryOption[] = [
 const VISUALIZATION_OPTIONS: OverlayCategoryOption[] = [
   { id: "coverage", label: "Coverage Area", icon: Radius },
   { id: "shapes", label: "Geoshapes", icon: Hexagon },
+  { id: "detections", label: "Detections", icon: Radar },
   { id: "trackHistory", label: "Track Lines", icon: Route },
 ];
 
@@ -101,17 +114,144 @@ type MapControlsProps = {
   viewRef?: RefObject<ViewState>;
 };
 
-function ControlMenu({ visible, children }: { visible: boolean; children: React.ReactNode }) {
+const MENU_GAP = 8;
+const VIEWPORT_PAD = 8;
+
+// position: "fixed" is valid on RN Web but not in RN types
+function fixedStyle(props: Record<string, number>): ViewStyle {
+  return { position: "fixed", ...props } as unknown as ViewStyle;
+}
+
+function ControlMenu({
+  visible,
+  children,
+  anchorRef,
+  onClose,
+}: {
+  visible: boolean;
+  children: React.ReactNode;
+  anchorRef: RefObject<View | null>;
+  onClose: () => void;
+}) {
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [ready, setReady] = useState(false);
+  const menuRef = useRef<View>(null);
+  const anchorRectRef = useRef<DOMRect | null>(null);
+
+  // Phase 1: rough position from anchor (gets menu into the DOM for measurement)
+  useLayoutEffect(() => {
+    if (!visible) {
+      setPos(null);
+      setReady(false);
+      anchorRectRef.current = null;
+      return;
+    }
+    if (process.env.EXPO_OS === "web") {
+      const rect = (anchorRef.current as unknown as HTMLElement)?.getBoundingClientRect();
+      if (rect) {
+        anchorRectRef.current = rect;
+        setPos({ top: rect.top, left: rect.left - MENU_GAP });
+        setReady(false);
+      }
+    } else {
+      anchorRef.current?.measureInWindow((x, y, w, h) => {
+        anchorRectRef.current = { left: x, top: y, right: x + w, bottom: y + h } as DOMRect;
+        setPos({ top: y, left: x - MENU_GAP });
+        setReady(false);
+      });
+    }
+  }, [visible, anchorRef]);
+
+  // Phase 2 (web): correct position using actual menu dimensions
+  useLayoutEffect(() => {
+    if (!pos || ready || process.env.EXPO_OS !== "web") return;
+    const menuEl = menuRef.current as unknown as HTMLElement;
+    const anchor = anchorRectRef.current;
+    if (!menuEl || !anchor) return;
+
+    const menu = menuEl.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    let left = anchor.left - menu.width - MENU_GAP;
+    if (left < VIEWPORT_PAD) left = anchor.right + MENU_GAP;
+    if (left + menu.width > vw - VIEWPORT_PAD) left = VIEWPORT_PAD;
+
+    let top = anchor.top;
+    if (top + menu.height > vh - VIEWPORT_PAD) {
+      top = Math.max(VIEWPORT_PAD, vh - menu.height - VIEWPORT_PAD);
+    }
+
+    setPos({ top, left });
+    setReady(true);
+  }, [pos, ready]);
+
+  // Phase 2 (native): clamp to screen bounds via onLayout measurement
+  const handleNativeMenuLayout = (e: {
+    nativeEvent: { layout: { width: number; height: number } };
+  }) => {
+    if (ready || !anchorRectRef.current) return;
+    const { width: mw, height: mh } = e.nativeEvent.layout;
+    const anchor = anchorRectRef.current;
+    const { width: sw, height: sh } = Dimensions.get("window");
+
+    let left = anchor.left - mw - MENU_GAP;
+    if (left < VIEWPORT_PAD) left = anchor.right + MENU_GAP;
+    if (left + mw > sw - VIEWPORT_PAD) left = VIEWPORT_PAD;
+
+    let top = anchor.top;
+    if (top + mh > sh - VIEWPORT_PAD) {
+      top = Math.max(VIEWPORT_PAD, sh - mh - VIEWPORT_PAD);
+    }
+
+    setPos({ top, left });
+    setReady(true);
+  };
+
   if (!visible) return null;
 
+  const portal = getPortalTo();
+  if (portal) {
+    if (!pos) return null;
+    return portal(
+      <>
+        <Pressable
+          style={fixedStyle({ top: 0, left: 0, right: 0, bottom: 0, zIndex: 99998 })}
+          onPress={onClose}
+          accessibilityLabel="Close menu"
+        />
+        <Animated.View
+          ref={menuRef}
+          entering={ready ? FadeIn.duration(150) : undefined}
+          style={[
+            fixedStyle({ top: pos.top, left: pos.left, zIndex: 99999 }),
+            !ready && ({ opacity: 0 } as ViewStyle),
+          ]}
+        >
+          {children}
+        </Animated.View>
+      </>,
+      document.body,
+    );
+  }
+
+  // Native: Modal escapes pane overflow, same as web portal
+  if (!pos) return null;
   return (
-    <Animated.View
-      entering={FadeIn.duration(150)}
-      exiting={FadeOut.duration(100)}
-      style={{ position: "absolute", top: 0, right: BUTTON_SIZE + 8 }}
-    >
-      {children}
-    </Animated.View>
+    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+      <Pressable
+        style={StyleSheet.absoluteFill}
+        onPress={onClose}
+        accessibilityLabel="Close menu"
+      />
+      <Animated.View
+        onLayout={handleNativeMenuLayout}
+        entering={ready ? FadeIn.duration(150) : undefined}
+        style={[{ position: "absolute", top: pos.top, left: pos.left }, !ready && { opacity: 0 }]}
+      >
+        {children}
+      </Animated.View>
+    </Modal>
   );
 }
 
@@ -134,6 +274,9 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
   const [showLayerMenu, setShowLayerMenu] = useState(false);
   const [showOverlayMenu, setShowOverlayMenu] = useState(false);
   const [showShareMenu, setShowShareMenu] = useState(false);
+  const layerBtnRef = useRef<View>(null);
+  const overlayBtnRef = useRef<View>(null);
+  const shareBtnRef = useRef<View>(null);
 
   const anyMenuOpen = showLayerMenu || showOverlayMenu || showShareMenu;
 
@@ -270,7 +413,7 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
 
   return (
     <>
-      {anyMenuOpen && (
+      {!getPortalTo() && anyMenuOpen && (
         <Pressable
           className="absolute inset-0 z-9"
           onPress={closeAllMenus}
@@ -278,7 +421,7 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
         />
       )}
       <View className="absolute top-3 right-3 z-10 gap-2" pointerEvents="box-none">
-        <View className="relative">
+        <View ref={layerBtnRef} className="relative">
           <ControlIconButton
             icon={LAYER_ICONS[currentLayer]}
             iconSize={ICON_SIZE}
@@ -292,7 +435,7 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
             accessibilityLabel="Base layer"
           />
 
-          <ControlMenu visible={showLayerMenu}>
+          <ControlMenu visible={showLayerMenu} anchorRef={layerBtnRef} onClose={closeAllMenus}>
             <LinearGradient
               colors={t.gradients.default}
               {...GRADIENT_PROPS}
@@ -331,7 +474,7 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
           </ControlMenu>
         </View>
 
-        <View className="relative">
+        <View ref={overlayBtnRef} className="relative">
           <ControlIconButton
             icon={Eye}
             iconSize={ICON_SIZE}
@@ -345,11 +488,11 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
             accessibilityLabel="Overlays"
           />
 
-          <ControlMenu visible={showOverlayMenu}>
+          <ControlMenu visible={showOverlayMenu} anchorRef={overlayBtnRef} onClose={closeAllMenus}>
             <LinearGradient
               colors={t.gradients.default}
               {...GRADIENT_PROPS}
-              className="border-border/40 min-w-60 gap-2.5 overflow-hidden rounded-lg border p-2.5"
+              className="border-border/40 w-[290px] gap-2.5 overflow-hidden rounded-lg border p-2.5"
             >
               <OverlayCategory
                 title="Tracks"
@@ -411,7 +554,7 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
           accessibilityLabel="Zoom out"
         />
 
-        <View className="relative">
+        <View ref={shareBtnRef} className="relative">
           <ControlIconButton
             icon={Link2}
             iconSize={ICON_SIZE}
@@ -425,7 +568,7 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
             accessibilityLabel="Share"
           />
 
-          <ControlMenu visible={showShareMenu}>
+          <ControlMenu visible={showShareMenu} anchorRef={shareBtnRef} onClose={closeAllMenus}>
             <LinearGradient
               colors={t.gradients.default}
               {...GRADIENT_PROPS}

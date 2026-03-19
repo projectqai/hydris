@@ -10,8 +10,18 @@ addEventListener("message", (e: MessageEvent) => {
   const { zoom, version } = e.data;
 
   if ("positions" in e.data) {
-    const { positions, affiliations, ids, symbols, count, filter, geoChanged } = e.data;
-    lastPacked = { positions, affiliations, ids, symbols, count };
+    const {
+      positions,
+      affiliations,
+      ids,
+      symbols,
+      hasShape,
+      isDetection,
+      count,
+      filter,
+      geoChanged,
+    } = e.data;
+    lastPacked = { positions, affiliations, ids, symbols, hasShape, isDetection, count };
     lastFilter = filter;
     const clusters = engine.process(lastPacked, filter as FilterInput, zoom, geoChanged);
     postMessage({ clusters, version });

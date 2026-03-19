@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
+	"net/url"
+	"os"
+	"time"
 
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/controller"
@@ -12,6 +16,7 @@ import (
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Instance represents a running federation connection
@@ -205,6 +210,28 @@ func runInstance(ctx context.Context, logger *slog.Logger, serverURL string, ent
 	return instance.runPull(ctx)
 }
 
+const defaultFederationKeepaliveMs = 30000 // 30s
+
+// ensureKeepalive makes sure the WatchBehavior has a keepalive interval set.
+// Federation relies on keepalive to refresh the TTL of forwarded entities, so
+// we always need one even if the user didn't configure it.
+func (i *Instance) ensureKeepalive() {
+	if i.limiter == nil {
+		i.limiter = &pb.WatchBehavior{}
+	}
+	if i.limiter.KeepaliveIntervalMs == nil || *i.limiter.KeepaliveIntervalMs == 0 {
+		ms := uint32(defaultFederationKeepaliveMs)
+		i.limiter.KeepaliveIntervalMs = &ms
+	}
+}
+
+// keepaliveTTL returns the TTL to stamp on forwarded entities that have no
+// explicit lifetime.until. It is 2× the keepalive interval so that the entity
+// survives one missed keepalive but expires when the connection is truly dead.
+func (i *Instance) keepaliveTTL() time.Duration {
+	return 2 * time.Duration(*i.limiter.KeepaliveIntervalMs) * time.Millisecond
+}
+
 // connectToRemote establishes a connection to the remote server
 func (i *Instance) connectToRemote() (*goclient.Connection, error) {
 	if i.wgConfig != nil {
@@ -217,51 +244,102 @@ func (i *Instance) connectToRemote() (*goclient.Connection, error) {
 	return goclient.Connect(i.remote)
 }
 
-// discoverNodeID queries a world service for the local node and returns its unique_id.
-func discoverNodeID(ctx context.Context, client pb.WorldServiceClient) (string, error) {
+// discoverNode queries a world service for the local node and returns its
+// unique_id and entity.
+func discoverNode(ctx context.Context, client pb.WorldServiceClient) (string, *pb.Entity, error) {
 	resp, err := client.GetLocalNode(ctx, &pb.GetLocalNodeRequest{})
 	if err != nil {
-		return "", fmt.Errorf("get local node: %w", err)
+		return "", nil, fmt.Errorf("get local node: %w", err)
 	}
 	if resp.Entity == nil || resp.Entity.Controller == nil || resp.Entity.Controller.Node == nil {
-		return "", fmt.Errorf("local node has no controller.node")
+		return "", nil, fmt.Errorf("local node has no controller.node")
 	}
-	return *resp.Entity.Controller.Node, nil
+	return *resp.Entity.Controller.Node, resp.Entity, nil
+}
+
+// federateNodeEntity pushes a scrubbed copy of a node entity to a destination.
+// This lets the receiving side know who a sender ID refers to.
+func federateNodeEntity(ctx context.Context, dst pb.WorldServiceClient, node *pb.Entity, keepaliveTTL time.Duration) {
+	e := proto.Clone(node).(*pb.Entity)
+	e.Lease = nil
+	e.Config = nil
+	e.Configurable = nil
+	now := timestamppb.Now()
+	e.Lifetime = &pb.Lifetime{
+		From:  now,
+		Fresh: now,
+		Until: timestamppb.New(now.AsTime().Add(keepaliveTTL)),
+	}
+	_, _ = dst.Push(ctx, &pb.EntityChangeRequest{
+		Changes: []*pb.Entity{e},
+	})
 }
 
 // filterForFederation checks whether an entity is eligible for federation and
 // scrubs fields that must never be distributed. It returns false if the entity
-// should be skipped entirely. skipNodeID is the node whose entities we want to
-// exclude (to avoid echoing back).
-func filterForFederation(entity *pb.Entity, skipNodeID string) bool {
+// should be skipped entirely. sourceNodeID is the node whose entities we want
+// to forward — only entities originating from this node pass through (no
+// multi-hop). keepaliveTTL is used to bind the lifetime of components without
+// an explicit lifetime.until to the connection: we set their TTL to 2× the
+// keepalive interval so they expire when the connection dies but survive
+// intermediate re-streams.
+func filterForFederation(entity *pb.Entity, sourceNodeID string, keepaliveTTL time.Duration) bool {
 	if entity == nil {
 		return false
 	}
 
-	// Only federate entities with a lifetime.until
-	// We may miss the delete event and persist something forever
-	// config entities need a different way of sharing that relies on consensus
-	if entity.Lifetime == nil || entity.Lifetime.Until == nil {
+	// Only entities with Routing are shareable. Entities without it
+	// (services, device configs, infrastructure) stay local.
+	if entity.Routing == nil {
 		return false
 	}
 
-	if entity.Config != nil {
+	// Only forward entities that originated on sourceNodeID. This prevents
+	// multi-hop: entities that arrived via federation from a third node are
+	// not re-distributed.
+	if entity.Controller == nil || entity.Controller.Node == nil || *entity.Controller.Node != sourceNodeID {
 		return false
 	}
 
-	// Skip entities that originated from the given node
-	if entity.Controller != nil && entity.Controller.Node != nil && *entity.Controller.Node == skipNodeID {
-		return false
+	// For entities without a lifetime.until we stamp a TTL derived from the
+	// keepalive interval so they auto-expire if the source disappears.
+	// Entities that already carry a lifetime.until are forwarded as-is.
+	// We also bump fresh to now so that the receiving engine's LWW merge
+	// accepts the update — otherwise equal freshness + longer until loses.
+	if entity.Lifetime == nil {
+		entity.Lifetime = &pb.Lifetime{}
+	}
+	now := timestamppb.Now()
+	keepaliveUntil := now.AsTime().Add(keepaliveTTL)
+	// Always stamp the keepalive-based TTL, unless the source already has a
+	// shorter lifetime.until (we don't want to extend entities that are about
+	// to expire).
+	if entity.Lifetime.Until == nil || entity.Lifetime.Until.AsTime().After(keepaliveUntil) {
+		entity.Lifetime.Fresh = now
+		entity.Lifetime.Until = timestamppb.New(keepaliveUntil)
 	}
 
 	// Scrub fields that must never be distributed
 	entity.Lease = nil
+	entity.Config = nil
+	// TODO: we need to think about Configurable and Device components
+	// they might cause a local controller to pick them up and act on,
+	// even when the device is remote
+
+	// Strip engine-managed GeoShapeComponent when LocalShapeComponent has
+	// relative_to set. The receiving engine will recompute GeoShapeComponent
+	// from LocalShapeComponent + the parent entity's position.
+	if entity.LocalShape != nil && entity.LocalShape.RelativeTo != "" {
+		entity.Shape = nil
+	}
 
 	return true
 }
 
 // runPull connects to a remote node and pulls their entities to local.
 func (i *Instance) runPull(ctx context.Context) error {
+	i.ensureKeepalive()
+
 	localConn, err := goclient.Connect(i.serverURL)
 	if err != nil {
 		return err
@@ -277,12 +355,16 @@ func (i *Instance) runPull(ctx context.Context) error {
 	localClient := pb.NewWorldServiceClient(localConn)
 	remoteClient := pb.NewWorldServiceClient(remoteConn)
 
-	// Discover local node_id so we don't pull back entities that originated here
-	localNodeID, err := discoverNodeID(ctx, localClient)
+	// Discover remote node_id — we only pull entities that originated there
+	// (no multi-hop: skip anything the remote itself received via federation).
+	remoteNodeID, remoteNodeEntity, err := discoverNode(ctx, remoteClient)
 	if err != nil {
-		return fmt.Errorf("discover local node ID: %w", err)
+		return fmt.Errorf("discover remote node ID: %w", err)
 	}
-	i.logger.Info("pull: discovered local node", "nodeID", localNodeID)
+	i.logger.Info("pull: discovered remote node", "nodeID", remoteNodeID)
+
+	// Push the remote node entity to local so receivers can resolve the sender.
+	federateNodeEntity(ctx, localClient, remoteNodeEntity, i.keepaliveTTL())
 
 	stream, err := goclient.WatchEntitiesWithRetry(ctx, remoteClient, &pb.ListEntitiesRequest{
 		Filter:    i.filter,
@@ -293,6 +375,8 @@ func (i *Instance) runPull(ctx context.Context) error {
 	}
 
 	i.logger.Info("pull started", "entityID", i.entityID)
+
+	keepaliveTTL := i.keepaliveTTL()
 
 	var entitiesReceived, entitiesPushed uint64
 
@@ -308,8 +392,13 @@ func (i *Instance) runPull(ctx context.Context) error {
 
 		entitiesReceived++
 
-		if !filterForFederation(event.Entity, localNodeID) {
+		if !filterForFederation(event.Entity, remoteNodeID, keepaliveTTL) {
 			continue
+		}
+
+		// Rewrite private camera URLs to point to the remote's media proxy.
+		if event.Entity.Camera != nil {
+			rewriteCameraURLs(event.Entity, "http://"+i.remote)
 		}
 
 		_, err = localClient.Push(ctx, &pb.EntityChangeRequest{
@@ -337,6 +426,8 @@ func (i *Instance) runPull(ctx context.Context) error {
 
 // runPush watches local entities and pushes them to a remote node.
 func (i *Instance) runPush(ctx context.Context) error {
+	i.ensureKeepalive()
+
 	localConn, err := goclient.Connect(i.serverURL)
 	if err != nil {
 		return err
@@ -352,12 +443,16 @@ func (i *Instance) runPush(ctx context.Context) error {
 	localClient := pb.NewWorldServiceClient(localConn)
 	remoteClient := pb.NewWorldServiceClient(remoteConn)
 
-	// Discover remote node_id so we don't push back entities that originated there
-	remoteNodeID, err := discoverNodeID(ctx, remoteClient)
+	// Discover local node_id — we only push entities that originated here
+	// (no multi-hop: skip anything we received via federation from other nodes).
+	localNodeID, localNodeEntity, err := discoverNode(ctx, localClient)
 	if err != nil {
-		return fmt.Errorf("discover remote node ID: %w", err)
+		return fmt.Errorf("discover local node ID: %w", err)
 	}
-	i.logger.Info("push: discovered remote node", "nodeID", remoteNodeID)
+	i.logger.Info("push: discovered local node", "nodeID", localNodeID)
+
+	// Push the local node entity to remote so receivers can resolve the sender.
+	federateNodeEntity(ctx, remoteClient, localNodeEntity, i.keepaliveTTL())
 
 	stream, err := goclient.WatchEntitiesWithRetry(ctx, localClient, &pb.ListEntitiesRequest{
 		Filter:    i.filter,
@@ -368,6 +463,8 @@ func (i *Instance) runPush(ctx context.Context) error {
 	}
 
 	i.logger.Info("push started", "entityID", i.entityID)
+
+	keepaliveTTL := i.keepaliveTTL()
 
 	var entitiesReceived, entitiesPushed uint64
 
@@ -383,8 +480,14 @@ func (i *Instance) runPush(ctx context.Context) error {
 
 		entitiesReceived++
 
-		if !filterForFederation(event.Entity, remoteNodeID) {
+		if !filterForFederation(event.Entity, localNodeID, keepaliveTTL) {
 			continue
+		}
+
+		// Rewrite private camera URLs to point to our media proxy.
+		if event.Entity.Camera != nil {
+			origin := detectOrigin(i.remote)
+			rewriteCameraURLs(event.Entity, origin)
 		}
 
 		_, err = remoteClient.Push(ctx, &pb.EntityChangeRequest{
@@ -514,6 +617,79 @@ func parseWatchLimiter(v *structpb.Value) *pb.WatchBehavior {
 	}
 
 	return limiter
+}
+
+// rewriteCameraURLs rewrites private/localhost/credentialed camera stream
+// URLs to use the origin node's media proxy endpoints. This ensures that
+// federated entities carry publicly-reachable URLs.
+func rewriteCameraURLs(entity *pb.Entity, origin string) {
+	if entity.Camera == nil || origin == "" {
+		return
+	}
+	for idx, stream := range entity.Camera.Streams {
+		if stream.Url == "" {
+			continue
+		}
+		u, err := url.Parse(stream.Url)
+		if err != nil {
+			continue
+		}
+		// Only rewrite URLs that point to localhost/loopback or carry
+		// credentials. Other addresses (including RFC1918) are assumed to
+		// be already network-reachable and must not be changed — otherwise
+		// multi-hop federation would clobber valid proxy URLs.
+		if u.User == nil && !isLoopback(u.Hostname()) {
+			continue
+		}
+		switch stream.Protocol {
+		case pb.MediaStreamProtocol_MediaStreamProtocolImage,
+			pb.MediaStreamProtocol_MediaStreamProtocolMjpeg:
+			stream.Url = fmt.Sprintf("%s/media/image/%s?stream=%d", origin, entity.Id, idx)
+		case pb.MediaStreamProtocol_MediaStreamProtocolWebrtc:
+			stream.Url = fmt.Sprintf("%s/media/whep/%s?stream=%d", origin, entity.Id, idx)
+		case pb.MediaStreamProtocol_MediaStreamProtocolRtsp:
+			stream.Url = fmt.Sprintf("%s/media/whep/%s?stream=%d", origin, entity.Id, idx)
+			stream.Protocol = pb.MediaStreamProtocol_MediaStreamProtocolWebrtc
+		default:
+			stream.Url = fmt.Sprintf("%s/media/image/%s?stream=%d", origin, entity.Id, idx)
+		}
+	}
+}
+
+// isLoopback returns true if the hostname is localhost or a loopback address.
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
+}
+
+// detectOrigin determines the externally-reachable address of this node
+// relative to the given remote address. It dials UDP to discover which
+// local interface would be used to reach the remote, then combines that
+// IP with the engine's HTTP port.
+func detectOrigin(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	// Dial UDP (no actual packets sent) to discover the source interface.
+	conn, err := net.Dial("udp", net.JoinHostPort(host, "80"))
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+
+	localAddr := conn.LocalAddr().(*net.UDPAddr)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "50051"
+	}
+	return "http://" + net.JoinHostPort(localAddr.IP.String(), port)
 }
 
 func init() {

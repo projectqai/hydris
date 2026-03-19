@@ -1,20 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 
+import { baseUrl } from "../../../../lib/api/world-client";
+import { createBackoff } from "../../../../lib/backoff";
 import { RTCPeerConnection, RTCSessionDescription } from "./rtc";
 import type { ConnectionState } from "./types";
 
-// When bundled behind a proxy that serves frontend + backend, camera URLs
-// may be relative (e.g., "/media/whep/camera1"). Resolve them using the origin.
-// On native, there's no origin concept so we assume localhost.
+// Resolve potentially relative WHEP URLs against the API base URL.
 function resolveUrl(url: string): string {
-  const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost";
-  return new URL(url, origin).href;
+  return new URL(url, baseUrl).href;
 }
 
 type UseWHEPConnectionOptions = {
   url: string;
-  maxRetries?: number;
-  retryDelayMs?: number;
 };
 
 type ConnectionStatus = {
@@ -29,19 +26,12 @@ type UseWHEPConnectionReturn = {
   retry: () => void;
 };
 
-const DEFAULT_MAX_RETRIES = 3;
-const DEFAULT_RETRY_DELAY_MS = 2000;
-
-export function useWHEPConnection({
-  url,
-  maxRetries = DEFAULT_MAX_RETRIES,
-  retryDelayMs = DEFAULT_RETRY_DELAY_MS,
-}: UseWHEPConnectionOptions): UseWHEPConnectionReturn {
+export function useWHEPConnection({ url }: UseWHEPConnectionOptions): UseWHEPConnectionReturn {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>({ state: "idle", error: null });
   const [retryTrigger, setRetryTrigger] = useState(0);
 
-  const retryCountRef = useRef(0);
+  const backoffRef = useRef(createBackoff(250, 5000));
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
@@ -68,21 +58,17 @@ export function useWHEPConnection({
     };
 
     const scheduleRetry = () => {
-      retryCountRef.current += 1;
-      const delay = retryDelayMs * retryCountRef.current;
+      const delay = backoffRef.current.next();
       retryTimeoutRef.current = setTimeout(() => {
         if (mounted) connect(true);
       }, delay);
     };
 
-    const handleFailure = (message: string) => {
+    const handleFailure = (error: string) => {
       if (!mounted) return;
       cleanupPC();
-      if (retryCountRef.current < maxRetries) {
-        scheduleRetry();
-      } else {
-        setStatus({ state: "failed", error: message });
-      }
+      setStatus({ state: "reconnecting", error });
+      scheduleRetry();
     };
 
     const connect = async (isRetry = false) => {
@@ -116,7 +102,7 @@ export function useWHEPConnection({
             case "connected":
             case "completed":
               setStatus({ state: "connected", error: null });
-              retryCountRef.current = 0;
+              backoffRef.current.reset();
               break;
             case "failed":
               handleFailure("Connection lost");
@@ -158,10 +144,10 @@ export function useWHEPConnection({
       cleanup();
       setStream(null);
     };
-  }, [url, maxRetries, retryDelayMs, retryTrigger]);
+  }, [url, retryTrigger]);
 
   const retry = () => {
-    retryCountRef.current = 0;
+    backoffRef.current.reset();
     setRetryTrigger((n) => n + 1);
   };
 

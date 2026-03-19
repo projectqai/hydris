@@ -15,6 +15,7 @@ import { useEntityMutation } from "../../../../lib/api/use-entity-mutation";
 import { getEntityName } from "../../../../lib/api/use-track-utils";
 import { useEntityStore } from "../../store/entity-store";
 import { getEntityIcon } from "../../utils/entity-helpers";
+import { formatRelativeTime, getSharedTimestamp } from "../../utils/format-metrics";
 import { SchemaForm } from "../schema-form";
 import { MetricsSection } from "./metrics-section";
 import type { ConfigSelection } from "./use-config-tree";
@@ -135,12 +136,14 @@ function EntityHeader({
   isAddMode,
   onAddPress,
   onDeletePress,
+  metricsTimestamp,
 }: {
   entity: Entity;
   title?: string;
   isAddMode?: boolean;
   onAddPress?: () => void;
   onDeletePress?: () => void;
+  metricsTimestamp?: string;
 }) {
   const t = useThemeColors();
   const Icon = getEntityIcon(entity);
@@ -159,9 +162,22 @@ function EntityHeader({
             <Text className="font-sans-semibold text-foreground text-base" numberOfLines={1}>
               {title ?? entityName}
             </Text>
-            <Text className="text-muted-foreground font-mono text-xs" numberOfLines={1}>
-              {subtitle}
-            </Text>
+            <View className="flex-row items-center gap-1.5">
+              <Text className="text-muted-foreground shrink font-mono text-xs" numberOfLines={1}>
+                {subtitle}
+              </Text>
+              {metricsTimestamp && (
+                <>
+                  <Text className="text-muted-foreground shrink-0 font-mono text-xs">·</Text>
+                  <Text
+                    className="text-muted-foreground shrink-0 font-mono text-xs"
+                    numberOfLines={1}
+                  >
+                    {metricsTimestamp}
+                  </Text>
+                </>
+              )}
+            </View>
           </View>
           {onAddPress && (
             <ControlButton
@@ -322,6 +338,9 @@ export function ConfigPanel({
   const hasSchema =
     entity.configurable?.schema && Object.keys(entity.configurable.schema).length > 0;
   const hasMetrics = (entity.metric?.metrics.length ?? 0) > 0;
+  const metrics = entity.metric?.metrics ?? [];
+  const sharedTs = getSharedTimestamp(metrics);
+  const metricsTimestamp = sharedTs ? formatRelativeTime(sharedTs) : undefined;
 
   const handleAddPress = () => setIsAddMode((v) => !v);
 
@@ -359,7 +378,7 @@ export function ConfigPanel({
             {panelTab === "config" ? (
               <ConfigurableSection entity={entity} />
             ) : (
-              <MetricsSection entity={entity} />
+              <MetricsSection entity={entity} sharedTimestamp={sharedTs} />
             )}
           </ScrollView>
         </View>
@@ -377,7 +396,7 @@ export function ConfigPanel({
     if (hasMetrics) {
       return (
         <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-          <MetricsSection entity={entity} />
+          <MetricsSection entity={entity} sharedTimestamp={sharedTs} />
         </ScrollView>
       );
     }
@@ -399,6 +418,7 @@ export function ConfigPanel({
         isAddMode={isAddMode}
         onAddPress={deviceClasses.length > 0 ? handleAddPress : undefined}
         onDeletePress={handleDeletePress}
+        metricsTimestamp={metricsTimestamp}
       />
       <View className="bg-surface-overlay/6 h-px" />
       {renderContent()}

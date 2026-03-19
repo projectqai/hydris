@@ -157,7 +157,7 @@ func ADSBAircraftToEntity(aircraft ADSBAircraft, controllerName string, trackerI
 		return nil
 	}
 
-	entityID := fmt.Sprintf("adsblol.%s", aircraft.Hex)
+	entityID := fmt.Sprintf("icao:%s", aircraft.Hex)
 
 	label := strings.TrimSpace(aircraft.Callsign)
 	if label == "" {
@@ -223,6 +223,7 @@ func ADSBAircraftToEntity(aircraft ADSBAircraft, controllerName string, trackerI
 		Transponder: &pb.TransponderComponent{
 			Adsb: transponderADSB,
 		},
+		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 	}
 
 	navMode := pb.NavigationMode_NavigationModeStationary

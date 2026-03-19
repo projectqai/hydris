@@ -91,13 +91,6 @@ func getSession(host, user, pass string) (*reolinkSession, error) {
 	return sess, nil
 }
 
-func clearSession(host string) {
-	baseURL := fmt.Sprintf("http://%s/api.cgi", host)
-	sessionMu.Lock()
-	delete(sessions, baseURL)
-	sessionMu.Unlock()
-}
-
 func reolinkLogin(baseURL, user, pass string) (string, error) {
 	payload := fmt.Sprintf(`[{"cmd":"Login","action":0,"param":{"User":{"userName":"%s","password":"%s"}}}]`, user, pass)
 
@@ -137,16 +130,6 @@ func reolinkLogin(baseURL, user, pass string) (string, error) {
 	}
 
 	return name, nil
-}
-
-func reolinkLogout(host, user, pass string) {
-	sess, err := getSession(host, user, pass)
-	if err != nil {
-		return
-	}
-	payload := `[{"cmd":"Logout","action":0,"param":{}}]`
-	http.Post(sess.baseURL+"?token="+sess.token, "application/json", strings.NewReader(payload))
-	clearSession(host)
 }
 
 // getPTZPosition reads the current pan/tilt/zoom from the camera.
@@ -189,7 +172,7 @@ func reolinkPTZMove(host, user, pass, dir string, speed int) error {
 
 // reolinkPTZStop stops all PTZ movement.
 func reolinkPTZStop(host, user, pass string) {
-	reolinkAPI(host, user, pass, []reolinkCmd{
+	_, _ = reolinkAPI(host, user, pass, []reolinkCmd{
 		{Cmd: "PtzCtrl", Action: 0, Param: map[string]interface{}{
 			"channel": 0,
 			"op":      "Stop",
@@ -304,7 +287,7 @@ func moveAxis(host, user, pass string, current, target float64,
 		}
 		dir := dirForSign(sign)
 
-		reolinkPTZMove(host, user, pass, dir, speed)
+		_ = reolinkPTZMove(host, user, pass, dir, speed)
 		if dur > 0 {
 			time.Sleep(dur)
 		}

@@ -1,0 +1,12 @@
+cef/bazel/
+cef/build/
+cef/cmake/
+cef/libcef_dll/
+cef/include/
+cef/*.txt
+cef/*.html
+cef/*.bazel
+cef/*.bazelrc
+cef/*.bazelversion
+cef/WORKSPACE
+cef/MODULE.bazel

@@ -1,5 +1,6 @@
 export { createCoverageLayer } from "./coverage-layer";
 export { createLabelLayer } from "./label-layer";
+export { createPairingLineLayer } from "./pairing-line-layer";
 export { createRangeRingsLayers } from "./range-rings-layer";
 export { createSelectionLayer } from "./selection-layer";
 export {

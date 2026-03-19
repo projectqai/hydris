@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/projectqai/hydris/builtin/meshtastic/meshpb"
 	"github.com/projectqai/hydris/goclient"
@@ -23,11 +24,11 @@ const (
 
 var xferIDCounter uint32
 
-func runSender(ctx context.Context, logger *slog.Logger, grpcConn *grpc.ClientConn, radio *Radio, channel, hopLimit uint32, sendFormat string, localNodeID string) error {
+func runSender(ctx context.Context, logger *slog.Logger, grpcConn *grpc.ClientConn, radio *Radio, channel, hopLimit uint32, sendFormat string, localNodeID string, localNodeEntityID string, trackerID string, chatIDs *msgIDMap) error {
 	client := pb.NewWorldServiceClient(grpcConn)
 
 	// Send announce for CoT mode so TAK clients see us.
-	if sendFormat == "cot" {
+	if sendFormat == "tak" {
 		announce := &meshpb.ToRadio{
 			Msg: &meshpb.ToRadio_Packet{
 				Packet: &meshpb.Packet{
@@ -63,6 +64,8 @@ func runSender(ctx context.Context, logger *slog.Logger, grpcConn *grpc.ClientCo
 
 	logger.Info("Sender started", "maxRateHz", maxRateHz, "format", sendFormat)
 
+	connectedAt := time.Now()
+
 	for {
 		event, err := stream.Recv()
 		if err != nil {
@@ -79,9 +82,9 @@ func runSender(ctx context.Context, logger *slog.Logger, grpcConn *grpc.ClientCo
 			continue
 		}
 
-		// Handle delete/expiry (only relevant for cot format)
+		// Handle delete/expiry (only tak mode has CoT force-delete)
 		if event.T == pb.EntityChange_EntityChangeExpired {
-			if sendFormat == "cot" {
+			if sendFormat == "tak" {
 				logger.Info("Sending delete to mesh", "entityID", entity.Id)
 				if err := sendDeleteCoT(ctx, logger, radio, entity, channel, hopLimit); err != nil {
 					if ctx.Err() != nil {
@@ -93,9 +96,59 @@ func runSender(ctx context.Context, logger *slog.Logger, grpcConn *grpc.ClientCo
 			continue
 		}
 
-		// Need geo
+		// Chat entities
+		if entity.Chat != nil {
+			if entity.Lifetime != nil && entity.Lifetime.From != nil && entity.Lifetime.From.AsTime().Before(connectedAt) {
+				continue
+			}
+			// Anti-loop: don't send chat back to the radio that originated it
+			if entity.Controller != nil && entity.Controller.Origin != nil && *entity.Controller.Origin == trackerID {
+				continue
+			}
+
+			isSelf := localNodeEntityID != "" && entity.Chat.GetSender() == localNodeEntityID
+
+			// Self chat always goes via native PORT_TEXT.
+			// Non-self chat is only sent in TAK/hydris mode using their
+			// respective formats. In native mode, non-self is skipped.
+			if !isSelf && (sendFormat == "meshtastic" || sendFormat == "native") {
+				continue
+			}
+
+			logger.Info("Sending chat to mesh", "entityID", entity.Id, "message", entity.Chat.Message)
+			var sendErr error
+			if isSelf {
+				sendErr = sendChatAsText(ctx, logger, radio, entity, channel, hopLimit, chatIDs)
+			} else {
+				switch sendFormat {
+				case "tak":
+					sendErr = sendChatAsTAKPacket(ctx, logger, radio, entity, channel, hopLimit)
+				case "hydris":
+					sendErr = sendEntityAsHydris(ctx, logger, radio, entity, channel, hopLimit)
+				}
+			}
+			if sendErr != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				logger.Error("Failed to send chat to mesh", "entityID", entity.Id, "error", sendErr)
+			}
+			continue
+		}
+
+		// Need geo for position entities
 		if entity.Geo == nil {
 			continue
+		}
+
+		isSelf := entity.Id == "self"
+
+		// In native mode, only send self position. In TAK/hydris mode,
+		// send self as native PORT_POSITION, everything else via TAK/hydris.
+		if sendFormat == "meshtastic" || sendFormat == "native" {
+			if !isSelf {
+				continue
+			}
 		}
 
 		logger.Info("Sending entity to mesh", "entityID", entity.Id,
@@ -106,13 +159,15 @@ func runSender(ctx context.Context, logger *slog.Logger, grpcConn *grpc.ClientCo
 		)
 
 		var sendErr error
-		switch sendFormat {
-		case "cot":
-			sendErr = sendEntityAsCoT(ctx, logger, radio, entity, channel, hopLimit)
-		case "pli":
-			sendErr = sendEntityAsPLI(ctx, logger, radio, entity, channel, hopLimit)
-		case "hydris":
-			sendErr = sendEntityAsHydris(ctx, logger, radio, entity, channel, hopLimit)
+		if isSelf {
+			sendErr = sendEntityAsPosition(ctx, logger, radio, entity, channel, hopLimit)
+		} else {
+			switch sendFormat {
+			case "tak":
+				sendErr = sendEntityAsPLI(ctx, logger, radio, entity, channel, hopLimit)
+			case "hydris":
+				sendErr = sendEntityAsHydris(ctx, logger, radio, entity, channel, hopLimit)
+			}
 		}
 		if sendErr != nil {
 			if ctx.Err() != nil {
@@ -122,40 +177,6 @@ func runSender(ctx context.Context, logger *slog.Logger, grpcConn *grpc.ClientCo
 			continue
 		}
 	}
-}
-
-func sendEntityAsCoT(ctx context.Context, logger *slog.Logger, radio *Radio, entity *pb.Entity, channel, hopLimit uint32) error {
-	cotXML, err := cot.EntityToCoT(entity)
-	if err != nil {
-		return fmt.Errorf("entity to CoT: %w", err)
-	}
-	if cotXML == nil {
-		return fmt.Errorf("entity produced nil CoT")
-	}
-
-	logger.Info("CoT XML outbound", "entityID", entity.Id, "xml", string(cotXML))
-
-	compressed, err := zlibCompress(cotXML)
-	if err != nil {
-		return fmt.Errorf("zlib compress: %w", err)
-	}
-
-	data := make([]byte, 1+len(compressed))
-	data[0] = transferTypeCot
-	copy(data[1:], compressed)
-
-	transferID := int(atomic.AddUint32(&xferIDCounter, 1)) & 0xFFFFFF
-	packets := ftnEncode(data, transferID)
-
-	logger.Info("Sending CoT via fountain",
-		"entityID", entity.Id,
-		"cotLen", len(cotXML),
-		"compressedLen", len(compressed),
-		"packets", len(packets),
-		"transferID", transferID,
-	)
-
-	return sendPackets(ctx, radio, packets, meshpb.Port_PORT_TAK_FORWARDER, channel, hopLimit)
 }
 
 func sendEntityAsPLI(ctx context.Context, logger *slog.Logger, radio *Radio, entity *pb.Entity, channel, hopLimit uint32) error {
@@ -199,6 +220,41 @@ func sendEntityAsPLI(ctx context.Context, logger *slog.Logger, radio *Radio, ent
 					Decoded: &meshpb.Payload{
 						Data: data,
 						Port: meshpb.Port_PORT_TAK,
+					},
+				},
+			},
+		},
+	}
+
+	return radio.Send(toRadio)
+}
+
+func sendEntityAsPosition(ctx context.Context, logger *slog.Logger, radio *Radio, entity *pb.Entity, channel, hopLimit uint32) error {
+	pos := &meshpb.Pos{
+		LatI: int32(entity.Geo.Latitude * 1e7),
+		LonI: int32(entity.Geo.Longitude * 1e7),
+	}
+	if entity.Geo.Altitude != nil {
+		pos.Alt = int32(*entity.Geo.Altitude)
+	}
+
+	data, err := proto.Marshal(pos)
+	if err != nil {
+		return fmt.Errorf("marshal Position: %w", err)
+	}
+
+	toRadio := &meshpb.ToRadio{
+		Msg: &meshpb.ToRadio_Packet{
+			Packet: &meshpb.Packet{
+				Dst:      broadcastNum,
+				Ch:       channel,
+				HopLimit: hopLimit,
+				Id:       rand.Uint32(),
+				WantAck:  false,
+				Body: &meshpb.Packet_Decoded{
+					Decoded: &meshpb.Payload{
+						Data: data,
+						Port: meshpb.Port_PORT_POSITION,
 					},
 				},
 			},
@@ -259,6 +315,114 @@ func sendEntityAsHydris(ctx context.Context, logger *slog.Logger, radio *Radio, 
 		},
 	}
 	return radio.Send(toRadio)
+}
+
+func sendChatAsTAKPacket(ctx context.Context, logger *slog.Logger, radio *Radio, entity *pb.Entity, channel, hopLimit uint32) error {
+	callsign := entity.Chat.GetSender()
+	if entity.Label != nil && *entity.Label != "" {
+		callsign = *entity.Label
+	}
+
+	to := entity.Chat.GetTo()
+
+	tp := &meshpb.TAKPacket{
+		Contact: &meshpb.TAKContact{
+			Callsign: callsign,
+		},
+		Body: &meshpb.TAKPacket_Chat{
+			Chat: &meshpb.TAKChat{
+				Message: entity.Chat.Message,
+				To:      to,
+			},
+		},
+	}
+
+	data, err := proto.Marshal(tp)
+	if err != nil {
+		return fmt.Errorf("marshal TAKPacket chat: %w", err)
+	}
+
+	toRadio := &meshpb.ToRadio{
+		Msg: &meshpb.ToRadio_Packet{
+			Packet: &meshpb.Packet{
+				Dst:      broadcastNum,
+				Ch:       channel,
+				HopLimit: hopLimit,
+				Id:       rand.Uint32(),
+				WantAck:  false,
+				Body: &meshpb.Packet_Decoded{
+					Decoded: &meshpb.Payload{
+						Data: data,
+						Port: meshpb.Port_PORT_TAK,
+					},
+				},
+			},
+		},
+	}
+
+	return radio.Send(toRadio)
+}
+
+func sendChatAsText(ctx context.Context, logger *slog.Logger, radio *Radio, entity *pb.Entity, channel, hopLimit uint32, chatIDs *msgIDMap) error {
+	msg := entity.Chat.Message
+	data := []byte(msg)
+	if len(data) > maxPayloadSize {
+		// Truncate to fit, cutting at a valid UTF-8 boundary.
+		data = data[:maxPayloadSize]
+		for len(data) > 0 && data[len(data)-1]&0xC0 == 0x80 {
+			data = data[:len(data)-1]
+		}
+		if len(data) > 0 && data[len(data)-1]&0xC0 == 0xC0 {
+			data = data[:len(data)-1]
+		}
+		logger.Warn("Chat message truncated to fit mesh payload",
+			"originalLen", len(msg), "truncatedLen", len(data))
+	}
+
+	decoded := &meshpb.Payload{
+		Data: data,
+		Port: meshpb.Port_PORT_TEXT,
+	}
+
+	// Map hydris reply_to → meshtastic reply_id.
+	if replyTo := entity.Chat.GetReplyTo(); replyTo != "" {
+		if pid, ok := chatIDs.PacketID(replyTo); ok {
+			decoded.ReplyId = pid
+		}
+	}
+
+	// Map hydris reaction → meshtastic emoji.
+	if entity.Chat.GetReaction() {
+		r, _ := utf8.DecodeRuneInString(entity.Chat.Message)
+		if r != utf8.RuneError {
+			decoded.Emoji = uint32(r)
+		}
+	}
+
+	packetID := rand.Uint32()
+	toRadio := &meshpb.ToRadio{
+		Msg: &meshpb.ToRadio_Packet{
+			Packet: &meshpb.Packet{
+				Dst:      broadcastNum,
+				Ch:       channel,
+				HopLimit: hopLimit,
+				HopStart: hopLimit,
+				Id:       packetID,
+				WantAck:  false,
+				Body: &meshpb.Packet_Decoded{
+					Decoded: decoded,
+				},
+			},
+		},
+	}
+
+	if err := radio.Send(toRadio); err != nil {
+		return err
+	}
+
+	// Record so inbound replies can reference this message.
+	chatIDs.Put(packetID, entity.Id)
+	return nil
 }
 
 func sendDeleteCoT(ctx context.Context, logger *slog.Logger, radio *Radio, entity *pb.Entity, channel, hopLimit uint32) error {

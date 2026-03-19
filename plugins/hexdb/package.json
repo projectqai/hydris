@@ -1,0 +1,10 @@
+{
+  "name": "@hydris/builtin-hexdb",
+  "version": "0.0.1",
+  "main": "index.ts",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@projectqai/proto": ">=0.0.29"
+  }
+}

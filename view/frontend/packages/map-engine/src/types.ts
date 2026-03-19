@@ -24,10 +24,13 @@ export type GeoPosition = {
   alt?: number;
 };
 
+export type ShapeLineStyle = "solid" | "dashed" | "dotted";
+
 export type ShapeGeometry =
-  | { type: "polygon"; outer: GeoPosition[]; holes?: GeoPosition[][] }
-  | { type: "polyline"; points: GeoPosition[] }
-  | { type: "point"; position: GeoPosition };
+  | { type: "polygon"; outer: GeoPosition[]; holes?: GeoPosition[][]; lineStyle?: ShapeLineStyle }
+  | { type: "polyline"; points: GeoPosition[]; lineStyle?: ShapeLineStyle }
+  | { type: "point"; position: GeoPosition }
+  | { type: "collection"; geometries: ShapeGeometry[] };
 
 export type ShapeFeature = Feature<Polygon | LineString | Point, ShapeProperties>;
 
@@ -35,9 +38,10 @@ export type ShapeProperties = {
   id: string;
   color: [number, number, number];
   affiliation: Affiliation;
+  lineStyle?: ShapeLineStyle;
 };
 
-export type Affiliation = "blue" | "red" | "neutral" | "unknown";
+export type Affiliation = "blue" | "red" | "neutral" | "unknown" | "unclassified";
 
 export type EntityData = {
   id: string;
@@ -51,6 +55,8 @@ export type EntityData = {
   activeSectors?: ActiveSensorSectors;
   shape?: ShapeGeometry;
   coverageEntityIds?: string[];
+  parentEntityId?: string;
+  isDetection?: boolean;
 };
 
 export type BaseLayer = "dark" | "satellite" | "street";
@@ -58,7 +64,13 @@ export type BaseLayer = "dark" | "satellite" | "street";
 export type SceneMode = "2d" | "2.5d" | "3d";
 
 export type EntityFilter = {
-  tracks: { blue: boolean; red: boolean; neutral: boolean; unknown: boolean };
+  tracks: {
+    blue: boolean;
+    red: boolean;
+    neutral: boolean;
+    unknown: boolean;
+    unclassified: boolean;
+  };
   sensors: Record<string, boolean>;
 };
 

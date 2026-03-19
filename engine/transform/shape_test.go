@@ -303,10 +303,10 @@ func TestResolve_CleansUpWhenParentEntityExpires(t *testing.T) {
 
 	// Expire parent
 	delete(head, "parent1")
-	st.Resolve(head, "parent1")
+	_, remove := st.Resolve(head, "parent1")
 
-	if head["shape1"].Shape != nil {
-		t.Error("shape entity should have GeoShapeComponent cleared after parent expiration")
+	if len(remove) != 1 || remove[0] != "shape1" {
+		t.Errorf("expected shape1 in remove list, got %v", remove)
 	}
 	if len(st.managed) != 0 {
 		t.Error("managed should be empty after parent expiration")

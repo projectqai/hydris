@@ -18,6 +18,7 @@ const MILSYMBOL_COLORS_RGBA: Record<Affiliation, [number, number, number, number
   red: [255, 128, 128, 255],
   neutral: [170, 255, 170, 255],
   unknown: [255, 255, 128, 255],
+  unclassified: [156, 163, 175, 255],
 };
 
 function getAffiliationColorRGBA(
@@ -57,6 +58,7 @@ type UseEntityClustersOptions = {
   filter: EntityFilter;
   selectedId: string | null;
   shapesVisible: boolean;
+  detectionsVisible: boolean;
   zoom: number;
   pickable?: boolean;
   onEntityClick?: (id: string) => void | Promise<void>;
@@ -82,6 +84,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
     filter,
     selectedId,
     shapesVisible,
+    detectionsVisible,
     zoom,
     pickable = true,
     onEntityClick,
@@ -109,6 +112,8 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
   const workerResult = useClusterWorker({
     entityMap,
     filter,
+    shapesVisible,
+    detectionsVisible,
     zoom,
     version,
     geoChanged,
@@ -184,7 +189,8 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
       const symbol = entity?.symbol ?? cluster.symbol;
 
       if (!symbol) continue;
-      if (entity?.shape && !shapesVisible) continue;
+      if (entity?.isDetection && !detectionsVisible && entityId !== selectedId) continue;
+      if (entity?.shape && !entity.isDetection && !shapesVisible) continue;
 
       if (entityAtlas) {
         const wasNew = !entityAtlas.hasSymbol(symbol);

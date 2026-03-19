@@ -15,7 +15,7 @@ import {
   X,
 } from "lucide-react-native";
 import { useCallback, useContext } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Platform, Pressable, Text, View } from "react-native";
 import Animated, {
   interpolate,
   useAnimatedStyle,
@@ -35,6 +35,7 @@ import {
 } from "../../constants";
 import { useEntityStore } from "../../store/entity-store";
 import { toEmbedUrl } from "../video-stream/embed-providers";
+import { IframeStream } from "../video-stream/iframe-stream";
 import { resolveStreamUrl } from "../video-stream/resolve-stream-url";
 import { VideoStream } from "../video-stream/video-stream";
 
@@ -76,15 +77,25 @@ function CameraPane({ entityId }: { entityId: string }) {
 function IframePane({ url }: { url: string }) {
   const t = useThemeColors();
   const embedUrl = toEmbedUrl(url);
+
+  if (Platform.OS === "web") {
+    return (
+      <View className="flex-1" style={{ backgroundColor: t.background }}>
+        <iframe
+          src={embedUrl}
+          style={{ width: "100%", height: "100%", border: "none" }}
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+          title="Embedded content"
+        />
+      </View>
+    );
+  }
+
+  // Native: IframeStream calls toEmbedUrl internally, pass raw URL
   return (
     <View className="flex-1" style={{ backgroundColor: t.background }}>
-      <iframe
-        src={embedUrl}
-        style={{ width: "100%", height: "100%", border: "none" }}
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-        allowFullScreen
-        title="Embedded content"
-      />
+      <IframeStream url={url} />
     </View>
   );
 }

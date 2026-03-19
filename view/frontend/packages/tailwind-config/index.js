@@ -151,7 +151,7 @@ module.exports = {
           "--color-card": "27 27 27",
           "--color-card-foreground": "220 220 220",
           "--color-muted": "33 33 33",
-          "--color-muted-foreground": "153 153 153",
+          "--color-muted-foreground": "163 163 163",
           "--color-border": "60 60 60",
           "--color-input": "27 27 27",
           "--color-ring": "65 65 65",

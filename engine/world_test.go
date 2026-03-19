@@ -19,80 +19,91 @@ func TestStrPtr(t *testing.T) {
 	}
 }
 
-func TestMergeEntity(t *testing.T) {
-	dst := &pb.Entity{
-		Id:    "e1",
-		Label: ptr("original"),
-		Geo:   &pb.GeoSpatialComponent{Latitude: 1.0, Longitude: 2.0},
-	}
+func TestMergeEntityComponents(t *testing.T) {
+	w := testWorld(map[string]*pb.Entity{
+		"e1": {
+			Id:       "e1",
+			Label:    ptr("original"),
+			Geo:      &pb.GeoSpatialComponent{Latitude: 1.0, Longitude: 2.0},
+			Lifetime: &pb.Lifetime{From: timestamppb.New(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))},
+		},
+	})
+
 	src := &pb.Entity{
-		Id:    "e1",
-		Label: ptr("updated"),
-		Track: &pb.TrackComponent{Tracker: proto.String("t1")},
+		Id:       "e1",
+		Label:    ptr("updated"),
+		Track:    &pb.TrackComponent{Tracker: proto.String("t1")},
+		Lifetime: &pb.Lifetime{From: timestamppb.New(time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))},
 	}
 
-	merged := mergeEntity(dst, src)
+	merged, accepted := w.mergeEntityComponents("e1", w.head["e1"], src)
+	if !accepted {
+		t.Fatal("expected merge to accept components")
+	}
 
-	// Label should be overwritten
 	if merged.Label == nil || *merged.Label != "updated" {
 		t.Errorf("expected label 'updated', got %v", merged.Label)
 	}
-	// Geo should be preserved from dst (src has nil Geo)
 	if merged.Geo == nil || merged.Geo.Latitude != 1.0 {
 		t.Error("Geo should be preserved from dst")
 	}
-	// Track should come from src
 	if merged.Track == nil || merged.Track.GetTracker() != "t1" {
 		t.Error("Track should come from src")
 	}
 	// Original should not be mutated
-	if dst.Track != nil {
+	if w.head["e1"].entity.Track != nil {
 		t.Error("dst should not be mutated")
 	}
 }
 
-func TestMergeEntity_EmptySrc(t *testing.T) {
-	dst := &pb.Entity{
-		Id:    "e1",
-		Label: ptr("keep"),
-		Geo:   &pb.GeoSpatialComponent{Latitude: 5.0},
-	}
-	src := &pb.Entity{Id: "e1"}
+func TestMergeEntityComponents_EmptySrc(t *testing.T) {
+	w := testWorld(map[string]*pb.Entity{
+		"e1": {
+			Id:       "e1",
+			Label:    ptr("keep"),
+			Geo:      &pb.GeoSpatialComponent{Latitude: 5.0},
+			Lifetime: &pb.Lifetime{From: timestamppb.New(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))},
+		},
+	})
 
-	merged := mergeEntity(dst, src)
-	if merged.Label == nil || *merged.Label != "keep" {
-		t.Error("label should be preserved when src has nil label")
+	src := &pb.Entity{
+		Id:       "e1",
+		Lifetime: &pb.Lifetime{From: timestamppb.New(time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))},
 	}
-	if merged.Geo == nil || merged.Geo.Latitude != 5.0 {
-		t.Error("Geo should be preserved when src has nil Geo")
+
+	_, accepted := w.mergeEntityComponents("e1", w.head["e1"], src)
+	if accepted {
+		t.Error("merge with no components should not accept anything")
 	}
 }
 
-func TestIsNewer(t *testing.T) {
+func TestComponentAccepted(t *testing.T) {
 	t1 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	t2 := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
+	t3 := time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC)
 
 	tests := []struct {
-		name     string
-		incoming *pb.Lifetime
-		existing *pb.Lifetime
-		want     bool
+		name          string
+		incomingFresh time.Time
+		incomingUntil time.Time
+		existing      componentMeta
+		want          bool
 	}{
-		{"both nil", nil, nil, true},
-		{"existing nil", &pb.Lifetime{From: timestamppb.New(t1)}, nil, true},
-		{"incoming nil", nil, &pb.Lifetime{From: timestamppb.New(t1)}, true},
-		{"incoming newer by From", &pb.Lifetime{From: timestamppb.New(t2)}, &pb.Lifetime{From: timestamppb.New(t1)}, true},
-		{"incoming older by From", &pb.Lifetime{From: timestamppb.New(t1)}, &pb.Lifetime{From: timestamppb.New(t2)}, false},
-		{"equal From", &pb.Lifetime{From: timestamppb.New(t1)}, &pb.Lifetime{From: timestamppb.New(t1)}, true},
-		{"fresh beats from", &pb.Lifetime{Fresh: timestamppb.New(t2)}, &pb.Lifetime{From: timestamppb.New(t1)}, true},
-		{"fresh older than existing fresh", &pb.Lifetime{Fresh: timestamppb.New(t1)}, &pb.Lifetime{Fresh: timestamppb.New(t2)}, false},
-		{"fresh preferred over from", &pb.Lifetime{Fresh: timestamppb.New(t1), From: timestamppb.New(t2)}, &pb.Lifetime{Fresh: timestamppb.New(t2)}, false},
+		{"existing zero fresh", t1, time.Time{}, componentMeta{}, true},
+		{"incoming zero fresh", time.Time{}, time.Time{}, componentMeta{fresh: t1}, true},
+		{"incoming fresher", t2, time.Time{}, componentMeta{fresh: t1}, true},
+		{"incoming older", t1, time.Time{}, componentMeta{fresh: t2}, false},
+		{"equal fresh both permanent", t1, time.Time{}, componentMeta{fresh: t1}, true},
+		{"equal fresh incoming shorter until", t1, t2, componentMeta{fresh: t1, until: t3}, true},
+		{"equal fresh incoming longer until", t1, t3, componentMeta{fresh: t1, until: t2}, false},
+		{"equal fresh incoming has until existing permanent", t1, t2, componentMeta{fresh: t1}, true},
+		{"equal fresh incoming permanent existing has until", t1, time.Time{}, componentMeta{fresh: t1, until: t2}, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isNewer(tt.incoming, tt.existing); got != tt.want {
-				t.Errorf("isNewer() = %v, want %v", got, tt.want)
+			if got := componentAccepted(tt.incomingFresh, tt.incomingUntil, tt.existing); got != tt.want {
+				t.Errorf("componentAccepted() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -545,6 +556,130 @@ func TestRunTask(t *testing.T) {
 	}
 	if resp.Msg.ExecutionId != "" {
 		t.Errorf("expected empty execution ID, got %s", resp.Msg.ExecutionId)
+	}
+}
+
+func TestMergeLifetime_ReflectsLargestSpan(t *testing.T) {
+	t1 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
+	t3 := time.Date(2025, 1, 3, 0, 0, 0, 0, time.UTC)
+
+	w := testWorld(map[string]*pb.Entity{
+		"e1": {
+			Id:       "e1",
+			Label:    ptr("a"),
+			Geo:      &pb.GeoSpatialComponent{Latitude: 1},
+			Lifetime: &pb.Lifetime{From: timestamppb.New(t1), Until: timestamppb.New(t3)},
+		},
+	})
+
+	// Push a newer component with a shorter until.
+	ctx := context.Background()
+	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{
+			{Id: "e1", Track: &pb.TrackComponent{Tracker: proto.String("t1")},
+				Lifetime: &pb.Lifetime{From: timestamppb.New(t2), Until: timestamppb.New(t2)}},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := w.GetHead("e1")
+	// From should be the earliest (t1), fresh should be the latest (t2).
+	if e.Lifetime.From.AsTime() != t1 {
+		t.Errorf("From should be earliest component time %v, got %v", t1, e.Lifetime.From.AsTime())
+	}
+	if e.Lifetime.Fresh.AsTime() != t2 {
+		t.Errorf("Fresh should be latest component time %v, got %v", t2, e.Lifetime.Fresh.AsTime())
+	}
+	// Until should be the latest (t3).
+	if e.Lifetime.Until.AsTime() != t3 {
+		t.Errorf("Until should be latest component until %v, got %v", t3, e.Lifetime.Until.AsTime())
+	}
+}
+
+func TestMergeLifetime_NoLifetimePushDoesNotAffectSpan(t *testing.T) {
+	now := time.Now()
+	until := now.Add(30 * time.Second)
+
+	// Simulate adsblol: entity with Geo, Symbol, and a finite lifetime.
+	w := testWorld(map[string]*pb.Entity{
+		"e1": {
+			Id:       "e1",
+			Label:    ptr("flight"),
+			Geo:      &pb.GeoSpatialComponent{Latitude: 48},
+			Symbol:   &pb.SymbolComponent{MilStd2525C: "SFAPMF--------*"},
+			Lifetime: &pb.Lifetime{From: timestamppb.New(now), Until: timestamppb.New(until)},
+		},
+	})
+
+	// Simulate adsbdb enrichment: push Administrative with no Lifetime at all.
+	ctx := context.Background()
+	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{
+			{Id: "e1", Administrative: &pb.AdministrativeComponent{
+				Id: proto.String("REG-123"),
+			}},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := w.GetHead("e1")
+	if e.Administrative == nil || e.Administrative.GetId() != "REG-123" {
+		t.Fatal("Administrative should be merged")
+	}
+	// The enrichment push (no Lifetime) must not remove Until.
+	if e.Lifetime == nil || !e.Lifetime.Until.IsValid() {
+		t.Fatal("Lifetime.Until should still be set after no-lifetime enrichment push")
+	}
+	if !e.Lifetime.Until.AsTime().Equal(until) {
+		t.Errorf("Until should remain %v, got %v", until, e.Lifetime.Until.AsTime())
+	}
+}
+
+func TestMergeLifetime_NoLifetimeFirstPushDoesNotMakePermanent(t *testing.T) {
+	// Edge case: pushing a component with no lifetime creates a new entity,
+	// then a second push adds a component with a finite lifetime.
+	// The entity should NOT appear permanent — the no-lifetime component
+	// should inherit the lifetime from the rest.
+	w := testWorld(map[string]*pb.Entity{})
+
+	ctx := context.Background()
+
+	// First push: create entity with no Lifetime at all.
+	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{
+			{Id: "e1", Administrative: &pb.AdministrativeComponent{
+				Id: proto.String("REG-123"),
+			}},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Second push: add a component with a finite lifetime.
+	now := time.Now()
+	until := now.Add(30 * time.Second)
+	_, err = w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{
+			{Id: "e1", Geo: &pb.GeoSpatialComponent{Latitude: 48},
+				Lifetime: &pb.Lifetime{From: timestamppb.New(now), Until: timestamppb.New(until)}},
+		},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	e := w.GetHead("e1")
+	if e.Lifetime == nil || !e.Lifetime.Until.IsValid() {
+		t.Fatal("Lifetime.Until should be set — entity must not appear permanent")
+	}
+	if !e.Lifetime.Until.AsTime().Equal(until) {
+		t.Errorf("Until should be %v, got %v", until, e.Lifetime.Until.AsTime())
 	}
 }
 

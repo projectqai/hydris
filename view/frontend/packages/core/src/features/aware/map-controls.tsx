@@ -12,6 +12,7 @@ import {
   Link2,
   Maximize2,
   Minimize2,
+  Radar,
   Radius,
   Route,
   Satellite,
@@ -45,8 +46,8 @@ import { useSelectionStore } from "./store/selection-store";
 
 type NetworkType = "datalinks";
 type SensorStatus = "online" | "degraded";
-type TrackType = "red" | "unknown" | "blue";
-type VisualizationType = "coverage" | "shapes" | "trackHistory";
+type TrackType = "red" | "unknown" | "blue" | "unclassified";
+type VisualizationType = "coverage" | "shapes" | "detections" | "trackHistory";
 
 const BUTTON_SIZE = 40;
 const ICON_SIZE = 16;
@@ -74,6 +75,7 @@ const TRACK_OPTIONS: OverlayCategoryOption[] = [
   { id: "red", label: "Red", color: "red" },
   { id: "unknown", label: "Unknown", color: "yellow" },
   { id: "blue", label: "Blue", color: "blue" },
+  { id: "unclassified", label: "Unclassified", color: "gray" },
 ];
 
 const SENSOR_OPTIONS: OverlayCategoryOption[] = [
@@ -88,6 +90,7 @@ const NETWORK_OPTIONS: OverlayCategoryOption[] = [
 const VISUALIZATION_OPTIONS: OverlayCategoryOption[] = [
   { id: "coverage", label: "Coverage Area", icon: Radius },
   { id: "shapes", label: "Geoshapes", icon: Hexagon },
+  { id: "detections", label: "Detections", icon: Radar },
   { id: "trackHistory", label: "Track Lines", icon: Route },
 ];
 
@@ -300,7 +303,7 @@ export function MapControls() {
               colors={t.gradients.default}
               {...GRADIENT_PROPS}
               className="border-border/40 gap-2.5 overflow-hidden rounded-lg border p-2.5"
-              style={{ minWidth: 240 }}
+              style={{ width: 290 }}
             >
               <OverlayCategory
                 title="Tracks"

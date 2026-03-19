@@ -137,8 +137,29 @@ export function getMetricLabel(metric: Metric): string {
 
 export function formatRelativeTime(timestamp: { seconds: bigint }): string {
   const date = new Date(Number(timestamp.seconds) * 1000);
-  if (date > new Date()) return "now";
+  const diffMs = Date.now() - date.getTime();
+  if (diffMs < 1000) return "just now";
   return formatDistanceToNowStrict(date, { addSuffix: true });
+}
+
+export function getSharedTimestamp(
+  metrics: readonly Metric[],
+  { strict = true }: { strict?: boolean } = {},
+): { seconds: bigint } | null {
+  if (metrics.length === 0) return null;
+  let shared: { seconds: bigint } | null = null;
+  for (const m of metrics) {
+    if (!m.measuredAt) {
+      if (strict) return null;
+      continue;
+    }
+    if (!shared) {
+      shared = m.measuredAt;
+    } else if (m.measuredAt.seconds !== shared.seconds) {
+      return null;
+    }
+  }
+  return shared;
 }
 
 export type MetricVisual = "gauge" | "value";

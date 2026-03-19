@@ -1,5 +1,6 @@
 import { Badge } from "@hydris/ui/badge";
 import { HighlightText } from "@hydris/ui/command-palette/highlight-text";
+import { HoldToConfirmPressable } from "@hydris/ui/command-palette/hold-to-confirm-pressable";
 import type { Category, PaletteAction } from "@hydris/ui/command-palette/palette-reducer";
 import { useListNav } from "@hydris/ui/command-palette/use-list-nav";
 import { EmptyState } from "@hydris/ui/empty-state";
@@ -7,8 +8,13 @@ import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import type { Entity } from "@projectqai/proto/world";
 import { FlashList } from "@shopify/flash-list";
-import { ChevronRight, FileQuestion, LayoutGrid, Search, Settings } from "lucide-react-native";
+import { ChevronRight, Eye, FileQuestion, LayoutGrid, Search, Settings } from "lucide-react-native";
 import { Platform, Pressable, Text, View } from "react-native";
+
+const DRILLDOWN_SUBCATEGORIES = new Set(["overlay"]);
+const DRILLDOWN_LABELS: Record<string, string> = {
+  overlay: "Toggle overlays",
+};
 
 import { getEntityName } from "../../../../../lib/api/use-track-utils";
 import { ENTITY_NAV_PARAMS, useUrlParams } from "../../../../../lib/use-url-params";
@@ -128,6 +134,69 @@ function EntityRow({
   );
 }
 
+const HOLD_DURATION_S = 2;
+
+function HoldToConfirmRow({
+  command,
+  ranges,
+  isHighlighted,
+  onExecute,
+  ref,
+}: {
+  command: Command;
+  ranges: number[];
+  isHighlighted: boolean;
+  onExecute: (c: Command) => void;
+  ref?: React.Ref<View>;
+}) {
+  const t = useThemeColors();
+  const Icon = command.icon;
+
+  return (
+    <HoldToConfirmPressable
+      ref={ref}
+      isActive={isHighlighted}
+      onConfirm={() => onExecute(command)}
+      duration={HOLD_DURATION_S * 1000}
+      fillColor={t.destructiveRed}
+      fillOpacity={0.45}
+      className={cn(
+        "flex-row items-center gap-3 px-4 py-3",
+        isHighlighted ? "bg-surface-overlay/8" : "hover:bg-surface-overlay/5",
+      )}
+    >
+      {({ remaining }) => (
+        <>
+          <View className="bg-surface-overlay/6 size-8 items-center justify-center rounded">
+            <Icon size={16} strokeWidth={2} color={t.iconMuted} />
+          </View>
+          <View className="flex-1">
+            <HighlightText
+              text={command.label}
+              ranges={ranges}
+              className="font-sans-medium text-foreground text-sm"
+              highlightClassName="text-blue-foreground"
+            />
+            {command.description && (
+              <Text className="text-muted-foreground text-11 font-mono">{command.description}</Text>
+            )}
+          </View>
+          <View className="bg-surface-overlay/6 h-4 items-center justify-center rounded px-1">
+            <Text
+              className={cn(
+                "text-11 text-on-surface/70 font-mono leading-none",
+                remaining !== null && "tabular-nums",
+              )}
+            >
+              {remaining !== null ? `${(remaining / 1000).toFixed(1)}s` : "hold"}
+            </Text>
+          </View>
+        </>
+      )}
+    </HoldToConfirmPressable>
+  );
+}
+
 function CommandRow({
   command,
   ranges,
@@ -143,6 +212,19 @@ function CommandRow({
 }) {
   const t = useThemeColors();
   const Icon = command.icon;
+
+  if (command.holdToConfirm) {
+    return (
+      <HoldToConfirmRow
+        ref={ref}
+        command={command}
+        ranges={ranges}
+        isHighlighted={isHighlighted}
+        onExecute={onExecute}
+      />
+    );
+  }
+
   return (
     <Pressable
       ref={ref}
@@ -217,12 +299,58 @@ function ConfigurableRow({
   );
 }
 
+function CommandGroupDrilldownRow({
+  label,
+  count,
+  isHighlighted,
+  onPress,
+  ref,
+}: {
+  label: string;
+  count: number;
+  isHighlighted: boolean;
+  onPress: () => void;
+  ref?: React.Ref<View>;
+}) {
+  const t = useThemeColors();
+  return (
+    <Pressable
+      ref={ref}
+      onPress={onPress}
+      tabIndex={-1}
+      className={cn(
+        "active:bg-surface-overlay/8 flex-row items-center gap-3 px-4 py-3",
+        isHighlighted ? "bg-surface-overlay/8" : "hover:bg-surface-overlay/5",
+      )}
+    >
+      <View className="bg-surface-overlay/6 size-8 items-center justify-center rounded">
+        <Eye size={16} strokeWidth={2} color={t.iconMuted} />
+      </View>
+      <View className="flex-1">
+        <Text className="font-sans-medium text-foreground text-sm">{label}</Text>
+      </View>
+      <View className="flex-row items-center gap-2">
+        <Text className="text-muted-foreground font-mono text-xs tabular-nums">{count}</Text>
+        <ChevronRight size={14} strokeWidth={2} color={t.iconMuted} />
+      </View>
+    </Pressable>
+  );
+}
+
 type RootItem =
   | { type: "section-header"; title: string; key: string }
   | { type: "dimension-group"; group: DimensionGroup; category: Category; key: string }
   | { type: "entity"; entity: Entity; ranges: number[]; key: string }
   | { type: "command"; command: Command; ranges: number[]; key: string }
   | { type: "configurable"; hit: ConfigurableHit; ranges: number[]; key: string }
+  | {
+      type: "command-group";
+      groupId: string;
+      groupLabel: string;
+      rowLabel: string;
+      count: number;
+      key: string;
+    }
   | { type: "truncation-hint"; shown: number; total: number; key: string };
 
 const isItemSelectable = (item: RootItem) =>
@@ -280,6 +408,18 @@ export function RootView({
     for (const sub of COMMAND_SUBCATEGORIES) {
       const group = commands.filter((c) => c.category === sub.id);
       if (group.length === 0) continue;
+      if (DRILLDOWN_SUBCATEGORIES.has(sub.id)) {
+        items.push({ type: "section-header", title: sub.label, key: `hdr-cmd-${sub.id}` });
+        items.push({
+          type: "command-group",
+          groupId: sub.id,
+          groupLabel: sub.label,
+          rowLabel: DRILLDOWN_LABELS[sub.id] ?? sub.label,
+          count: group.length,
+          key: `grp-${sub.id}`,
+        });
+        continue;
+      }
       items.push({ type: "section-header", title: sub.label, key: `hdr-cmd-${sub.id}` });
       for (const cmd of group) {
         items.push({ type: "command", command: cmd, ranges: [], key: cmd.id });
@@ -381,6 +521,11 @@ export function RootView({
           category: item.category,
         },
       });
+    } else if (item.type === "command-group") {
+      dispatch({
+        type: "push",
+        mode: { kind: "command-group", groupId: item.groupId, groupLabel: item.groupLabel },
+      });
     } else if (item.type === "configurable") {
       dispatch({
         type: "push",
@@ -449,6 +594,26 @@ export function RootView({
                     ranges={item.ranges}
                     isHighlighted={index === highlightedIndex}
                     onExecute={handleCommandExecute}
+                  />
+                );
+              }
+              if (item.type === "command-group") {
+                return (
+                  <CommandGroupDrilldownRow
+                    ref={index === highlightedIndex ? setHighlightedEl : undefined}
+                    label={item.rowLabel}
+                    count={item.count}
+                    isHighlighted={index === highlightedIndex}
+                    onPress={() =>
+                      dispatch({
+                        type: "push",
+                        mode: {
+                          kind: "command-group",
+                          groupId: item.groupId,
+                          groupLabel: item.groupLabel,
+                        },
+                      })
+                    }
                   />
                 );
               }

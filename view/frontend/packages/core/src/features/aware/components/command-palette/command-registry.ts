@@ -13,22 +13,34 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react-native";
+import { toast } from "sonner-native";
 
 import { PRESET_KEYBINDS } from "../../constants";
 import { mapEngineActions } from "../../store/map-engine-store";
 import { useMapStore } from "../../store/map-store";
 import { useOverlayStore } from "../../store/overlay-store";
+import { resetWorld } from "../../store/reset-world";
 import { useSelectionStore } from "../../store/selection-store";
 import { useThemeStore } from "../../store/theme-store";
 
 export type Command = {
   id: string;
   label: string;
+  description?: string;
   icon: LucideIcon;
   shortcut?: string;
-  category: "configuration" | "display" | "overlay" | "map" | "preset" | "layout" | "selection";
+  category:
+    | "configuration"
+    | "display"
+    | "overlay"
+    | "map"
+    | "preset"
+    | "layout"
+    | "selection"
+    | "world";
   action: () => void;
   mode?: PaletteMode;
+  holdToConfirm?: boolean;
 };
 
 export type LayoutActions = {
@@ -174,6 +186,13 @@ export function buildCommands(layout: LayoutActions): Command[] {
       action: () => useOverlayStore.getState().toggle("visualization", "shapes"),
     },
     {
+      id: "overlay-detections",
+      label: "Toggle detections",
+      icon: Eye,
+      category: "overlay",
+      action: () => useOverlayStore.getState().toggle("visualization", "detections"),
+    },
+    {
       id: "overlay-track-history",
       label: "Toggle track history",
       icon: Eye,
@@ -207,6 +226,13 @@ export function buildCommands(layout: LayoutActions): Command[] {
       icon: Eye,
       category: "overlay",
       action: () => useOverlayStore.getState().toggle("tracks", "unknown"),
+    },
+    {
+      id: "overlay-tracks-unclassified",
+      label: "Toggle unclassified tracks",
+      icon: Eye,
+      category: "overlay",
+      action: () => useOverlayStore.getState().toggle("tracks", "unclassified"),
     },
 
     // Presets
@@ -257,6 +283,21 @@ export function buildCommands(layout: LayoutActions): Command[] {
       icon: Eye,
       category: "selection",
       action: () => useSelectionStore.getState().toggleFollow(),
+    },
+
+    // World
+    {
+      id: "world-reset",
+      label: "Reset world",
+      description: "Clears all entities including persisted data",
+      icon: RotateCcw,
+      category: "world",
+      holdToConfirm: true,
+      action: () => {
+        resetWorld()
+          .then(() => toast("All world data cleared"))
+          .catch(() => toast.error("World reset failed, check connection"));
+      },
     },
   ];
   return commands;

@@ -7,16 +7,18 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/projectqai/hydris/builtin/meshtastic/meshpb"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var meshtasticControllerName = "meshtastic"
 
-func runReceiver(ctx context.Context, logger *slog.Logger, grpcConn *grpc.ClientConn, radio *Radio, trackerID string, radioEntityID string) error {
+func runReceiver(ctx context.Context, logger *slog.Logger, grpcConn *grpc.ClientConn, radio *Radio, trackerID string, radioEntityID string, chatIDs *msgIDMap) error {
 	client := pb.NewWorldServiceClient(grpcConn)
 
 	var callsignsMu sync.RWMutex
@@ -86,12 +88,15 @@ func runReceiver(ctx context.Context, logger *slog.Logger, grpcConn *grpc.Client
 
 		switch decoded.GetPort() {
 		case meshpb.Port_PORT_TAK:
-			e, err := handleATAKPlugin(decoded.GetData(), fromNode, trackerID, &callsignsMu, callsigns, logger)
+			e, err := handleATAKPlugin(ctx, decoded.GetData(), fromNode, packet.Packet.GetRxTime(), trackerID, &callsignsMu, callsigns, client, logger)
 			if err != nil {
 				logger.Debug("ATAK_PLUGIN decode error", "error", err, "from", fmt.Sprintf("!%08x", fromNode))
 				continue
 			}
 			if e != nil {
+				if e.Chat != nil {
+					chatIDs.Put(packet.Packet.GetId(), e.Id)
+				}
 				entities = append(entities, e)
 			}
 
@@ -168,12 +173,75 @@ func runReceiver(ctx context.Context, logger *slog.Logger, grpcConn *grpc.Client
 			if name == "" {
 				name = fmt.Sprintf("!%08x", fromNode)
 			}
+			text := string(decoded.GetData())
+			p := packet.Packet
 			logger.Info("Mesh text message",
 				"from", name,
 				"fromNode", fmt.Sprintf("!%08x", fromNode),
-				"text", string(decoded.GetData()),
+				"to", fmt.Sprintf("!%08x", p.GetDst()),
+				"channel", p.GetCh(),
+				"hopLimit", p.GetHopLimit(),
+				"hopStart", p.GetHopStart(),
+				"wantAck", p.GetWantAck(),
+				"id", p.GetId(),
+				"text", text,
 			)
-			continue
+
+			now := time.Now()
+			senderEntityID := fmt.Sprintf("meshtastic.%08x", fromNode)
+			chatEntityID := fmt.Sprintf("meshtastic.text.%08x.%d", fromNode, now.UnixNano())
+
+			fromTime := now
+			if rxTime := packet.Packet.GetRxTime(); rxTime > 0 {
+				fromTime = time.Unix(int64(rxTime), 0)
+			}
+
+			chat := &pb.ChatComponent{
+				Sender:  &senderEntityID,
+				Message: text,
+			}
+
+			// Map meshtastic emoji field → hydris reaction.
+			if decoded.GetEmoji() != 0 {
+				chat.Reaction = proto.Bool(true)
+				chat.Message = string(rune(decoded.GetEmoji()))
+			}
+
+			// Map meshtastic reply_id → hydris reply_to.
+			if replyID := decoded.GetReplyId(); replyID != 0 {
+				if replyEntityID, ok := chatIDs.EntityID(replyID); ok {
+					chat.ReplyTo = proto.String(replyEntityID)
+				}
+			}
+
+			chatEntity := &pb.Entity{
+				Id:      chatEntityID,
+				Label:   &name,
+				Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
+				Controller: &pb.Controller{
+					Id:     &meshtasticControllerName,
+					Origin: &trackerID,
+				},
+				Track: &pb.TrackComponent{
+					Tracker: &trackerID,
+				},
+				Chat: chat,
+				Lifetime: &pb.Lifetime{
+					From:  timestamppb.New(fromTime),
+					Until: timestamppb.New(fromTime.Add(3 * time.Hour)),
+					Fresh: timestamppb.New(now),
+				},
+			}
+
+			// Snapshot sender's position if known
+			if resp, err := client.GetEntity(ctx, &pb.GetEntityRequest{Id: senderEntityID}); err == nil && resp.Entity != nil && resp.Entity.Geo != nil {
+				chatEntity.Geo = resp.Entity.Geo
+			}
+
+			// Record meshtastic packet ID → entity ID for reply/reaction lookups.
+			chatIDs.Put(p.GetId(), chatEntityID)
+
+			entities = append(entities, chatEntity)
 		}
 
 		// Attach LinkComponent to entities from this packet

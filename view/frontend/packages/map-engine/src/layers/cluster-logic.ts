@@ -14,6 +14,7 @@ export const AFFILIATION_CODE = {
   red: 1,
   neutral: 2,
   unknown: 3,
+  unclassified: 4,
 } as const satisfies Record<Affiliation, number>;
 
 type AffiliationCode = (typeof AFFILIATION_CODE)[Affiliation];
@@ -23,6 +24,7 @@ const AFFILIATION_NAME = [
   "red",
   "neutral",
   "unknown",
+  "unclassified",
 ] as const satisfies readonly Affiliation[];
 
 type ClusterProperties = {
@@ -39,10 +41,15 @@ export type PackedEntities = {
   affiliations: Uint8Array;
   ids: string[];
   symbols: (string | null)[];
+  hasShape: Uint8Array;
+  isDetection: Uint8Array;
   count: number;
 };
 
-export type FilterInput = Record<Affiliation, boolean>;
+export type FilterInput = Record<Affiliation, boolean> & {
+  shapesVisible: boolean;
+  detectionsVisible: boolean;
+};
 
 export type ClusterOutput = {
   isCluster: boolean;
@@ -106,6 +113,8 @@ export function createClusterEngine() {
         if (!filter[aff]) continue;
         const sym = packed.symbols[i];
         if (!sym) continue;
+        if (packed.hasShape[i] && !packed.isDetection[i] && !filter.shapesVisible) continue;
+        if (packed.hasShape[i] && packed.isDetection[i] && !filter.detectionsVisible) continue;
         const list = featuresBySymbol.get(sym) ?? [];
         list.push(makeFeature(packed, i, aff));
         featuresBySymbol.set(sym, list);
@@ -132,6 +141,8 @@ export function createClusterEngine() {
         const aff = affiliationAt(packed.affiliations[i] as AffiliationCode);
         if (!filter[aff]) continue;
         if (!packed.symbols[i]) continue;
+        if (packed.hasShape[i] && !packed.isDetection[i] && !filter.shapesVisible) continue;
+        if (packed.hasShape[i] && packed.isDetection[i] && !filter.detectionsVisible) continue;
         const list = featuresByAff.get(aff) ?? [];
         list.push(makeFeature(packed, i, aff));
         featuresByAff.set(aff, list);
@@ -158,6 +169,8 @@ export function createClusterEngine() {
         const aff = affiliationAt(packed.affiliations[i] as AffiliationCode);
         if (!filter[aff]) continue;
         if (!packed.symbols[i]) continue;
+        if (packed.hasShape[i] && !packed.isDetection[i] && !filter.shapesVisible) continue;
+        if (packed.hasShape[i] && packed.isDetection[i] && !filter.detectionsVisible) continue;
         features.push(makeFeature(packed, i, aff));
       }
 
@@ -253,7 +266,9 @@ export function createClusterEngine() {
       filter.blue !== lastFilter.blue ||
       filter.red !== lastFilter.red ||
       filter.neutral !== lastFilter.neutral ||
-      filter.unknown !== lastFilter.unknown;
+      filter.unknown !== lastFilter.unknown ||
+      filter.shapesVisible !== lastFilter.shapesVisible ||
+      filter.detectionsVisible !== lastFilter.detectionsVisible;
     const needsRebuild =
       geoChanged || indexTypeChanged || filterChanged || activeIndexType === null;
 

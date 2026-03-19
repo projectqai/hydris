@@ -16,8 +16,10 @@ type Consumer struct {
 	mu               sync.Mutex
 	dirty            [4]map[string]pb.EntityChange // [priority]map[entityID]EntityChange
 	expiredSnapshots map[string]*pb.Entity         // last known entity for expired IDs
+	observed         map[string]struct{}           // entity IDs sent to this client
 
 	signal      chan struct{}
+	cancel      context.CancelFunc // cancels SenderLoop's ctx; set by WatchEntities
 	rateLimiter *time.Ticker
 	keepalive   *time.Ticker
 }
@@ -34,6 +36,7 @@ func NewConsumer(world *WorldServer, limiter *pb.WatchBehavior, filter *pb.Entit
 		c.dirty[i] = make(map[string]pb.EntityChange)
 	}
 	c.expiredSnapshots = make(map[string]*pb.Entity)
+	c.observed = make(map[string]struct{})
 
 	if limiter != nil && limiter.MaxRateHz != nil && *limiter.MaxRateHz > 0 {
 		interval := time.Duration(float64(time.Second) / float64(*limiter.MaxRateHz))
@@ -163,6 +166,13 @@ func (c *Consumer) SenderLoop(ctx context.Context, send func(*pb.EntityChangeEve
 		}
 
 		if entity != nil && c.filter != nil && !c.world.matchesEntityFilter(entity, c.filter) {
+			// Entity no longer matches filter — send Unobserved if we previously sent it.
+			if _, wasObserved := c.observed[entityID]; wasObserved {
+				delete(c.observed, entityID)
+				if err := send(&pb.EntityChangeEvent{Entity: entity, T: pb.EntityChange_EntityChangeUnobserved}); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 
@@ -174,6 +184,12 @@ func (c *Consumer) SenderLoop(ctx context.Context, send func(*pb.EntityChangeEve
 			}
 		}
 
+		if change == pb.EntityChange_EntityChangeExpired {
+			delete(c.observed, entityID)
+		} else {
+			c.observed[entityID] = struct{}{}
+		}
+
 		if err := send(&pb.EntityChangeEvent{Entity: entity, T: change}); err != nil {
 			return err
 		}
@@ -182,7 +198,8 @@ func (c *Consumer) SenderLoop(ctx context.Context, send func(*pb.EntityChangeEve
 
 func (c *Consumer) requeueAll() {
 	c.world.l.RLock()
-	for id, e := range c.world.head {
+	for id, es := range c.world.head {
+		e := es.entity
 		priority := pb.Priority_PriorityRoutine
 		if e.Priority != nil {
 			priority = *e.Priority

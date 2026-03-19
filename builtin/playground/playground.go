@@ -272,7 +272,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	}
 
 	// Watch the service entity's own config for toggles (discovery, cameras).
-	go controller.Run(ctx, serviceEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+	go controller.Run(ctx, serviceEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error { //nolint:errcheck // fire-and-forget goroutine
 		ready()
 		return runServiceConfig(ctx, logger, entity)
 	})
@@ -454,6 +454,7 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 
 	if cfg.EnableRadar {
 		logger.Info("playground: radar enabled, creating simulated radar")
+		radarEntityID := controllerName + ".discovered.drone_radar"
 		serviceEntityID := controllerName + ".service"
 		radarCfg, _ := structpb.NewStruct(map[string]any{
 			"latitude":           51.9555,
@@ -472,8 +473,9 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 		})
 		pushTrackedEntities(ctx, logger, &radarDevices, "radar", []*pb.Entity{
 			{
-				Id:    controllerName + ".discovered.drone_radar",
-				Label: proto.String("Simulated Drone Radar"),
+				Id:      radarEntityID,
+				Label:   proto.String("Simulated Drone Radar"),
+				Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 				Controller: &pb.Controller{
 					Id: proto.String(controllerName),
 				},
@@ -711,8 +713,9 @@ func demoCameras() []*pb.Entity {
 	entities := make([]*pb.Entity, 0, len(defs))
 	for _, d := range defs {
 		camEntity := &pb.Entity{
-			Id:    d.id,
-			Label: proto.String(d.label),
+			Id:      d.id,
+			Label:   proto.String(d.label),
+			Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 			Symbol: &pb.SymbolComponent{
 				MilStd2525C: "SFGPE-----",
 			},
@@ -784,7 +787,7 @@ func runChild(ctx context.Context, logger *slog.Logger, entityID string) error {
 		subClasses := []controller.DeviceClass{
 			{Class: "subdevice", Label: "Subdevice", Schema: subdeviceSchema()},
 		}
-		go controller.WatchChildren(ctx, entityID, controllerName, subClasses, func(ctx context.Context, subEntityID string) error {
+		go controller.WatchChildren(ctx, entityID, controllerName, subClasses, func(ctx context.Context, subEntityID string) error { //nolint:errcheck // fire-and-forget goroutine
 			return controller.Run(ctx, subEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 				return runSubdevice(ctx, logger, entity, ready)
 			})

@@ -1,4 +1,25 @@
-import type { AngularVelocity, KinematicsEnu } from "@projectqai/proto/world";
+import type { AngularVelocity, GeoSpatialComponent, KinematicsEnu } from "@projectqai/proto/world";
+
+const EARTH_RADIUS = 6_371_008.8;
+const DEG = Math.PI / 180;
+
+export function haversineDistance(
+  a: Pick<GeoSpatialComponent, "latitude" | "longitude">,
+  b: Pick<GeoSpatialComponent, "latitude" | "longitude">,
+): number {
+  const dLat = (b.latitude - a.latitude) * DEG;
+  const dLon = (b.longitude - a.longitude) * DEG;
+  const sinLat = Math.sin(dLat / 2);
+  const sinLon = Math.sin(dLon / 2);
+  const h =
+    sinLat * sinLat + Math.cos(a.latitude * DEG) * Math.cos(b.latitude * DEG) * sinLon * sinLon;
+  return 2 * EARTH_RADIUS * Math.asin(Math.sqrt(h));
+}
+
+export function formatDistance(meters: number): string {
+  if (meters < 1000) return `${Math.round(meters)}m`;
+  return `${(meters / 1000).toFixed(1)}km`;
+}
 
 export function calculateGroundSpeed(velocityEnu?: KinematicsEnu): number | undefined {
   if (!velocityEnu) return undefined;

@@ -1,36 +1,20 @@
 import { GeoJsonLayer } from "@deck.gl/layers";
 
+import { AFFILIATION_COLORS_RGB } from "../constants";
 import type { Affiliation, BaseLayer, ShapeFeature, ShapeProperties } from "../types";
 
 type RGBA = [number, number, number, number];
 
-const FILL_DARK: Record<Affiliation, RGBA> = {
-  blue: [59, 130, 246, 40],
-  red: [205, 24, 24, 40],
-  neutral: [61, 141, 122, 40],
-  unknown: [247, 239, 129, 40],
-};
+function withAlpha(alpha: number): Record<Affiliation, RGBA> {
+  return Object.fromEntries(
+    Object.entries(AFFILIATION_COLORS_RGB).map(([k, [r, g, b]]) => [k, [r, g, b, alpha]]),
+  ) as Record<Affiliation, RGBA>;
+}
 
-const STROKE_DARK: Record<Affiliation, RGBA> = {
-  blue: [59, 130, 246, 120],
-  red: [205, 24, 24, 120],
-  neutral: [61, 141, 122, 120],
-  unknown: [247, 239, 129, 120],
-};
-
-const FILL_SAT: Record<Affiliation, RGBA> = {
-  blue: [59, 130, 246, 80],
-  red: [205, 24, 24, 80],
-  neutral: [61, 141, 122, 80],
-  unknown: [247, 239, 129, 80],
-};
-
-const STROKE_SAT: Record<Affiliation, RGBA> = {
-  blue: [59, 130, 246, 180],
-  red: [205, 24, 24, 180],
-  neutral: [61, 141, 122, 180],
-  unknown: [247, 239, 129, 180],
-};
+const FILL_DARK = withAlpha(40);
+const STROKE_DARK = withAlpha(120);
+const FILL_SAT = withAlpha(80);
+const STROKE_SAT = withAlpha(180);
 
 type CoverageLayerProps = {
   data: ShapeFeature[];

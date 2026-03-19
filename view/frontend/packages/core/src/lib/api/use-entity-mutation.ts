@@ -1,11 +1,14 @@
 import { clone, create } from "@bufbuild/protobuf";
+import { timestampNow } from "@bufbuild/protobuf/wkt";
 import type { Entity } from "@projectqai/proto/world";
 import {
   ConfigurationComponentSchema,
   DeviceComponentSchema,
   EntitySchema,
   GeoSpatialComponentSchema,
+  LifetimeSchema,
 } from "@projectqai/proto/world";
+import { getRandomValues } from "expo-crypto";
 import { useState } from "react";
 
 import { useEntityStore } from "../../features/aware/store/entity-store";
@@ -13,7 +16,7 @@ import { worldClient } from "./world-client";
 
 function randomHex8(): string {
   const bytes = new Uint8Array(4);
-  crypto.getRandomValues(bytes);
+  getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -69,7 +72,13 @@ export function useEntityMutation() {
 
     try {
       const response = await worldClient.push({
-        changes: [{ ...entity, config: configComponent }],
+        changes: [
+          {
+            ...entity,
+            config: configComponent,
+            lifetime: create(LifetimeSchema, { from: timestampNow() }),
+          },
+        ],
       });
 
       if (!response.accepted) {
@@ -101,7 +110,13 @@ export function useEntityMutation() {
 
     try {
       const response = await worldClient.push({
-        changes: [create(EntitySchema, { id: entity.id, config: configComponent })],
+        changes: [
+          create(EntitySchema, {
+            id: entity.id,
+            config: configComponent,
+            lifetime: create(LifetimeSchema, { from: timestampNow() }),
+          }),
+        ],
       });
 
       if (!response.accepted) {

@@ -3,7 +3,7 @@ import type { Entity } from "@projectqai/proto/world";
 import { ClassificationBattleDimension, ClassificationIdentity } from "@projectqai/proto/world";
 import { format } from "date-fns";
 
-export type TrackStatus = "Blue" | "Red" | "Neutral" | "Unknown";
+export type TrackStatus = "Blue" | "Red" | "Neutral" | "Unknown" | "Unclassified";
 export type Timestamp = { seconds: bigint; nanos: number };
 
 /**
@@ -19,25 +19,20 @@ export function timestampToMs(timestamp?: Timestamp): number {
  * falling back to SIDC position [1] if classification is not populated.
  */
 export function getTrackStatus(entity: Entity): TrackStatus {
-  const identity = entity.classification?.identity;
-  if (identity != null && identity !== ClassificationIdentity.ClassificationIdentityInvalid) {
-    switch (identity) {
-      case ClassificationIdentity.ClassificationIdentityFriend:
-        return "Blue";
-      case ClassificationIdentity.ClassificationIdentityHostile:
-      case ClassificationIdentity.ClassificationIdentitySuspect:
-        return "Red";
-      case ClassificationIdentity.ClassificationIdentityNeutral:
-        return "Neutral";
-      default:
-        return "Unknown";
-    }
+  switch (entity.classification?.identity) {
+    case ClassificationIdentity.ClassificationIdentityFriend:
+      return "Blue";
+    case ClassificationIdentity.ClassificationIdentityHostile:
+    case ClassificationIdentity.ClassificationIdentitySuspect:
+      return "Red";
+    case ClassificationIdentity.ClassificationIdentityNeutral:
+      return "Neutral";
+    case ClassificationIdentity.ClassificationIdentityUnknown:
+    case ClassificationIdentity.ClassificationIdentityPending:
+      return "Unknown";
+    default:
+      return "Unclassified";
   }
-  const code = entity.symbol?.milStd2525C?.[1]?.toUpperCase();
-  if (code === "F") return "Blue";
-  if (code === "H") return "Red";
-  if (code === "N") return "Neutral";
-  return "Unknown";
 }
 
 /**

@@ -113,6 +113,7 @@
   },
   "dependencies": {
     "@leeoniya/ufuzzy": "^1.0.19",
+    "expo-crypto": "~15.0.8",
     "react-native-keyboard-controller": "catalog:"
   }
 }

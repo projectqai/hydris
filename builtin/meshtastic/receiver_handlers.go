@@ -1,6 +1,7 @@
 package meshtastic
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -13,7 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func handleATAKPlugin(payload []byte, fromNode uint32, trackerID string, mu *sync.RWMutex, callsigns map[uint32]string, logger *slog.Logger) (*pb.Entity, error) {
+func handleATAKPlugin(ctx context.Context, payload []byte, fromNode uint32, rxTime uint32, trackerID string, mu *sync.RWMutex, callsigns map[uint32]string, client pb.WorldServiceClient, logger *slog.Logger) (*pb.Entity, error) {
 	var tp meshpb.TAKPacket
 	if err := proto.Unmarshal(payload, &tp); err != nil {
 		return nil, fmt.Errorf("unmarshal TAKPacket: %w", err)
@@ -38,7 +39,45 @@ func handleATAKPlugin(payload []byte, fromNode uint32, trackerID string, mu *syn
 			"to", chat.GetTo(),
 			"message", chat.GetMessage(),
 		)
-		return nil, nil
+
+		now := time.Now()
+		senderEntityID := fmt.Sprintf("meshtastic.%08x", fromNode)
+		chatEntityID := fmt.Sprintf("meshtastic.chat.%08x.%d", fromNode, now.UnixNano())
+
+		fromTime := now
+		if rxTime > 0 {
+			fromTime = time.Unix(int64(rxTime), 0)
+		}
+
+		entity := &pb.Entity{
+			Id:      chatEntityID,
+			Label:   &callsign,
+			Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
+			Controller: &pb.Controller{
+				Id:     &meshtasticControllerName,
+				Origin: &trackerID,
+			},
+			Track: &pb.TrackComponent{
+				Tracker: &trackerID,
+			},
+			Chat: &pb.ChatComponent{
+				Sender:  &senderEntityID,
+				To:      proto.String(chat.GetTo()),
+				Message: chat.GetMessage(),
+			},
+			Lifetime: &pb.Lifetime{
+				From:  timestamppb.New(fromTime),
+				Until: timestamppb.New(fromTime.Add(3 * time.Hour)),
+				Fresh: timestamppb.New(now),
+			},
+		}
+
+		// Snapshot sender's position if known
+		if resp, err := client.GetEntity(ctx, &pb.GetEntityRequest{Id: senderEntityID}); err == nil && resp.Entity != nil && resp.Entity.Geo != nil {
+			entity.Geo = resp.Entity.Geo
+		}
+
+		return entity, nil
 	}
 
 	pli := tp.GetPli()
@@ -74,8 +113,9 @@ func handleATAKPlugin(payload []byte, fromNode uint32, trackerID string, mu *syn
 	sidc := "SFGPU----------"
 
 	return &pb.Entity{
-		Id:    entityID,
-		Label: &label,
+		Id:      entityID,
+		Label:   &label,
+		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 		Geo: &pb.GeoSpatialComponent{
 			Latitude:  lat,
 			Longitude: lon,
@@ -138,6 +178,7 @@ func handleATAKForwarder(payload []byte, fromNode uint32, trackerID string, foun
 	}
 
 	entity.Id = fmt.Sprintf("meshtastic.%s", entity.Id)
+	entity.Routing = &pb.Routing{Channels: []*pb.Channel{{}}}
 	entity.Controller = &pb.Controller{
 		Id: &meshtasticControllerName,
 	}
@@ -203,8 +244,9 @@ func handlePositionApp(payload []byte, fromNode uint32, trackerID string, mu *sy
 	sidc := "SFGPU----------"
 
 	return &pb.Entity{
-		Id:    entityID,
-		Label: &label,
+		Id:      entityID,
+		Label:   &label,
+		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 		Geo: &pb.GeoSpatialComponent{
 			Latitude:  lat,
 			Longitude: lon,
@@ -250,8 +292,9 @@ func nodeInfoToEntity(info *meshpb.NodeEntry, trackerID string, mu *sync.RWMutex
 	sidc := "SFGPU----------"
 
 	return &pb.Entity{
-		Id:    entityID,
-		Label: &label,
+		Id:      entityID,
+		Label:   &label,
+		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 		Geo: &pb.GeoSpatialComponent{
 			Latitude:  lat,
 			Longitude: lon,

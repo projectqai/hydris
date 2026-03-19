@@ -18,8 +18,10 @@ enum Port {
 }
 
 message Payload {
-  Port  port    = 1;
-  bytes data    = 2;
+  Port    port     = 1;
+  bytes   data     = 2;
+  fixed32 reply_id = 7;
+  fixed32 emoji    = 8;
 }
 
 message Packet {
@@ -72,6 +74,7 @@ message Peer {
   bytes  mac        = 4;
   uint32 hw         = 5;
   uint32 role       = 7;
+  bytes  public_key = 8;
 }
 
 message Pos {

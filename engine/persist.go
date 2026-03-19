@@ -18,12 +18,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var defaultsEpoch = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-
-// LoadDefaults loads default entities, hard-setting lifetime.from to a very
-// old timestamp so that any entity written with a real timestamp wins via LWW.
-// Entities that don't yet exist in head are inserted; existing ones are only
-// overwritten if they have an older timestamp (which in practice won't happen).
+// LoadDefaults loads default entities, stamping lifetime.from to now if not set.
+// Entities that don't yet exist in head are inserted; existing ones are merged.
 func (s *WorldServer) LoadDefaults(b []byte) error {
 	if len(bytes.TrimSpace(b)) == 0 {
 		return nil
@@ -39,21 +35,27 @@ func (s *WorldServer) LoadDefaults(b []byte) error {
 
 	added := 0
 	for _, e := range entities {
-		// Hard-set lifetime.from so defaults always lose LWW against real data.
 		if e.Lifetime == nil {
 			e.Lifetime = &pb.Lifetime{}
 		}
-		e.Lifetime.From = timestamppb.New(defaultsEpoch)
+		if !e.Lifetime.From.IsValid() {
+			e.Lifetime.From = timestamppb.Now()
+		}
+		if e.Lifetime.Fresh == nil || !e.Lifetime.Fresh.IsValid() {
+			e.Lifetime.Fresh = e.Lifetime.From
+		}
 
-		if existing, ok := s.head[e.Id]; ok {
-			if !isNewer(e.Lifetime, existing.Lifetime) {
+		if es, ok := s.head[e.Id]; ok {
+			merged, accepted := s.mergeEntityComponents(e.Id, es, e)
+			if !accepted {
 				continue
 			}
-			s.head[e.Id] = mergeEntity(existing, e)
+			es.entity = merged
+			s.headView[e.Id] = merged
 		} else {
-			s.head[e.Id] = e
+			s.initEntity(e)
 		}
-		s.bus.Dirty(e.Id, s.head[e.Id], pb.EntityChange_EntityChangeUpdated)
+		s.bus.Dirty(e.Id, s.head[e.Id].entity, pb.EntityChange_EntityChangeUpdated)
 		added++
 	}
 
@@ -83,7 +85,16 @@ func (s *WorldServer) LoadFromFile(path string) error {
 	defer s.l.Unlock()
 
 	for _, e := range entities {
-		s.head[e.Id] = e
+		if e.Lifetime == nil {
+			e.Lifetime = &pb.Lifetime{}
+		}
+		if !e.Lifetime.From.IsValid() {
+			e.Lifetime.From = timestamppb.Now()
+		}
+		if e.Lifetime.Fresh == nil || !e.Lifetime.Fresh.IsValid() {
+			e.Lifetime.Fresh = e.Lifetime.From
+		}
+		s.initEntity(e)
 		s.bus.Dirty(e.Id, e, pb.EntityChange_EntityChangeUpdated)
 	}
 
@@ -147,18 +158,15 @@ func (s *WorldServer) FlushToFile() error {
 
 	s.l.RLock()
 	entities := make([]*pb.Entity, 0, len(s.head))
-	for _, e := range s.head {
-		// Skip expiring/temporary entities.
-		if e.Lifetime != nil && e.Lifetime.Until != nil && e.Lifetime.Until.IsValid() {
-			continue
-		}
+	for _, es := range s.head {
+		e := es.entity
 		if !s.isLocal(e) {
 			continue
 		}
 
 		hasSomething := false
 
-		stub := &pb.Entity{Id: e.Id}
+		stub := &pb.Entity{Id: e.Id, Label: e.Label, Controller: e.Controller, Lifetime: e.Lifetime}
 		if e.Config != nil {
 			stub.Config = e.Config
 			hasSomething = true

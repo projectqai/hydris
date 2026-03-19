@@ -8,73 +8,75 @@ import (
 )
 
 func entityHasComponent(entity *pb.Entity, field uint32) bool {
-	switch field {
-	case 2:
+	switch pb.EntityComponent(field) {
+	case pb.EntityComponent_EntityComponentLabel:
 		return entity.Label != nil
-	case 3:
+	case pb.EntityComponent_EntityComponentController:
 		return entity.Controller != nil
-	case 4:
+	case pb.EntityComponent_EntityComponentLifetime:
 		return entity.Lifetime != nil
-	case 5:
+	case pb.EntityComponent_EntityComponentPriority:
 		return entity.Priority != nil
-	case 11:
+	case pb.EntityComponent_EntityComponentGeo:
 		return entity.Geo != nil
-	case 12:
+	case pb.EntityComponent_EntityComponentSymbol:
 		return entity.Symbol != nil
-	case 15:
+	case pb.EntityComponent_EntityComponentCamera:
 		return entity.Camera != nil
-	case 16:
+	case pb.EntityComponent_EntityComponentDetection:
 		return entity.Detection != nil
-	case 17:
+	case pb.EntityComponent_EntityComponentBearing:
 		return entity.Bearing != nil
-	case 21:
+	case pb.EntityComponent_EntityComponentTrack:
 		return entity.Track != nil
-	case 22:
+	case pb.EntityComponent_EntityComponentLocator:
 		return entity.Locator != nil
-	case 23:
+	case pb.EntityComponent_EntityComponentTaskable:
 		return entity.Taskable != nil
-	case 24:
+	case pb.EntityComponent_EntityComponentKinematics:
 		return entity.Kinematics != nil
-	case 25:
+	case pb.EntityComponent_EntityComponentShape:
 		return entity.Shape != nil
-	case 26:
+	case pb.EntityComponent_EntityComponentClassification:
 		return entity.Classification != nil
-	case 27:
+	case pb.EntityComponent_EntityComponentTransponder:
 		return entity.Transponder != nil
-	case 28:
+	case pb.EntityComponent_EntityComponentAdministrative:
 		return entity.Administrative != nil
-	case 29:
+	case pb.EntityComponent_EntityComponentLocalShape:
 		return entity.LocalShape != nil
-	case 30:
+	case pb.EntityComponent_EntityComponentOrientation:
 		return entity.Orientation != nil
-	case 31:
+	case pb.EntityComponent_EntityComponentMission:
 		return entity.Mission != nil
-	case 32:
+	case pb.EntityComponent_EntityComponentLink:
 		return entity.Link != nil
-	case 33:
+	case pb.EntityComponent_EntityComponentPower:
 		return entity.Power != nil
-	case 34:
+	case pb.EntityComponent_EntityComponentNavigation:
 		return entity.Navigation != nil
-	case 35:
+	case pb.EntityComponent_EntityComponentCapture:
 		return entity.Capture != nil
-	case 36:
+	case pb.EntityComponent_EntityComponentMetric:
 		return entity.Metric != nil
-	case 37:
+	case pb.EntityComponent_EntityComponentSensor:
 		return entity.Sensor != nil
-	case 38:
+	case pb.EntityComponent_EntityComponentPose:
 		return entity.Pose != nil
-	case 41:
+	case pb.EntityComponent_EntityComponentTaskExecution:
 		return entity.TaskExecution != nil
-	case 50:
+	case pb.EntityComponent_EntityComponentDevice:
 		return entity.Device != nil
-	case 51:
+	case pb.EntityComponent_EntityComponentConfig:
 		return entity.Config != nil
-	case 52:
+	case pb.EntityComponent_EntityComponentConfigurable:
 		return entity.Configurable != nil
-	case 60:
+	case pb.EntityComponent_EntityComponentInteractivity:
 		return entity.Interactivity != nil
-	case 62:
+	case pb.EntityComponent_EntityComponentTargetPose:
 		return entity.TargetPose != nil
+	case pb.EntityComponent_EntityComponentChat:
+		return entity.Chat != nil
 	}
 	return false
 }
@@ -295,6 +297,23 @@ func (s *WorldServer) matchesEntityFilter(entity *pb.Entity, filter *pb.EntityFi
 			if !taskableContainsAssignee(entity.Taskable, filter.Taskable.Assignee) {
 				return false
 			}
+		}
+	}
+
+	// Channel filter
+	if filter.Channel != nil {
+		if entity.Routing == nil {
+			return false
+		}
+		found := false
+		for _, ch := range entity.Routing.Channels {
+			if ch.Name == filter.Channel.Name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
 		}
 	}
 

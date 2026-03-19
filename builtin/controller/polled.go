@@ -41,10 +41,10 @@ func RunPolled(ctx context.Context, entityID string, run PollFunc) error {
 		return err
 	}
 
-	pushConfigurableState := func(entity *pb.Entity, state pb.ConfigurableState, errMsg string, scheduledAt *time.Time, applied bool) {
+	pushConfigurableState := func(current *pb.Entity, state pb.ConfigurableState, errMsg string, scheduledAt *time.Time, applied bool) {
 		var cfg *pb.ConfigurableComponent
-		if entity.Configurable != nil {
-			cfg = proto.Clone(entity.Configurable).(*pb.ConfigurableComponent)
+		if current.Configurable != nil {
+			cfg = proto.Clone(current.Configurable).(*pb.ConfigurableComponent)
 		} else {
 			cfg = &pb.ConfigurableComponent{}
 		}
@@ -59,8 +59,8 @@ func RunPolled(ctx context.Context, entityID string, run PollFunc) error {
 		} else {
 			cfg.ScheduledAt = nil
 		}
-		if applied && entity.Config != nil {
-			cfg.AppliedVersion = entity.Config.Version
+		if applied && current.Config != nil {
+			cfg.AppliedVersion = current.Config.Version
 		}
 		_, _ = worldClient.Push(ctx, &pb.EntityChangeRequest{
 			Changes: []*pb.Entity{{
@@ -82,10 +82,10 @@ func RunPolled(ctx context.Context, entityID string, run PollFunc) error {
 		}
 	}
 
-	startRunning := func(entity *pb.Entity) {
+	startRunning := func(e *pb.Entity) {
 		var connCtx context.Context
 		connCtx, cancel = context.WithCancel(ctx)
-		currentEntity = entity
+		currentEntity = e
 
 		go func() {
 			for {
@@ -93,9 +93,9 @@ func RunPolled(ctx context.Context, entityID string, run PollFunc) error {
 					return
 				}
 
-				pushConfigurableState(entity, pb.ConfigurableState_ConfigurableStateActive, "", nil, false)
+				pushConfigurableState(e, pb.ConfigurableState_ConfigurableStateActive, "", nil, false)
 
-				interval, err := run(connCtx, entity)
+				interval, err := run(connCtx, e)
 				if connCtx.Err() != nil {
 					return
 				}
@@ -103,7 +103,7 @@ func RunPolled(ctx context.Context, entityID string, run PollFunc) error {
 				if err != nil {
 					errMsg := err.Error()
 					slog.Error("poll error, restarting", "entity", entityID, "error", err)
-					pushConfigurableState(entity, pb.ConfigurableState_ConfigurableStateFailed, errMsg, nil, true)
+					pushConfigurableState(e, pb.ConfigurableState_ConfigurableStateFailed, errMsg, nil, true)
 
 					select {
 					case <-connCtx.Done():
@@ -117,9 +117,8 @@ func RunPolled(ctx context.Context, entityID string, run PollFunc) error {
 					interval = 30 * time.Second
 				}
 
-				// Success: wait for next interval.
 				nextRun := time.Now().Add(interval)
-				pushConfigurableState(entity, pb.ConfigurableState_ConfigurableStateScheduled, "", &nextRun, true)
+				pushConfigurableState(e, pb.ConfigurableState_ConfigurableStateScheduled, "", &nextRun, true)
 
 				select {
 				case <-connCtx.Done():
@@ -144,16 +143,16 @@ func RunPolled(ctx context.Context, entityID string, run PollFunc) error {
 
 		switch event.T {
 		case pb.EntityChange_EntityChangeUpdated:
-			entity := event.Entity
-			if entity.Config == nil {
+			e := event.Entity
+			if e.Config == nil {
 				stopRunning()
 				continue
 			}
-			if currentEntity != nil && proto.Equal(currentEntity.Config, entity.Config) {
+			if currentEntity != nil && proto.Equal(currentEntity.Config, e.Config) {
 				continue
 			}
 			stopRunning()
-			startRunning(entity)
+			startRunning(e)
 
 		case pb.EntityChange_EntityChangeExpired, pb.EntityChange_EntityChangeUnobserved:
 			stopRunning()

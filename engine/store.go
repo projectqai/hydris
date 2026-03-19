@@ -59,6 +59,14 @@ func (s *Store) Push(ctx context.Context, e Event) error {
 	return nil
 }
 
+func (s *Store) Reset() {
+	s.l.Lock()
+	defer s.l.Unlock()
+	s.events = nil
+	s.min = time.Time{}
+	s.max = time.Time{}
+}
+
 func (s *Store) GetTimeline() (time.Time, time.Time) {
 	s.l.RLock()
 	defer s.l.RUnlock()

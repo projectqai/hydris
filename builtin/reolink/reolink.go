@@ -64,7 +64,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	go runWSDiscovery(ctx, logger)
 
 	// Watch service config for credentials.
-	go controller.Run(ctx, serviceEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+	go controller.Run(ctx, serviceEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error { //nolint:errcheck // fire-and-forget goroutine
 		cfg := parseServiceConfig(entity)
 		svcCfgMu.Lock()
 		svcCfg = cfg

@@ -134,7 +134,7 @@ export function LeftPanelContent() {
           )}
           keyExtractor={(item) => item.id}
           drawDistance={500}
-          contentContainerStyle={{ paddingVertical: 8, paddingLeft: 12, paddingRight: 4 }}
+          contentContainerStyle={{ paddingVertical: 8, paddingHorizontal: 12 }}
           showsVerticalScrollIndicator
           onEndReached={hasMore ? handleLoadMore : undefined}
           onEndReachedThreshold={0.5}

@@ -1,6 +1,8 @@
 import type { Preset } from "@hydris/ui/layout/types";
 import type { ComponentType } from "react";
 
+import { ChatPane } from "./components/panes/chat-pane";
+import { ContactReportsPane } from "./components/panes/contact-reports-pane";
 import { EntityDetailsPane } from "./components/panes/entity-details-pane";
 import { EntityListPane } from "./components/panes/entity-list-pane";
 import { MapPane } from "./components/panes/map-pane";
@@ -42,14 +44,18 @@ export const COMPONENT_REGISTRY: Record<string, ComponentType> = {
   mapPane: MapPane,
   entityList: EntityListPane,
   entityDetails: EntityDetailsPane,
+  contactReports: ContactReportsPane,
   alerts: AlertsPlaceholder,
+  chat: ChatPane,
 };
 
 export const COMPONENT_LABELS: Record<string, string> = {
   mapPane: "Map",
   entityList: "Entity List",
   entityDetails: "Detail",
+  contactReports: "Contact Reports",
   alerts: "Alerts",
+  chat: "Chat",
 };
 
 export const PRESETS: Preset[] = [

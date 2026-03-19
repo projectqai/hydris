@@ -1,4 +1,20 @@
-import type { ActiveSensorSector, BaseLayer, CircleSector } from "./types";
+import type { ActiveSensorSector, Affiliation, BaseLayer, CircleSector } from "./types";
+
+export const AFFILIATION_COLORS_RGB: Record<Affiliation, [number, number, number]> = {
+  blue: [59, 130, 246],
+  red: [205, 24, 24],
+  neutral: [61, 141, 122],
+  unknown: [247, 239, 129],
+  unclassified: [156, 163, 175],
+};
+
+function rgbToHex([r, g, b]: [number, number, number]): string {
+  return `#${((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1).toUpperCase()}`;
+}
+
+export const AFFILIATION_COLORS_HEX: Record<Affiliation, string> = Object.fromEntries(
+  Object.entries(AFFILIATION_COLORS_RGB).map(([k, v]) => [k, rgbToHex(v)]),
+) as Record<Affiliation, string>;
 
 export const ICON_SIZE = 32;
 

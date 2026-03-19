@@ -102,13 +102,18 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 	}
 
 	// Set hardware identity.
+	// Clone the existing DeviceComponent so the per-component LWW merge
+	// doesn't discard fields like Parent, Class, Ip, etc.
 	if serial != "" {
 		hwID := strings.ToLower(manufacturer) + "." + serial
+		dev := proto.Clone(entity.Device).(*pb.DeviceComponent)
+		if dev == nil {
+			dev = &pb.DeviceComponent{}
+		}
+		dev.UniqueHardwareId = proto.String(hwID)
 		_ = controller.Push(ctx, &pb.Entity{
-			Id: entity.Id,
-			Device: &pb.DeviceComponent{
-				UniqueHardwareId: proto.String(hwID),
-			},
+			Id:     entity.Id,
+			Device: dev,
 		})
 	}
 
@@ -162,8 +167,9 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 	}
 
 	headEntity := &pb.Entity{
-		Id:     entity.Id,
-		Camera: camComp,
+		Id:      entity.Id,
+		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
+		Camera:  camComp,
 		Geo: &pb.GeoSpatialComponent{
 			Latitude:  cfg.Latitude,
 			Longitude: cfg.Longitude,
@@ -388,7 +394,7 @@ func watchTargetPose(ctx context.Context, logger *slog.Logger, ip string, cfg ca
 			if zoomPos > 32 {
 				zoomPos = 32
 			}
-			setAbsoluteZoom(ip, cfg.Username, cfg.Password, zoomPos)
+			_ = setAbsoluteZoom(ip, cfg.Username, cfg.Password, zoomPos)
 		}
 
 		logger.Info("PTZ move complete",

@@ -1,0 +1,21 @@
+{
+  "hydris_version": "0.0.20",
+  "plugins": [
+    {
+      "name": "hexdb",
+      "ref": "ghcr.io/projectqai/hydris/plugins/hexdb:0.0.1",
+      "label": "HexDB",
+      "description": "Feeds → Enrich ADS-B aircraft tracks with photos and registration data from HexDB.io",
+      "icon": "plane",
+      "compat": ">=0.0.18"
+    },
+    {
+      "name": "adsbdb",
+      "ref": "ghcr.io/projectqai/hydris/plugins/adsbdb:0.0.1",
+      "label": "ADS-B Database",
+      "description": "Feeds → Enrich ADS-B aircraft tracks data from the ADS-B Exchange database",
+      "icon": "database",
+      "compat": ">=0.0.18"
+    }
+  ]
+}

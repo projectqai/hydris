@@ -1,7 +1,16 @@
 import type { PickingInfo } from "@deck.gl/core";
+import { PathStyleExtension } from "@deck.gl/extensions";
 import { GeoJsonLayer } from "@deck.gl/layers";
 
-import type { ShapeFeature, ShapeProperties } from "../types";
+import type { ShapeFeature, ShapeLineStyle, ShapeProperties } from "../types";
+
+const DASH_ARRAYS: Record<ShapeLineStyle, [number, number]> = {
+  solid: [0, 0],
+  dashed: [8, 4],
+  dotted: [2, 4],
+};
+
+const dashExtension = new PathStyleExtension({ dash: true });
 
 type ShapeLayerProps = {
   data: ShapeFeature[];
@@ -23,6 +32,10 @@ export function createShapeLayer({ data, visible, selectedId, onClick }: ShapeLa
     lineWidthMinPixels: 2,
     pointRadiusMinPixels: 8,
     pickable: true,
+    extensions: [dashExtension],
+    // @ts-expect-error getDashArray is provided by PathStyleExtension
+    getDashArray: (f: ShapeFeature) => DASH_ARRAYS[f.properties.lineStyle ?? "solid"],
+    dashJustified: true,
     onClick: (info: PickingInfo): boolean => {
       if (info.object) {
         const id = (info.object as ShapeFeature).properties?.id;

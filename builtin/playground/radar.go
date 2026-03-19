@@ -289,7 +289,8 @@ func stepAndPush(ctx context.Context, client pb.WorldServiceClient, tracks []*si
 			trackComp.History = proto.String(historyID)
 
 			entities = append(entities, &pb.Entity{
-				Id: historyID,
+				Id:      historyID,
+				Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 				Shape: &pb.GeoShapeComponent{
 					Geometry: &pb.Geometry{
 						Planar: &pb.PlanarGeometry{
@@ -304,8 +305,9 @@ func stepAndPush(ctx context.Context, client pb.WorldServiceClient, tracks []*si
 		}
 
 		entities = append(entities, &pb.Entity{
-			Id:    t.id,
-			Label: proto.String(classification),
+			Id:      t.id,
+			Label:   proto.String(classification),
+			Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 			Geo: &pb.GeoSpatialComponent{
 				Longitude: lon,
 				Latitude:  lat,
