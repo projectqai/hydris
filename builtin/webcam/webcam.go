@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/controller"
-	"github.com/projectqai/hydris/builtin/devices"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 	"log/slog"
@@ -110,15 +109,20 @@ func reconcile(ctx context.Context, logger *slog.Logger, client pb.WorldServiceC
 		}
 		logger.Info("webcam appeared", "id", id, "name", info.Name, "device", info.DevicePath)
 
-		devInfo := devices.DeviceInfo{
-			Name:  id,
-			Label: info.Name,
-			USB:   info.USB,
+		entityID := fmt.Sprintf("webcam.device.%s.%s", nodeEntityID, id)
+		label := info.Name
+		entity := &pb.Entity{
+			Id:    entityID,
+			Label: proto.String(label),
+			Controller: &pb.Controller{
+				Id: proto.String("webcam"),
+			},
+			Device: &pb.DeviceComponent{
+				Parent: proto.String("webcam.service"),
+				Class:  proto.String("camera"),
+				Usb:    info.USB,
+			},
 		}
-		entity := devices.BuildDeviceEntity("webcam", nodeEntityID, devInfo)
-		serviceID := "webcam.service"
-		entity.Device.Parent = &serviceID
-		entity.Device.Class = proto.String("camera")
 
 		// Check if the camera is accessible for capture.
 		if err := validateCapture(logger, info); err != nil {

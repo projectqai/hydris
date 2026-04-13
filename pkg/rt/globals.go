@@ -3,8 +3,14 @@ package rt
 import (
 	"compress/gzip"
 	"context"
+	goHMAC "crypto/hmac"
 	"crypto/rand"
+	goSHA1 "crypto/sha1"
+	goSHA256 "crypto/sha256"
+	goSHA512 "crypto/sha512"
+	"encoding/base64"
 	"fmt"
+	goHash "hash"
 	"io"
 	"net/url"
 	"os"
@@ -25,6 +31,7 @@ func setupGlobals(loop *eventloop.EventLoop, vm *goja.Runtime) {
 	setupProcess(vm)
 	setupPerformance(vm)
 	setupAbort(vm)
+	setupBase64(vm)
 	setupEncoding(vm)
 	setupSymbols(vm)
 	setupURLSearchParams(vm)
@@ -32,6 +39,8 @@ func setupGlobals(loop *eventloop.EventLoop, vm *goja.Runtime) {
 	setupWebSocket(loop, vm)
 	setupDecompressionStream(loop, vm)
 	setupCrypto(vm)
+	setupNet(loop, vm)
+	setupDevice(loop, vm)
 }
 
 func setupSymbols(vm *goja.Runtime) {
@@ -41,6 +50,19 @@ func setupSymbols(vm *goja.Runtime) {
 			Symbol.asyncIterator = Symbol('Symbol.asyncIterator');
 		}
 	`)
+}
+
+func setupBase64(vm *goja.Runtime) {
+	vm.Set("btoa", func(s string) string {
+		return base64.StdEncoding.EncodeToString([]byte(s))
+	})
+	vm.Set("atob", func(s string) string {
+		b, err := base64.StdEncoding.DecodeString(s)
+		if err != nil {
+			panic(vm.NewTypeError("atob: invalid base64: %v", err))
+		}
+		return string(b)
+	})
 }
 
 func setupEncoding(vm *goja.Runtime) {
@@ -483,10 +505,11 @@ func setupFormData(vm *goja.Runtime) {
 }
 
 // setupCrypto provides the Web Crypto API subset used by plugins:
-// crypto.randomUUID() and crypto.getRandomValues(typedArray).
+// crypto.randomUUID(), crypto.getRandomValues(typedArray),
+// and crypto.subtle.{digest, importKey, sign}.
 func setupCrypto(vm *goja.Runtime) {
-	crypto := vm.NewObject()
-	crypto.Set("randomUUID", func() string {
+	cryptoObj := vm.NewObject()
+	cryptoObj.Set("randomUUID", func() string {
 		var uuid [16]byte
 		_, _ = rand.Read(uuid[:])
 		uuid[6] = (uuid[6] & 0x0f) | 0x40 // version 4
@@ -494,12 +517,101 @@ func setupCrypto(vm *goja.Runtime) {
 		return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 			uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:16])
 	})
-	crypto.Set("getRandomValues", func(call goja.FunctionCall) goja.Value {
+	cryptoObj.Set("getRandomValues", func(call goja.FunctionCall) goja.Value {
 		b := exportBytes(vm, call.Argument(0))
 		_, _ = rand.Read(b)
 		return call.Argument(0)
 	})
-	vm.Set("crypto", crypto)
+
+	subtle := vm.NewObject()
+
+	// crypto.subtle.digest(algorithm, data) → Promise<ArrayBuffer>
+	subtle.Set("digest", func(call goja.FunctionCall) goja.Value {
+		algo := call.Argument(0).String()
+		data := exportBytes(vm, call.Argument(1))
+
+		var h goHash.Hash
+		switch strings.ReplaceAll(strings.ToUpper(algo), "-", "") {
+		case "SHA256":
+			h = goSHA256.New()
+		case "SHA1":
+			h = goSHA1.New()
+		case "SHA512":
+			h = goSHA512.New()
+		default:
+			panic(vm.NewTypeError("unsupported digest algorithm: %s", algo))
+		}
+		h.Write(data)
+		result := h.Sum(nil)
+		p, resolve, _ := vm.NewPromise()
+		_ = resolve(vm.NewArrayBuffer(result))
+		return vm.ToValue(p)
+	})
+
+	// crypto.subtle.importKey("raw", keyData, {name:"HMAC",hash:"SHA-256"}, false, ["sign"])
+	// → Promise<CryptoKey>
+	// We store the raw key bytes in the returned object.
+	subtle.Set("importKey", func(call goja.FunctionCall) goja.Value {
+		format := call.Argument(0).String()
+		if format != "raw" {
+			panic(vm.NewTypeError("importKey: only 'raw' format is supported"))
+		}
+		keyData := exportBytes(vm, call.Argument(1))
+		algoObj := call.Argument(2).ToObject(vm)
+		algoName := algoObj.Get("name").String()
+		if strings.ToUpper(algoName) != "HMAC" {
+			panic(vm.NewTypeError("importKey: only HMAC algorithm is supported"))
+		}
+		hashName := ""
+		if h := algoObj.Get("hash"); h != nil && !goja.IsUndefined(h) {
+			// hash can be a string ("SHA-256") or object ({ name: "SHA-256" }).
+			if hObj := h.ToObject(vm); hObj != nil && hObj.Get("name") != nil && !goja.IsUndefined(hObj.Get("name")) {
+				hashName = hObj.Get("name").String()
+			} else {
+				hashName = h.String()
+			}
+		}
+
+		key := vm.NewObject()
+		key.Set("_raw", vm.NewArrayBuffer(keyData))
+		key.Set("_hash", hashName)
+		key.Set("type", "secret")
+
+		p, resolve, _ := vm.NewPromise()
+		_ = resolve(key)
+		return vm.ToValue(p)
+	})
+
+	// crypto.subtle.sign("HMAC", key, data) → Promise<ArrayBuffer>
+	subtle.Set("sign", func(call goja.FunctionCall) goja.Value {
+		keyObj := call.Argument(1).ToObject(vm)
+		rawKey := exportBytes(vm, keyObj.Get("_raw"))
+		hashName := keyObj.Get("_hash").String()
+		data := exportBytes(vm, call.Argument(2))
+
+		var hfn func() goHash.Hash
+		switch strings.ReplaceAll(strings.ToUpper(hashName), "-", "") {
+		case "SHA256":
+			hfn = goSHA256.New
+		case "SHA1":
+			hfn = goSHA1.New
+		case "SHA512":
+			hfn = goSHA512.New
+		default:
+			panic(vm.NewTypeError("unsupported HMAC hash: %s", hashName))
+		}
+
+		mac := goHMAC.New(hfn, rawKey)
+		mac.Write(data)
+		result := mac.Sum(nil)
+
+		p, resolve, _ := vm.NewPromise()
+		_ = resolve(vm.NewArrayBuffer(result))
+		return vm.ToValue(p)
+	})
+
+	cryptoObj.Set("subtle", subtle)
+	vm.Set("crypto", cryptoObj)
 }
 
 // setupDecompressionStream provides a DecompressionStream that works with

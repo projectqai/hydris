@@ -36,13 +36,17 @@ type Point struct {
 }
 
 type Detail struct {
-	Contact     Contact      `xml:"contact"`
-	Group       Group        `xml:"group"`
-	Milsym      *Milsym      `xml:"__milsym,omitempty"`
-	Link        *Link        `xml:"link,omitempty"`
-	ForceDelete *ForceDelete `xml:"__forcedelete,omitempty"`
-	Chat        *ChatDetail  `xml:"__chat,omitempty"`
-	Remarks     *Remarks     `xml:"remarks,omitempty"`
+	Contact      Contact      `xml:"contact"`
+	Group        Group        `xml:"group"`
+	Milsym       *Milsym      `xml:"__milsym,omitempty"`
+	Links        []Link       `xml:"link,omitempty"`
+	ForceDelete  *ForceDelete `xml:"__forcedelete,omitempty"`
+	Chat         *ChatDetail  `xml:"__chat,omitempty"`
+	Remarks      *Remarks     `xml:"remarks,omitempty"`
+	Shape        *Shape       `xml:"shape,omitempty"`
+	StrokeColor  *ColorAttr   `xml:"strokeColor,omitempty"`
+	FillColor    *ColorAttr   `xml:"fillColor,omitempty"`
+	StrokeWeight *WeightAttr  `xml:"strokeWeight,omitempty"`
 }
 
 type ChatDetail struct {
@@ -69,9 +73,28 @@ type ForceDelete struct {
 }
 
 type Link struct {
-	UID      string `xml:"uid,attr"`
+	UID      string `xml:"uid,attr,omitempty"`
 	Type     string `xml:"type,attr,omitempty"`
-	Relation string `xml:"relation,attr"`
+	Relation string `xml:"relation,attr,omitempty"`
+	Point    string `xml:"point,attr,omitempty"`
+}
+
+type Shape struct {
+	Ellipse *Ellipse `xml:"ellipse,omitempty"`
+}
+
+type Ellipse struct {
+	Major float64 `xml:"major,attr"`
+	Minor float64 `xml:"minor,attr"`
+	Angle float64 `xml:"angle,attr"`
+}
+
+type ColorAttr struct {
+	Value int64 `xml:"value,attr"`
+}
+
+type WeightAttr struct {
+	Value float64 `xml:"value,attr"`
 }
 
 type Contact struct {
@@ -271,11 +294,11 @@ func EntityDeleteCoT(entity *pb.Entity) ([]byte, error) {
 			LE: 9999999.0,
 		},
 		Detail: Detail{
-			Link: &Link{
+			Links: []Link{{
 				UID:      entity.Id,
 				Type:     "none",
 				Relation: "none",
-			},
+			}},
 			ForceDelete: &ForceDelete{},
 		},
 	}
@@ -519,6 +542,169 @@ func EntityToChatCoT(entity *pb.Entity) ([]byte, error) {
 // IsChatCoT returns true if the CoT XML data contains a GeoChat message.
 func IsChatCoT(data string) bool {
 	return strings.Contains(data, "<__chat") || strings.Contains(data, `type="b-t-f"`)
+}
+
+// EntityToShapeCoT converts a Hydris entity with a GeoShapeComponent to CoT shape XML.
+func EntityToShapeCoT(entity *pb.Entity) ([]byte, error) {
+	if entity.Shape == nil || entity.Shape.Geometry == nil || entity.Shape.Geometry.Planar == nil {
+		return nil, nil
+	}
+
+	callsign := entity.Id
+	if entity.Label != nil && *entity.Label != "" {
+		callsign = *entity.Label
+	}
+
+	now := time.Now().UTC()
+	staleTime := now.Add(10 * 365 * 24 * time.Hour)
+	if entity.Lifetime != nil && entity.Lifetime.Until != nil {
+		staleTime = entity.Lifetime.Until.AsTime()
+	}
+
+	// Build association links from related components
+	var assocLinks []Link
+	if entity.Detection != nil && entity.Detection.GetDetectorEntityId() != "" {
+		assocLinks = append(assocLinks, Link{
+			UID:      entity.Detection.GetDetectorEntityId(),
+			Relation: "p-p",
+		})
+	}
+
+	geom := entity.Shape.Geometry.Planar
+
+	switch g := geom.Plane.(type) {
+	case *pb.PlanarGeometry_Circle:
+		return marshalCircleCoT(entity.Id, callsign, now, staleTime, g.Circle, assocLinks)
+
+	case *pb.PlanarGeometry_Polygon:
+		return marshalPolygonCoT(entity.Id, callsign, now, staleTime, g.Polygon.Outer, true, assocLinks)
+
+	case *pb.PlanarGeometry_Line:
+		closed := isRingClosed(g.Line)
+		return marshalPolygonCoT(entity.Id, callsign, now, staleTime, g.Line, closed, assocLinks)
+
+	default:
+		return nil, nil
+	}
+}
+
+func marshalCircleCoT(uid, callsign string, now, stale time.Time, circle *pb.PlanarCircle, assocLinks []Link) ([]byte, error) {
+	if circle == nil || circle.Center == nil {
+		return nil, nil
+	}
+
+	alt := 0.0
+	if circle.Center.Altitude != nil {
+		alt = *circle.Center.Altitude
+	}
+
+	event := Event{
+		Version: "2.0",
+		Type:    "u-d-c-c",
+		How:     "h-g-i-g-o",
+		UID:     uid,
+		Time:    now.Format(time.RFC3339),
+		Start:   now.Format(time.RFC3339),
+		Stale:   stale.Format(time.RFC3339),
+		Point: Point{
+			Lat: circle.Center.Latitude,
+			Lon: circle.Center.Longitude,
+			Hae: alt,
+			CE:  9999999.0,
+			LE:  9999999.0,
+		},
+		Detail: Detail{
+			Contact: Contact{Callsign: callsign},
+			Links:   assocLinks,
+			Shape: &Shape{
+				Ellipse: &Ellipse{
+					Major: circle.RadiusM,
+					Minor: circle.RadiusM,
+					Angle: 0,
+				},
+			},
+		},
+	}
+
+	xmlData, err := xml.MarshalIndent(event, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal circle CoT: %w", err)
+	}
+	return append(xmlData, '\n'), nil
+}
+
+func marshalPolygonCoT(uid, callsign string, now, stale time.Time, ring *pb.PlanarRing, closed bool, assocLinks []Link) ([]byte, error) {
+	if ring == nil || len(ring.Points) < 2 {
+		return nil, nil
+	}
+
+	// Centroid for the event point
+	var latSum, lonSum float64
+	for _, pt := range ring.Points {
+		latSum += pt.Latitude
+		lonSum += pt.Longitude
+	}
+	n := float64(len(ring.Points))
+
+	links := make([]Link, 0, len(ring.Points))
+	for _, pt := range ring.Points {
+		alt := 0.0
+		if pt.Altitude != nil {
+			alt = *pt.Altitude
+		}
+		links = append(links, Link{
+			Point: fmt.Sprintf("%f,%f,%f", pt.Latitude, pt.Longitude, alt),
+		})
+	}
+
+	// Ensure closed ring for polygon
+	if closed && !isPointLinkEqual(links[0], links[len(links)-1]) {
+		links = append(links, links[0])
+	}
+
+	cotType := "u-d-f"
+	if closed {
+		cotType = "u-d-f"
+	}
+
+	event := Event{
+		Version: "2.0",
+		Type:    cotType,
+		How:     "h-g-i-g-o",
+		UID:     uid,
+		Time:    now.Format(time.RFC3339),
+		Start:   now.Format(time.RFC3339),
+		Stale:   stale.Format(time.RFC3339),
+		Point: Point{
+			Lat: latSum / n,
+			Lon: lonSum / n,
+			CE:  9999999.0,
+			LE:  9999999.0,
+		},
+		Detail: Detail{
+			Contact: Contact{Callsign: callsign},
+			Links:   append(assocLinks, links...),
+		},
+	}
+
+	xmlData, err := xml.MarshalIndent(event, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal polygon CoT: %w", err)
+	}
+	return append(xmlData, '\n'), nil
+}
+
+func isRingClosed(ring *pb.PlanarRing) bool {
+	if ring == nil || len(ring.Points) < 3 {
+		return false
+	}
+	first := ring.Points[0]
+	last := ring.Points[len(ring.Points)-1]
+	return first.Latitude == last.Latitude && first.Longitude == last.Longitude
+}
+
+func isPointLinkEqual(a, b Link) bool {
+	return a.Point == b.Point
 }
 
 // SetControllerOrigin sets controller.origin on an entity, used by CoTToEntity.

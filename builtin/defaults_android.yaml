@@ -1,0 +1,7 @@
+---
+id: hal.service
+config:
+  value:
+    serial: true
+    bluetooth: false
+    camera: false

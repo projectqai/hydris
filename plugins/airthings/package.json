@@ -1,0 +1,11 @@
+{
+  "name": "@hydris/builtin-airthings",
+  "version": "0.0.1",
+  "main": "index.ts",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@projectqai/hal": "file:../../pkg/rt/ts",
+    "@projectqai/proto": "file:../../../proto/ts"
+  }
+}

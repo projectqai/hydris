@@ -19,11 +19,22 @@ type deviceNode struct {
 func runDT(cobraCmd *cobra.Command, args []string) error {
 	client := pb.NewWorldServiceClient(conn)
 
+	filter := &pb.EntityFilter{
+		Component: []uint32{50},
+	}
+
+	bleServices, _ := cobraCmd.Flags().GetStringSlice("ble-service")
+	if len(bleServices) > 0 {
+		filter.Device = &pb.DeviceFilter{
+			Ble: &pb.BleDeviceFilter{
+				ServiceUuids: bleServices,
+			},
+		}
+	}
+
 	// Fetch all entities that have a DeviceComponent (field 50)
 	devResp, err := client.ListEntities(context.Background(), &pb.ListEntitiesRequest{
-		Filter: &pb.EntityFilter{
-			Component: []uint32{50},
-		},
+		Filter: filter,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to list entities: %w", err)

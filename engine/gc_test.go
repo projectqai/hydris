@@ -29,7 +29,7 @@ func TestGC_RemovesExpired(t *testing.T) {
 		"e3": noLifetime,
 	})
 
-	w.gc()
+	w.GC()
 
 	if w.GetHead("e1") != nil {
 		t.Error("expired entity should be removed")
@@ -58,7 +58,7 @@ func TestGC_BroadcastsExpiry(t *testing.T) {
 	w.bus.Register(c)
 	defer w.bus.Unregister(c)
 
-	w.gc()
+	w.GC()
 
 	id, change, _, ok := c.popNext()
 	if !ok || id != "e1" {
@@ -66,39 +66,6 @@ func TestGC_BroadcastsExpiry(t *testing.T) {
 	}
 	if change != pb.EntityChange_EntityChangeExpired {
 		t.Errorf("expected EntityChangeExpired, got %v", change)
-	}
-}
-
-func TestGC_FrozenTimeline(t *testing.T) {
-	// Entity expires at t2, freeze at t1 (before expiry) - should NOT be removed
-	t1 := time.Now().Add(-2 * time.Hour)
-	t2 := time.Now().Add(-time.Hour)
-
-	entity := &pb.Entity{
-		Id: "e1",
-		Lifetime: &pb.Lifetime{
-			Until: timestamppb.New(t2),
-		},
-	}
-
-	w := testWorld(map[string]*pb.Entity{
-		"e1": entity,
-	})
-	w.frozen.Store(true)
-	w.frozenAt = t1
-
-	w.gc()
-
-	if w.GetHead("e1") == nil {
-		t.Error("entity should NOT be removed when frozen before its expiry")
-	}
-
-	// Now freeze after expiry
-	w.frozenAt = time.Now()
-	w.gc()
-
-	if w.GetHead("e1") != nil {
-		t.Error("entity should be removed when frozen after its expiry")
 	}
 }
 
@@ -124,7 +91,7 @@ func TestGC_NoLifetimeComponentDoesNotPreventExpiry(t *testing.T) {
 	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = componentMeta{fresh: past, until: past}
 	es.lifetimes[int32(pb.EntityComponent_EntityComponentAdministrative)] = componentMeta{noLifetime: true}
 
-	w.gc()
+	w.GC()
 
 	if w.GetHead("e1") != nil {
 		t.Error("entity should be expired; noLifetime component should not keep it alive")
@@ -152,11 +119,12 @@ func TestGC_NoLifetimeComponentKeptWhenTrackedSurvives(t *testing.T) {
 	es.lifetimes[int32(pb.EntityComponent_EntityComponentTrack)] = componentMeta{fresh: past, until: future}
 	es.lifetimes[int32(pb.EntityComponent_EntityComponentAdministrative)] = componentMeta{noLifetime: true}
 
-	w.gc()
+	w.GC()
 
 	e := w.GetHead("e1")
 	if e == nil {
 		t.Fatal("entity should survive; Track component is still alive")
+		return
 	}
 	if e.Geo != nil {
 		t.Error("expired Geo should be removed")
@@ -181,7 +149,7 @@ func TestGC_NoLifetimeUntil(t *testing.T) {
 		"e1": entity,
 	})
 
-	w.gc()
+	w.GC()
 
 	if w.GetHead("e1") == nil {
 		t.Error("entity with lifetime.from but no until should not be removed")

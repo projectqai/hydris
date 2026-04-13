@@ -17,14 +17,17 @@ const earthRadiusM = 6_371_000.0
 type ShapeTransformer struct {
 	// byParent maps parent entity ID → shape entity IDs referencing it
 	byParent map[string][]string
+	// childParent maps shape entity ID → its current parent (reverse index)
+	childParent map[string]string
 	// managed tracks entity IDs whose GeoShapeComponent is engine-managed
 	managed map[string]struct{}
 }
 
 func NewShapeTransformer() *ShapeTransformer {
 	return &ShapeTransformer{
-		byParent: make(map[string][]string),
-		managed:  make(map[string]struct{}),
+		byParent:    make(map[string][]string),
+		childParent: make(map[string]string),
+		managed:     make(map[string]struct{}),
 	}
 }
 
@@ -60,6 +63,7 @@ func (st *ShapeTransformer) Resolve(head map[string]*pb.Entity, changedID string
 		if children, ok := st.byParent[changedID]; ok {
 			delete(st.byParent, changedID)
 			for _, childID := range children {
+				delete(st.childParent, childID)
 				delete(st.managed, childID)
 				if head[childID] != nil {
 					remove = append(remove, childID)
@@ -95,7 +99,8 @@ func (st *ShapeTransformer) resolveShape(head map[string]*pb.Entity, shapeID str
 
 	// Update index: remove old parent ref, add new
 	st.removeChild(shapeID)
-	st.byParent[parentID] = appendUnique(st.byParent[parentID], shapeID)
+	st.byParent[parentID] = append(st.byParent[parentID], shapeID)
+	st.childParent[shapeID] = parentID
 
 	lat := parent.Geo.Latitude
 	lon := parent.Geo.Longitude
@@ -118,20 +123,22 @@ func (st *ShapeTransformer) resolveShape(head map[string]*pb.Entity, shapeID str
 	st.managed[shapeID] = struct{}{}
 }
 
-// removeChild removes shapeID from whichever parent's list it appears in.
+// removeChild removes shapeID from its current parent's children list.
 func (st *ShapeTransformer) removeChild(shapeID string) {
-	for parentID, children := range st.byParent {
-		filtered := children[:0]
-		for _, c := range children {
-			if c != shapeID {
-				filtered = append(filtered, c)
-			}
+	parentID, ok := st.childParent[shapeID]
+	if !ok {
+		return
+	}
+	delete(st.childParent, shapeID)
+	children := st.byParent[parentID]
+	for i, c := range children {
+		if c == shapeID {
+			st.byParent[parentID] = append(children[:i], children[i+1:]...)
+			break
 		}
-		if len(filtered) == 0 {
-			delete(st.byParent, parentID)
-		} else {
-			st.byParent[parentID] = filtered
-		}
+	}
+	if len(st.byParent[parentID]) == 0 {
+		delete(st.byParent, parentID)
 	}
 }
 
@@ -269,12 +276,3 @@ func multiplyQuaternions(q1, q2 *pb.Quaternion) *pb.Quaternion {
 }
 
 // --- helpers ---
-
-func appendUnique(s []string, v string) []string {
-	for _, existing := range s {
-		if existing == v {
-			return s
-		}
-	}
-	return append(s, v)
-}

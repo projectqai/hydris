@@ -13,7 +13,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/projectqai/hydris/builtin/devices"
+	pb "github.com/projectqai/proto/go"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -57,8 +58,8 @@ type mibIPNetRow2 struct {
 
 const sizeofMibIPNetRow2 = 88
 
-func scanNetwork(ctx context.Context, logger *slog.Logger, progress progressFunc) <-chan map[string]devices.DeviceInfo {
-	ch := make(chan map[string]devices.DeviceInfo, 2)
+func scanNetwork(ctx context.Context, logger *slog.Logger, progress progressFunc) <-chan map[string]*pb.Entity {
+	ch := make(chan map[string]*pb.Entity, 2)
 
 	go func() {
 		defer close(ch)
@@ -210,7 +211,7 @@ type mibIPNetTable2 struct {
 
 // readARPTable uses the Windows IP Helper API (GetIpNetTable2) to read
 // the system ARP table without spawning a subprocess.
-func readARPTable(logger *slog.Logger) map[string]devices.DeviceInfo {
+func readARPTable(logger *slog.Logger) map[string]*pb.Entity {
 	var tablePtr *mibIPNetTable2
 	ret, _, _ := pGetIpNetTable2.Call(afINET, uintptr(unsafe.Pointer(&tablePtr)))
 	if ret != 0 {
@@ -222,7 +223,7 @@ func readARPTable(logger *slog.Logger) map[string]devices.DeviceInfo {
 	numEntries := tablePtr.NumEntries
 	rows := unsafe.Slice((*mibIPNetRow2)(unsafe.Add(unsafe.Pointer(tablePtr), unsafe.Sizeof(*tablePtr))), numEntries)
 
-	result := make(map[string]devices.DeviceInfo)
+	result := make(map[string]*pb.Entity)
 	for i := uint32(0); i < numEntries; i++ {
 		row := &rows[i]
 
@@ -258,16 +259,17 @@ func readARPTable(logger *slog.Logger) map[string]devices.DeviceInfo {
 			label = vendor + " " + ip
 		}
 
-		result[key] = devices.DeviceInfo{
-			Name:  key,
-			Label: label,
-			IP: &devices.IPDescriptor{
-				Host: ip,
-			},
-			Ethernet: &devices.EthernetDescriptor{
-				MACAddress: mac,
-				Vendor:     vendor,
-			},
+		dev := &pb.DeviceComponent{
+			Ip:       &pb.IpDevice{Host: proto.String(ip)},
+			Ethernet: &pb.EthernetDevice{MacAddress: proto.String(mac)},
+		}
+		if vendor != "" {
+			dev.Ethernet.Vendor = proto.String(vendor)
+		}
+
+		result[key] = &pb.Entity{
+			Label:  proto.String(label),
+			Device: dev,
 		}
 	}
 

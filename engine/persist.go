@@ -18,8 +18,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// LoadDefaults loads default entities, stamping lifetime.from to now if not set.
+// LoadDefaults loads default entities.
 // Entities that don't yet exist in head are inserted; existing ones are merged.
+// Defaults use a very old timestamp (Unix epoch) so they never overwrite
+// entities that were loaded from persistence with a real timestamp.
 func (s *WorldServer) LoadDefaults(b []byte) error {
 	if len(bytes.TrimSpace(b)) == 0 {
 		return nil
@@ -30,8 +32,24 @@ func (s *WorldServer) LoadDefaults(b []byte) error {
 		return err
 	}
 
+	// Dedup by ID, last-wins, so platform overrides replace base defaults.
+	seen := make(map[string]int, len(entities))
+	deduped := make([]*pb.Entity, 0, len(entities))
+	for _, e := range entities {
+		if idx, ok := seen[e.Id]; ok {
+			deduped[idx] = e
+		} else {
+			seen[e.Id] = len(deduped)
+			deduped = append(deduped, e)
+		}
+	}
+	entities = deduped
+
 	s.l.Lock()
 	defer s.l.Unlock()
+
+	// Use Unix epoch so defaults lose the LWW merge against any persisted entity.
+	epoch := timestamppb.New(time.Unix(0, 0))
 
 	added := 0
 	for _, e := range entities {
@@ -39,7 +57,7 @@ func (s *WorldServer) LoadDefaults(b []byte) error {
 			e.Lifetime = &pb.Lifetime{}
 		}
 		if !e.Lifetime.From.IsValid() {
-			e.Lifetime.From = timestamppb.Now()
+			e.Lifetime.From = epoch
 		}
 		if e.Lifetime.Fresh == nil || !e.Lifetime.Fresh.IsValid() {
 			e.Lifetime.Fresh = e.Lifetime.From
@@ -173,6 +191,10 @@ func (s *WorldServer) FlushToFile() error {
 		}
 		if e.Device != nil {
 			stub.Device = e.Device
+			hasSomething = true
+		}
+		if e.Artifact != nil {
+			stub.Artifact = e.Artifact
 			hasSomething = true
 		}
 

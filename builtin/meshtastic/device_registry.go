@@ -2,14 +2,12 @@ package meshtastic
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/controller"
-	"github.com/projectqai/hydris/builtin/devices"
 	"github.com/projectqai/hydris/goclient"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/grpc/codes"
@@ -17,10 +15,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
-
-// deviceInfo is an alias for the shared devices.DeviceInfo type.
-// The platform (Kotlin/etc) pushes JSON arrays of these.
-type deviceInfo = devices.DeviceInfo
 
 // usbDeviceID identifies a known meshtastic device by VID, PID, and manufacturer.
 type usbDeviceID struct {
@@ -61,77 +55,6 @@ func isMeshtasticCandidate(entity *pb.Entity) bool {
 	}
 	// Fallback: any USB serial device not banned is a candidate.
 	return entity.Device.Serial != nil
-}
-
-// maintainDeviceEntities receives device list snapshots from the platform
-// (Kotlin/Android) and pushes DeviceComponent entities accordingly.
-// On Linux the serial builtin handles this instead.
-func maintainDeviceEntities(ctx context.Context, logger *slog.Logger) {
-	grpcConn, err := builtin.BuiltinClientConn()
-	if err != nil {
-		logger.Error("device entities: failed to connect", "error", err)
-		return
-	}
-	defer func() { _ = grpcConn.Close() }()
-
-	client := pb.NewWorldServiceClient(grpcConn)
-
-	resp, err := client.GetLocalNode(ctx, &pb.GetLocalNodeRequest{})
-	if err != nil {
-		logger.Error("device entities: failed to get local node", "error", err)
-		return
-	}
-	nodeEntityID := resp.Entity.Id
-
-	known := make(map[string]deviceInfo)
-
-	for {
-		var raw string
-		select {
-		case <-ctx.Done():
-			return
-		case raw = <-deviceListCh:
-		}
-
-		var devs []deviceInfo
-		if raw != "" {
-			if err := json.Unmarshal([]byte(raw), &devs); err != nil {
-				logger.Error("failed to parse device list", "error", err)
-				continue
-			}
-		}
-
-		current := make(map[string]deviceInfo)
-		for _, d := range devs {
-			current[d.Name] = d
-		}
-
-		// Push new devices
-		for name, info := range current {
-			if _, exists := known[name]; !exists {
-				logger.Info("device appeared", "name", name)
-				if _, err := client.Push(ctx, &pb.EntityChangeRequest{
-					Changes: []*pb.Entity{devices.BuildDeviceEntity("meshtastic", nodeEntityID, info)},
-				}); err != nil {
-					logger.Error("failed to push device entity", "name", name, "error", err)
-				}
-			}
-		}
-
-		// Expire removed devices
-		for name := range known {
-			if _, exists := current[name]; !exists {
-				logger.Info("device removed", "name", name)
-				if _, err := client.ExpireEntity(ctx, &pb.ExpireEntityRequest{
-					Id: "meshtastic.device." + nodeEntityID + "." + name,
-				}); err != nil {
-					logger.Error("failed to expire device entity", "name", name, "error", err)
-				}
-			}
-		}
-
-		known = current
-	}
 }
 
 // watchDevicesAndPublishMeshtasticDevices watches all device entities and

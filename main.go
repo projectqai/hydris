@@ -8,14 +8,13 @@ import (
 	"os/exec"
 	"time"
 
-	_ "github.com/projectqai/hydris/pkg/logging"
+	"github.com/projectqai/hydris/pkg/logging"
 
 	"github.com/projectqai/hydris/builtin"
 	_ "github.com/projectqai/hydris/builtin/all"
 	"github.com/projectqai/hydris/cli"
 	"github.com/projectqai/hydris/engine"
 	"github.com/projectqai/hydris/pkg/executil"
-	"github.com/projectqai/hydris/pkg/version"
 	_ "github.com/projectqai/hydris/view"
 	"github.com/spf13/cobra"
 
@@ -49,6 +48,7 @@ func init() {
 			WorldFile:  worldFile,
 			PolicyFile: policyFile,
 			NoDefaults: noDefaults,
+			LogHandler: logging.Ring,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -93,7 +93,6 @@ func runPluginSubprocess(plugin, serverAddr string) {
 }
 
 func main() {
-	cli.HydrisVersion = version.Version
 	if err := cli.CMD.Execute(); err != nil {
 		os.Exit(1)
 	}

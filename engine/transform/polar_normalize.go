@@ -33,7 +33,7 @@ func (t *PolarNormalizeTransformer) Resolve(head map[string]*pb.Entity, changedI
 
 	p := polar.Polar
 	hasErrors := p.AzimuthErrorDeg != nil || p.ElevationErrorDeg != nil || p.RangeErrorM != nil
-	hasCov := p.Covariance != nil
+	hasCov := p.Covariance != nil //nolint:staticcheck // migration: read deprecated field to fill error fields
 
 	if hasErrors && !hasCov {
 		// Fill covariance from error fields
@@ -50,19 +50,19 @@ func (t *PolarNormalizeTransformer) Resolve(head map[string]*pb.Entity, changedI
 			v := *p.RangeErrorM * *p.RangeErrorM
 			cov.Mzz = &v
 		}
-		p.Covariance = cov
+		p.Covariance = cov //nolint:staticcheck // migration: write deprecated field for old consumers
 	} else if hasCov && !hasErrors {
-		// Fill error fields from covariance
-		if p.Covariance.GetMxx() > 0 {
-			v := math.Sqrt(p.Covariance.GetMxx())
+		// Fill error fields from deprecated covariance
+		if p.Covariance.GetMxx() > 0 { //nolint:staticcheck // migration
+			v := math.Sqrt(p.Covariance.GetMxx()) //nolint:staticcheck // migration
 			p.AzimuthErrorDeg = &v
 		}
-		if p.Covariance.GetMyy() > 0 {
-			v := math.Sqrt(p.Covariance.GetMyy())
+		if p.Covariance.GetMyy() > 0 { //nolint:staticcheck // migration
+			v := math.Sqrt(p.Covariance.GetMyy()) //nolint:staticcheck // migration
 			p.ElevationErrorDeg = &v
 		}
-		if p.Covariance.GetMzz() > 0 {
-			v := math.Sqrt(p.Covariance.GetMzz())
+		if p.Covariance.GetMzz() > 0 { //nolint:staticcheck // migration
+			v := math.Sqrt(p.Covariance.GetMzz()) //nolint:staticcheck // migration
 			p.RangeErrorM = &v
 		}
 	}

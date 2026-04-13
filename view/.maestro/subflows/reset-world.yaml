@@ -1,0 +1,10 @@
+appId: com.q.hydris.development
+---
+# Open command palette, search for "reset", hold to confirm
+- tapOn: "Commands"
+- tapOn:
+    id: "palette-search"
+- inputText: "reset"
+- hideKeyboard
+- longPressOn:
+    id: "command-world-reset"

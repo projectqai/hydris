@@ -9,12 +9,16 @@ import (
 	"sync"
 	"time"
 
+	"path/filepath"
+
 	"github.com/projectqai/hydris/builtin"
-	"github.com/projectqai/hydris/pkg/plugin"
+	"github.com/projectqai/hydris/builtin/artifacts"
 	_ "github.com/projectqai/hydris/builtin/all"
-	meshtastic "github.com/projectqai/hydris/builtin/meshtastic"
 	"github.com/projectqai/hydris/engine"
+	pb "github.com/projectqai/proto/go"
+	"github.com/projectqai/hydris/hal"
 	"github.com/projectqai/hydris/pkg/media"
+	"github.com/projectqai/hydris/pkg/plugin"
 	"github.com/projectqai/hydris/view"
 	"github.com/rs/cors"
 	"golang.org/x/net/http2"
@@ -100,14 +104,29 @@ func StartEngine() string {
 	}
 
 	// Load builtin defaults with old timestamp so they never overwrite real data
-	if err := service.engine.LoadDefaults(builtin.DefaultWorld); err != nil {
+	if err := service.engine.LoadDefaults(builtin.DefaultWorld()); err != nil {
 		slog.Error("failed to load default world", "error", err)
 	}
 
 	service.engine.InitNodeIdentity()
 
+	// Set up artifact storage.
+	artDir := filepath.Join(filepath.Dir(worldFile), "artifacts")
+	artLocal, err := artifacts.NewLocalStore(artDir)
+	if err != nil {
+		slog.Error("failed to create artifact store", "error", err)
+	} else {
+		grpcConn, err := builtin.BuiltinClientConn()
+		if err != nil {
+			slog.Error("failed to create builtin client for artifacts", "error", err)
+		} else {
+			worldClient := pb.NewWorldServiceClient(grpcConn)
+			artifacts.Server = artifacts.NewArtifactServer(artLocal, worldClient)
+		}
+	}
+
 	bridges := media.NewBridgeManager()
-	mux := engine.NewAPIMux(service.engine, nil, bridges)
+	mux := engine.NewAPIMux(service.engine, nil, bridges, &Ring)
 
 	webServer, err := view.NewWebServer()
 	if err == nil {
@@ -211,44 +230,60 @@ func FlushWorldState() string {
 	return ""
 }
 
-// SerialWriter is implemented by Kotlin to write bytes to a USB device.
-// Defined here (not in meshtastic package) so gomobile exports it.
-type SerialWriter interface {
-	Write(data []byte) (int, error)
+// PlatformBLE is implemented by Kotlin for BLE hardware access.
+type PlatformBLE interface {
+	StartScan()
+	StopScan()
+	Connect(address string) (int64, error)
+	Disconnect(handle int64) error
+	ReadCharacteristic(handle int64, charUUID string) ([]byte, error)
+	WriteCharacteristic(handle int64, charUUID string, data []byte) error
+	Subscribe(handle int64, charUUID string) error
+	Unsubscribe(handle int64, charUUID string) error
 }
 
-// DeviceOpener is implemented by Kotlin. Go calls RequestDevice when a config
-// entity needs a USB serial device opened.
-// Defined here (not in meshtastic package) so gomobile exports it.
-type DeviceOpener interface {
-	RequestDevice(deviceFilter string)
+// PlatformSerial is implemented by Kotlin for serial hardware access.
+type PlatformSerial interface {
+	Open(path string, baudRate int) (int64, error)
+	Read(handle int64, maxLen int) ([]byte, error)
+	Write(handle int64, data []byte) (int, error)
+	Close(handle int64) error
+	StartDiscovery()
+	StopDiscovery()
 }
 
-// SetMeshtasticDeviceOpener registers the Kotlin callback that Go calls when
-// a config entity needs a USB device opened. Must be called before StartEngine.
-func SetMeshtasticDeviceOpener(opener DeviceOpener) {
-	meshtastic.SetDeviceOpener(opener)
+// PlatformSensors is implemented by Kotlin for reading device sensors.
+type PlatformSensors interface {
+	// ReadSensors returns a JSON-encoded []SensorReading snapshot.
+	ReadSensors() string
 }
 
-// ConnectMeshtasticDevice is called by Kotlin after opening a USB device
-// in response to a DeviceOpener.RequestDevice call.
-func ConnectMeshtasticDevice(deviceName string, writer SerialWriter) {
-	meshtastic.ConnectDevice(deviceName, writer)
+// HalHandler receives events from Kotlin platform code.
+type HalHandler interface {
+	OnSerialPorts(json string)
+	OnBLEDevices(json string)
+	OnBLENotification(handle int64, charUUID string, data []byte)
+	OnBLEDisconnect(handle int64)
 }
 
-// UpdateUsbDeviceList is called by Kotlin with a JSON array of all current USB
-// devices whenever the set changes (attach/detach) or at startup.
-func UpdateUsbDeviceList(devicesJSON string) {
-	meshtastic.UpdateDeviceList(devicesJSON)
+// SetHalPlatform registers the Kotlin hardware implementations.
+// Call before StartEngine.
+func SetHalPlatform(ble PlatformBLE, serial PlatformSerial, sensors PlatformSensors) {
+	if ble != nil {
+		hal.SetBLEWatch(ble.StartScan, ble.StopScan)
+		hal.SetBLEOps(ble.Connect, ble.Disconnect, ble.ReadCharacteristic, ble.WriteCharacteristic, ble.Subscribe, ble.Unsubscribe)
+	}
+	if serial != nil {
+		hal.SetSerialWatch(serial.StartDiscovery, serial.StopDiscovery)
+		hal.SetSerialOps(serial.Open, serial.Read, serial.Write, serial.Close)
+	}
+	if sensors != nil {
+		hal.SetSensors(sensors.ReadSensors)
+	}
 }
 
-// DisconnectMeshtasticDevice is called when a USB device is removed.
-func DisconnectMeshtasticDevice(deviceName string) {
-	meshtastic.DisconnectDevice(deviceName)
+// GetHalHandler returns the Go-side handler that Kotlin calls for events.
+func GetHalHandler() HalHandler {
+	return hal.GetHandler()
 }
 
-// OnMeshtasticDeviceData is called by Kotlin's read thread when bytes arrive
-// from a specific USB device.
-func OnMeshtasticDeviceData(deviceName string, data []byte) {
-	meshtastic.OnDeviceData(deviceName, data)
-}

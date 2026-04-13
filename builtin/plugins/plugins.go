@@ -2,11 +2,8 @@ package plugins
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,7 +11,8 @@ import (
 	"github.com/blang/semver/v4"
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/controller"
-	"github.com/projectqai/hydris/cli"
+	"github.com/projectqai/hydris/pkg/plugin"
+	"github.com/projectqai/hydris/pkg/version"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -34,7 +32,7 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 	}
 
 	compatible := filterCompatible(index.Plugins, logger)
-	logger.Info("plugin registry loaded", "total", len(index.Plugins), "compatible", len(compatible), "hydris_version", cli.HydrisVersion)
+	logger.Info("plugin registry loaded", "total", len(index.Plugins), "compatible", len(compatible), "hydris_version", version.Version)
 
 	serviceID := controllerName + ".service"
 
@@ -105,8 +103,6 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 		return err
 	}
 
-	var regStore registryStore
-
 	var wg sync.WaitGroup
 
 	// Run registry plugins.
@@ -121,7 +117,7 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 					return nil
 				}
 				ready()
-				return runPlugin(ctx, logger, p, serverURL, regStore.dockerConfigDir())
+				return runPlugin(ctx, logger, p, serverURL)
 			})
 			if err != nil && ctx.Err() == nil {
 				logger.Error("plugin controller exited", "name", p.Name, "error", err)
@@ -139,19 +135,19 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 			{Class: "registry", Label: "Registry Credentials", Schema: registrySchema()},
 		}, func(ctx context.Context, entityID string) error {
 			return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
-				// Registry credential entities update the shared store.
+				// Registry credential entities: validate and keep alive.
 				if entity.Device.GetClass() == "registry" {
 					registry := configString(entity, "registry")
 					username := configString(entity, "username")
 					password := configString(entity, "password")
 					if registry == "" || username == "" || password == "" {
-						regStore.remove(entityID)
 						return nil
 					}
-					regStore.set(entityID, registry, username, password)
+					if err := plugin.TestRegistryAuth(registry, username, password); err != nil {
+						return err
+					}
 					ready()
 					<-ctx.Done()
-					regStore.remove(entityID)
 					return nil
 				}
 
@@ -163,7 +159,7 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 					}
 					feedUser := configString(entity, "username")
 					feedToken := configString(entity, "token")
-					return runFeed(ctx, logger, entityID, feedURL, feedUser, feedToken, serverURL, &regStore)
+					return runFeed(ctx, logger, entityID, feedURL, feedUser, feedToken, serverURL)
 				}
 
 				// Custom plugin entities.
@@ -176,7 +172,7 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 				}
 				ready()
 				info := PluginInfo{Name: entityID, Ref: ref}
-				return runPlugin(ctx, logger, info, serverURL, regStore.dockerConfigDir())
+				return runPlugin(ctx, logger, info, serverURL)
 			})
 		})
 		if err != nil && ctx.Err() == nil {
@@ -211,10 +207,10 @@ func isEnabled(entity *pb.Entity) bool {
 }
 
 func filterCompatible(plugins []PluginInfo, logger *slog.Logger) []PluginInfo {
-	raw := strings.TrimPrefix(cli.HydrisVersion, "v")
+	raw := strings.TrimPrefix(version.Version, "v")
 	cur, err := semver.ParseTolerant(raw)
 	if err != nil {
-		logger.Warn("cannot parse hydris version, showing all plugins", "version", cli.HydrisVersion)
+		logger.Warn("cannot parse hydris version, showing all plugins", "version", version.Version)
 		return plugins
 	}
 
@@ -232,7 +228,7 @@ func filterCompatible(plugins []PluginInfo, logger *slog.Logger) []PluginInfo {
 		if rng(cur) {
 			out = append(out, p)
 		} else {
-			logger.Info("skipping incompatible plugin", "name", p.Name, "compat", p.Compat, "hydris", cli.HydrisVersion)
+			logger.Info("skipping incompatible plugin", "name", p.Name, "compat", p.Compat, "hydris", version.Version)
 		}
 	}
 	return out
@@ -270,8 +266,8 @@ func feedSchema() *structpb.Struct {
 
 // runFeed fetches a remote plugin index and runs each compatible plugin from it.
 // If username and token are provided, registry credentials are automatically
-// registered for each unique registry hostname found in the plugin refs.
-func runFeed(ctx context.Context, logger *slog.Logger, feedEntityID, feedURL, feedUser, feedToken, serverURL string, regStore *registryStore) error {
+// pushed as entities for each unique registry hostname found in the plugin refs.
+func runFeed(ctx context.Context, logger *slog.Logger, feedEntityID, feedURL, feedUser, feedToken, serverURL string) error {
 	index, err := FetchRemoteIndexFromURL(ctx, feedURL, feedToken)
 	if err != nil {
 		logger.Error("failed to fetch plugin feed", "url", feedURL, "error", err)
@@ -281,19 +277,35 @@ func runFeed(ctx context.Context, logger *slog.Logger, feedEntityID, feedURL, fe
 	compatible := filterCompatible(index.Plugins, logger)
 	logger.Info("plugin feed loaded", "url", feedURL, "total", len(index.Plugins), "compatible", len(compatible))
 
-	// Register credentials for each unique registry found in plugin refs.
+	// Push registry credential entities for each unique registry found.
 	if feedUser != "" && feedToken != "" {
 		seen := make(map[string]bool)
 		for _, p := range compatible {
 			host := registryHost(p.Ref)
 			if host != "" && !seen[host] {
 				seen[host] = true
-				regStore.set(feedEntityID+".registry."+host, host, feedUser, feedToken)
+				regEntityID := feedEntityID + ".registry." + host
+				if err := controller.Push(ctx, &pb.Entity{
+					Id: regEntityID,
+					Device: &pb.DeviceComponent{
+						Parent: proto.String(feedEntityID),
+						Class:  proto.String("registry"),
+					},
+					Config: &pb.ConfigurationComponent{
+						Value: mustStruct(map[string]any{
+							"registry": host,
+							"username": feedUser,
+							"password": feedToken,
+						}),
+					},
+				}); err != nil {
+					logger.Error("push feed registry credential", "host", host, "error", err)
+				}
 			}
 		}
 		defer func() {
 			for host := range seen {
-				regStore.remove(feedEntityID + ".registry." + host)
+				expireEntity(ctx, logger, feedEntityID+".registry."+host)
 			}
 		}()
 	}
@@ -335,7 +347,7 @@ func runFeed(ctx context.Context, logger *slog.Logger, feedEntityID, feedURL, fe
 					return nil
 				}
 				ready()
-				return runPlugin(ctx, logger, p, serverURL, regStore.dockerConfigDir())
+				return runPlugin(ctx, logger, p, serverURL)
 			})
 			if err != nil && ctx.Err() == nil {
 				logger.Error("feed plugin controller exited", "name", p.Name, "error", err)
@@ -432,73 +444,23 @@ func registrySchema() *structpb.Struct {
 	return s
 }
 
-// registryStore collects credentials from multiple registry entities and
-// writes a merged Docker-compatible config.json.
-type registryStore struct {
-	mu      sync.Mutex
-	entries map[string]registryEntry // keyed by entity ID
-	dir     string                   // temp dir containing config.json
-}
-
-type registryEntry struct {
-	registry string
-	username string
-	password string
-}
-
-func (s *registryStore) set(entityID, registry, username, password string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.entries == nil {
-		s.entries = make(map[string]registryEntry)
-	}
-	s.entries[entityID] = registryEntry{registry, username, password}
-	s.flush()
-}
-
-func (s *registryStore) remove(entityID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.entries, entityID)
-	s.flush()
-}
-
-// flush writes all collected credentials into a single config.json.
-// Must be called with s.mu held.
-func (s *registryStore) flush() {
-	if len(s.entries) == 0 {
-		if s.dir != "" {
-			os.RemoveAll(s.dir)
-			s.dir = ""
-		}
-		return
-	}
-
-	auths := make(map[string]any, len(s.entries))
-	for _, e := range s.entries {
-		auth := base64.StdEncoding.EncodeToString([]byte(e.username + ":" + e.password))
-		auths[e.registry] = map[string]any{"auth": auth}
-	}
-	data, err := json.Marshal(map[string]any{"auths": auths})
+func expireEntity(ctx context.Context, logger *slog.Logger, entityID string) {
+	grpcConn, err := builtin.BuiltinClientConn()
 	if err != nil {
-		slog.Error("marshal docker config", "error", err)
+		logger.Error("expire entity: connect", "id", entityID, "error", err)
 		return
 	}
-
-	if s.dir == "" {
-		s.dir, err = os.MkdirTemp("", "hydris-docker-config-*")
-		if err != nil {
-			slog.Error("create docker config dir", "error", err)
-			return
-		}
-	}
-	if err := os.WriteFile(filepath.Join(s.dir, "config.json"), data, 0600); err != nil {
-		slog.Error("write docker config", "error", err)
+	defer func() { _ = grpcConn.Close() }()
+	client := pb.NewWorldServiceClient(grpcConn)
+	if _, err := client.ExpireEntity(ctx, &pb.ExpireEntityRequest{Id: entityID}); err != nil {
+		logger.Error("expire entity", "id", entityID, "error", err)
 	}
 }
 
-func (s *registryStore) dockerConfigDir() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.dir
+func mustStruct(m map[string]any) *structpb.Struct {
+	s, err := structpb.NewStruct(m)
+	if err != nil {
+		panic(err)
+	}
+	return s
 }

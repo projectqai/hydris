@@ -156,15 +156,7 @@ func handleConn(ctx context.Context, conn net.Conn, serverURL string, logger *sl
 			continue
 		}
 
-		var cotXML []byte
-		var cotErr error
-		if event.T == pb.EntityChange_EntityChangeExpired {
-			cotXML, cotErr = cot.EntityDeleteCoT(event.Entity)
-		} else if event.Entity.Chat != nil {
-			cotXML, cotErr = cot.EntityToChatCoT(event.Entity)
-		} else {
-			cotXML, cotErr = cot.EntityToCoT(event.Entity)
-		}
+		cotXML, cotErr := entityToCoTBytes(event)
 		if cotErr != nil {
 			logger.Error("Error converting entity", "clientID", clientID, "entityID", event.Entity.Id, "error", cotErr)
 			continue
@@ -912,6 +904,9 @@ func entityToCoTBytes(event *pb.EntityChangeEvent) ([]byte, error) {
 	}
 	if event.Entity.Chat != nil {
 		return cot.EntityToChatCoT(event.Entity)
+	}
+	if event.Entity.Shape != nil {
+		return cot.EntityToShapeCoT(event.Entity)
 	}
 	return cot.EntityToCoT(event.Entity)
 }

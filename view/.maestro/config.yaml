@@ -1,0 +1,5 @@
+# Maestro E2E test configuration
+# Docs: https://maestro.mobile.dev
+
+executionOrder:
+  continueOnFailure: true

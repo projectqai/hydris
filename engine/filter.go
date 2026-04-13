@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"strings"
+
 	pb "github.com/projectqai/proto/go"
 
 	"github.com/paulmach/orb"
@@ -77,6 +79,8 @@ func entityHasComponent(entity *pb.Entity, field uint32) bool {
 		return entity.TargetPose != nil
 	case pb.EntityComponent_EntityComponentChat:
 		return entity.Chat != nil
+	case pb.EntityComponent_EntityComponentArtifact:
+		return entity.Artifact != nil
 	}
 	return false
 }
@@ -94,6 +98,20 @@ func matchesComponentList(entity *pb.Entity, components []uint32) bool {
 	}
 
 	return true
+}
+
+// matchesAnyServiceUUID returns true if the entity's service UUIDs contain
+// any of the filter's service UUIDs.
+func matchesAnyServiceUUID(entityUUIDs, filterUUIDs []string) bool {
+	for _, f := range filterUUIDs {
+		fl := strings.ToLower(f)
+		for _, e := range entityUUIDs {
+			if strings.ToLower(e) == fl {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func taskableContainsContext(taskable *pb.TaskableComponent, ctx *pb.TaskableContext) bool {
@@ -283,6 +301,54 @@ func (s *WorldServer) matchesEntityFilter(entity *pb.Entity, filter *pb.EntityFi
 		}
 		if filter.Device.UniqueHardwareId != nil && entity.Device.GetUniqueHardwareId() != *filter.Device.UniqueHardwareId {
 			return false
+		}
+		if filter.Device.DeviceClass != nil && entity.Device.GetClass() != *filter.Device.DeviceClass {
+			return false
+		}
+		if filter.Device.Ble != nil {
+			if entity.Device.Ble == nil {
+				return false
+			}
+			if filter.Device.Ble.Address != nil && entity.Device.Ble.GetAddress() != *filter.Device.Ble.Address {
+				return false
+			}
+			if filter.Device.Ble.Name != nil && entity.Device.Ble.GetName() != *filter.Device.Ble.Name {
+				return false
+			}
+			if len(filter.Device.Ble.ServiceUuids) > 0 {
+				if !matchesAnyServiceUUID(entity.Device.Ble.ServiceUuids, filter.Device.Ble.ServiceUuids) {
+					return false
+				}
+			}
+		}
+		if filter.Device.Usb != nil {
+			if entity.Device.Usb == nil {
+				return false
+			}
+			if filter.Device.Usb.VendorId != nil && entity.Device.Usb.GetVendorId() != *filter.Device.Usb.VendorId {
+				return false
+			}
+			if filter.Device.Usb.ProductId != nil && entity.Device.Usb.GetProductId() != *filter.Device.Usb.ProductId {
+				return false
+			}
+			if filter.Device.Usb.DeviceClass != nil && entity.Device.Usb.GetDeviceClass() != *filter.Device.Usb.DeviceClass {
+				return false
+			}
+			if filter.Device.Usb.DeviceSubclass != nil && entity.Device.Usb.GetDeviceSubclass() != *filter.Device.Usb.DeviceSubclass {
+				return false
+			}
+			if filter.Device.Usb.DeviceProtocol != nil && entity.Device.Usb.GetDeviceProtocol() != *filter.Device.Usb.DeviceProtocol {
+				return false
+			}
+			if filter.Device.Usb.ManufacturerName != nil && entity.Device.Usb.GetManufacturerName() != *filter.Device.Usb.ManufacturerName {
+				return false
+			}
+			if filter.Device.Usb.ProductName != nil && entity.Device.Usb.GetProductName() != *filter.Device.Usb.ProductName {
+				return false
+			}
+			if filter.Device.Usb.SerialNumber != nil && entity.Device.Usb.GetSerialNumber() != *filter.Device.Usb.SerialNumber {
+				return false
+			}
 		}
 	}
 

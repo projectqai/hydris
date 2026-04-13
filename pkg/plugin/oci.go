@@ -2,10 +2,13 @@ package plugin
 
 import (
 	"archive/tar"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,8 +17,10 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/daemon"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
+	"github.com/projectqai/hydris/builtin"
+	pb "github.com/projectqai/proto/go"
 )
 
 // TempDir is the base directory for temporary plugin extractions.
@@ -95,13 +100,87 @@ func ResolveOCI(ref string, hydrisVersion string) (bundlePath, dataDir string, c
 	return bundle, dir, rmDir, nil
 }
 
-// pullImage tries the local Docker daemon first, then falls back to remote
-// registry with default keychain auth.
+// pullImage pulls from the remote registry with auth from the hydris world
+// service (if available) or the default Docker keychain.
 func pullImage(ref name.Reference) (v1.Image, error) {
-	if img, err := daemon.Image(ref); err == nil {
-		return img, nil
+	kc := registryKeychain()
+	return remote.Image(ref, remote.WithAuthFromKeychain(kc))
+}
+
+// registryKeychain returns a keychain that resolves credentials from registry
+// entities in the hydris world service. Falls back to authn.DefaultKeychain
+// when the world service is unreachable.
+func registryKeychain() authn.Keychain {
+	conn, err := builtin.BuiltinClientConn()
+	if err != nil {
+		slog.Warn("registry keychain: cannot connect to world service, using default keychain", "error", err)
+		return authn.DefaultKeychain
 	}
-	return remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain))
+	defer func() { _ = conn.Close() }()
+
+	client := pb.NewWorldServiceClient(conn)
+	class := "registry"
+	resp, err := client.ListEntities(context.Background(), &pb.ListEntitiesRequest{
+		Filter: &pb.EntityFilter{
+			Device: &pb.DeviceFilter{DeviceClass: &class},
+		},
+	})
+	if err != nil {
+		slog.Warn("registry keychain: cannot list registry entities, using default keychain", "error", err)
+		return authn.DefaultKeychain
+	}
+
+	entries := make(map[string]authn.AuthConfig)
+	for _, e := range resp.Entities {
+		if e.Config == nil || e.Config.Value == nil {
+			continue
+		}
+		fields := e.Config.Value.Fields
+		reg := fields["registry"].GetStringValue()
+		user := fields["username"].GetStringValue()
+		pass := fields["password"].GetStringValue()
+		if reg == "" || user == "" || pass == "" {
+			continue
+		}
+		slog.Debug("registry keychain: found credentials", "registry", reg, "username", user)
+		entries[reg] = authn.AuthConfig{Username: user, Password: pass}
+	}
+
+	if len(entries) == 0 {
+		slog.Warn("registry keychain: no registry credentials found in world service")
+		return authn.DefaultKeychain
+	}
+	return &worldKeychain{entries: entries}
+}
+
+// worldKeychain resolves credentials from hydris registry entities.
+type worldKeychain struct {
+	entries map[string]authn.AuthConfig
+}
+
+func (k *worldKeychain) Resolve(res authn.Resource) (authn.Authenticator, error) {
+	reg := res.RegistryStr()
+	if cfg, ok := k.entries[reg]; ok {
+		slog.Debug("registry keychain: resolved credentials", "registry", reg)
+		return authn.FromConfig(cfg), nil
+	}
+	slog.Warn("registry keychain: no credentials for registry", "registry", reg, "available", maps.Keys(k.entries))
+	return authn.DefaultKeychain.Resolve(res)
+}
+
+// TestRegistryAuth validates that the given credentials can authenticate
+// against the registry by performing the full token exchange.
+func TestRegistryAuth(registry, username, password string) error {
+	reg, err := name.NewRegistry(registry)
+	if err != nil {
+		return fmt.Errorf("invalid registry %q: %w", registry, err)
+	}
+	auth := authn.FromConfig(authn.AuthConfig{Username: username, Password: password})
+	_, err = transport.NewWithContext(context.Background(), reg, auth, http.DefaultTransport, nil)
+	if err != nil {
+		return fmt.Errorf("authentication failed: %w", err)
+	}
+	return nil
 }
 
 // extractPlugin extracts the plugin layer from an OCI image into a temp dir.

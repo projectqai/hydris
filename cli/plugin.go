@@ -6,17 +6,17 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/fsnotify/fsnotify"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/daemon"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
@@ -106,48 +106,131 @@ var pluginBuildCmd = &cobra.Command{
 			return fmt.Errorf("invalid tag %q: %w", tag, err)
 		}
 
-		// Load into local Docker daemon.
-		if _, err := daemon.Write(ref, img); err != nil {
-			return fmt.Errorf("daemon write: %w", err)
+		// Write OCI tarball to disk.
+		outFile := strings.ReplaceAll(strings.ReplaceAll(ref.String(), "/", "_"), ":", "_") + ".tar"
+		if err := tarball.WriteToFile(outFile, ref, img); err != nil {
+			return fmt.Errorf("write tarball: %w", err)
 		}
 
-		slog.Info("image loaded into docker daemon", "ref", ref.String())
+		slog.Info("image written", "ref", ref.String(), "file", outFile)
+
+		// Load into Docker daemon so `docker push` can find it.
+		loadCmd := exec.Command("docker", "load", "-i", outFile)
+		loadCmd.Stdout = os.Stdout
+		loadCmd.Stderr = os.Stderr
+		if err := loadCmd.Run(); err != nil {
+			return fmt.Errorf("docker load: %w", err)
+		}
+
 		return nil
 	},
 }
 
 // --- plugin run ---
 
-var pluginWatch bool
-var pluginServer string
+var pluginRunServer string
 
 var pluginRunCmd = &cobra.Command{
-	Use:   "run <file.ts|file.js|image-ref>",
-	Short: "run a plugin from a local file or OCI image",
+	Use:   "run <file.ts|file.js>",
+	Short: "bundle and load a plugin into a running engine (unloads on disconnect)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if pluginServer != "" {
-			os.Setenv("HYDRIS_SERVER", pluginServer)
+		input, err := filepath.Abs(args[0])
+		if err != nil {
+			return err
 		}
-		ctx := context.Background()
-
-		arg := args[0]
-		if pluginWatch && isLocalFile(arg) {
-			input, err := filepath.Abs(arg)
-			if err != nil {
-				return err
-			}
-			return watchAndRun(ctx, input)
-		}
-		return RunPlugin(ctx, arg)
+		return runPluginDev(cmd.Context(), input, pluginRunServer)
 	},
+}
+
+func runPluginDev(ctx context.Context, input, server string) error {
+	// Bundle with esbuild.
+	bundle, err := esbuildBundle(input)
+	if err != nil {
+		return fmt.Errorf("bundle: %w", err)
+	}
+
+	// Collect data files from package.json "files" field.
+	dataDir := rt.FindDataDir(input)
+	var extra []pluginFile
+	if dataDir != "" {
+		if pkg, err := plugin.ReadPackageJSON(dataDir); err == nil {
+			extra, _ = resolveFiles(dataDir, pkg.Files)
+		}
+	}
+
+	// Create tar archive with bundle.js + data files.
+	var tarBuf bytes.Buffer
+	gz := gzip.NewWriter(&tarBuf)
+	tw := tar.NewWriter(gz)
+
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "bundle.js",
+		Size: int64(len(bundle)),
+		Mode: 0o644,
+	}); err != nil {
+		return err
+	}
+	if _, err := tw.Write(bundle); err != nil {
+		return err
+	}
+
+	for _, f := range extra {
+		if err := tw.WriteHeader(&tar.Header{
+			Name: f.name,
+			Size: int64(len(f.data)),
+			Mode: 0o644,
+		}); err != nil {
+			return err
+		}
+		if _, err := tw.Write(f.data); err != nil {
+			return err
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	if err := gz.Close(); err != nil {
+		return err
+	}
+
+	// Upload to engine.
+	url := fmt.Sprintf("http://%s/plugin/dev", server)
+	slog.Info("uploading plugin to engine", "url", url, "size", tarBuf.Len())
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &tarBuf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/gzip")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("upload to engine: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("engine returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Stream logs from engine until cancelled.
+	_, err = io.Copy(os.Stdout, resp.Body)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil {
+		return fmt.Errorf("disconnected: %w", err)
+	}
+	return fmt.Errorf("disconnected")
 }
 
 func init() {
 	pluginBuildCmd.Flags().StringVarP(&pluginBuildTag, "tag", "t", "", "image tag (default: <name>:<version> from package.json)")
 
-	pluginRunCmd.Flags().BoolVar(&pluginWatch, "watch", false, "watch source directory, rebuild and restart on changes")
-	pluginRunCmd.Flags().StringVar(&pluginServer, "server", "", "hydris server address (sets HYDRIS_SERVER)")
+	pluginRunCmd.Flags().StringVar(&pluginRunServer, "server", "localhost:50051", "engine address")
 
 	pluginCmd.AddCommand(pluginBuildCmd)
 	pluginCmd.AddCommand(pluginRunCmd)
@@ -230,7 +313,7 @@ func makePluginLayer(pkgJSON, bundle []byte, extra []pluginFile) (v1.Layer, erro
 		if err := tw.WriteHeader(&tar.Header{
 			Name: f.name,
 			Size: int64(len(f.data)),
-			Mode: 0644,
+			Mode: 0o644,
 		}); err != nil {
 			return nil, err
 		}
@@ -247,165 +330,4 @@ func makePluginLayer(pkgJSON, bundle []byte, extra []pluginFile) (v1.Layer, erro
 	}
 
 	return tarball.LayerFromReader(&buf, tarball.WithMediaType(pluginMediaType)) //nolint:staticcheck // SA1019 deprecated but no replacement available
-}
-
-// runFromOCI pulls an image, extracts the plugin, checks version constraints
-// and runs the bundle.
-func runFromOCI(ctx context.Context, ref string) error {
-	bundlePath, dataDir, cleanup, err := plugin.ResolveOCI(ref, HydrisVersion)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	return rt.RunPlugin(ctx, bundlePath, dataDir)
-}
-
-// RunPlugin runs a plugin from a local file or OCI image reference.
-// It autodetects whether arg is a local path or an OCI ref.
-func RunPlugin(ctx context.Context, arg string) error {
-	if isLocalFile(arg) {
-		input, err := filepath.Abs(arg)
-		if err != nil {
-			return err
-		}
-		return buildAndRun(ctx, input)
-	}
-	return runFromOCI(ctx, arg)
-}
-
-// isLocalFile returns true if arg looks like a local file path rather than
-// an OCI image reference.
-func isLocalFile(arg string) bool {
-	ext := filepath.Ext(arg)
-	if ext == ".ts" || ext == ".js" {
-		return true
-	}
-	_, err := os.Stat(arg)
-	return err == nil
-}
-
-// --- local file helpers ---
-
-func esbuildToFile(input, output string) error {
-	result := api.Build(api.BuildOptions{
-		EntryPoints: []string{input},
-		Bundle:      true,
-		Format:      api.FormatESModule,
-		Target:      api.ES2017,
-		Outfile:     output,
-		Write:       true,
-		Supported: map[string]bool{
-			"top-level-await": true,
-		},
-	})
-	if len(result.Errors) > 0 {
-		return fmt.Errorf("esbuild: %s", result.Errors[0].Text)
-	}
-	return nil
-}
-
-func buildAndRun(ctx context.Context, input string) error {
-	jsPath, cleanup, err := ensureBundle(input)
-	if err != nil {
-		return err
-	}
-	defer cleanup()
-	dataDir := rt.FindDataDir(input)
-	return rt.RunPlugin(ctx, jsPath, dataDir)
-}
-
-func ensureBundle(input string) (jsPath string, cleanup func(), err error) {
-	noop := func() {}
-	if strings.HasSuffix(input, ".js") {
-		return input, noop, nil
-	}
-	tmp, err := os.CreateTemp("", "hydris-plugin-*.js")
-	if err != nil {
-		return "", noop, err
-	}
-	tmp.Close()
-	if err := esbuildToFile(input, tmp.Name()); err != nil {
-		os.Remove(tmp.Name())
-		return "", noop, err
-	}
-	return tmp.Name(), func() { os.Remove(tmp.Name()) }, nil
-}
-
-func watchAndRun(ctx context.Context, input string) error {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return fmt.Errorf("fsnotify: %w", err)
-	}
-	defer watcher.Close() //nolint:errcheck // best-effort cleanup
-
-	dir := filepath.Dir(input)
-	if err := watcher.Add(dir); err != nil {
-		return fmt.Errorf("watch %s: %w", dir, err)
-	}
-
-	var (
-		runCtx    context.Context
-		runCancel context.CancelFunc
-		runDone   chan struct{}
-	)
-
-	dataDir := rt.FindDataDir(input)
-
-	startPlugin := func() {
-		jsPath, cleanup, err := ensureBundle(input)
-		if err != nil {
-			slog.Error("build failed", "error", err)
-			return
-		}
-		runCtx, runCancel = context.WithCancel(ctx)
-		runDone = make(chan struct{})
-		go func() {
-			defer close(runDone)
-			defer cleanup()
-			_ = rt.RunPlugin(runCtx, jsPath, dataDir)
-		}()
-	}
-
-	stopPlugin := func() {
-		if runCancel != nil {
-			runCancel()
-			<-runDone
-			runCancel = nil
-		}
-	}
-
-	startPlugin()
-
-	var debounce *time.Timer
-	for {
-		select {
-		case ev, ok := <-watcher.Events:
-			if !ok {
-				stopPlugin()
-				return nil
-			}
-			if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
-				continue
-			}
-			if debounce != nil {
-				debounce.Stop()
-			}
-			debounce = time.AfterFunc(200*time.Millisecond, func() {
-				slog.Info("change detected, rebuilding", "file", ev.Name)
-				stopPlugin()
-				startPlugin()
-			})
-
-		case err, ok := <-watcher.Errors:
-			if !ok {
-				stopPlugin()
-				return nil
-			}
-			slog.Error("watcher error", "error", err)
-
-		case <-ctx.Done():
-			stopPlugin()
-			return ctx.Err()
-		}
-	}
 }

@@ -179,15 +179,15 @@ func (t *AOUTransformer) computeLOBAOU(entity *pb.Entity) {
 	// Use actual range + 2σ range uncertainty as LOB length
 	if polar.Polar.Range != nil {
 		length = *polar.Polar.Range
-		if polar.Polar.Covariance != nil && polar.Polar.Covariance.GetMzz() > 0 {
-			length += 2 * math.Sqrt(polar.Polar.Covariance.GetMzz())
+		if polar.Polar.RangeErrorM != nil && *polar.Polar.RangeErrorM > 0 {
+			length += 2 * *polar.Polar.RangeErrorM
 		}
 	}
 
-	// Check for bearing error (azimuth variance in covariance.mxx)
+	// Check for bearing error
 	var bearingErrorRad float64
-	if polar.Polar.Covariance != nil && polar.Polar.Covariance.GetMxx() > 0 {
-		bearingErrorRad = math.Sqrt(polar.Polar.Covariance.GetMxx()) * math.Pi / 180.0
+	if polar.Polar.AzimuthErrorDeg != nil && *polar.Polar.AzimuthErrorDeg > 0 {
+		bearingErrorRad = *polar.Polar.AzimuthErrorDeg * math.Pi / 180.0
 	}
 
 	// MIL-STD-2525C §5.3.4.11.1.3: LOB is a center bearing line with optional

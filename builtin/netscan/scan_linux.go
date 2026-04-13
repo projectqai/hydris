@@ -13,14 +13,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/projectqai/hydris/builtin/devices"
+	pb "github.com/projectqai/proto/go"
+	"google.golang.org/protobuf/proto"
 )
 
 // scanNetwork reads the existing ARP table immediately, then sweeps the subnet
 // and reads again. Results are sent on the returned channel: the first value
 // arrives instantly from cached ARP entries, the second after the sweep.
-func scanNetwork(ctx context.Context, logger *slog.Logger, progress progressFunc) <-chan map[string]devices.DeviceInfo {
-	ch := make(chan map[string]devices.DeviceInfo, 2)
+func scanNetwork(ctx context.Context, logger *slog.Logger, progress progressFunc) <-chan map[string]*pb.Entity {
+	ch := make(chan map[string]*pb.Entity, 2)
 
 	go func() {
 		defer close(ch)
@@ -175,7 +176,7 @@ func probeHost(ip string) {
 
 // readARPTable parses /proc/net/arp and returns reachable hosts.
 // Format: IP address  HW type  Flags  HW address            Mask  Device
-func readARPTable(logger *slog.Logger) map[string]devices.DeviceInfo {
+func readARPTable(logger *slog.Logger) map[string]*pb.Entity {
 	f, err := os.Open("/proc/net/arp")
 	if err != nil {
 		logger.Error("cannot read ARP table", "error", err)
@@ -183,7 +184,7 @@ func readARPTable(logger *slog.Logger) map[string]devices.DeviceInfo {
 	}
 	defer f.Close()
 
-	result := make(map[string]devices.DeviceInfo)
+	result := make(map[string]*pb.Entity)
 	scanner := bufio.NewScanner(f)
 	scanner.Scan() // skip header
 
@@ -213,15 +214,11 @@ func readARPTable(logger *slog.Logger) map[string]devices.DeviceInfo {
 
 		label := vendor + " " + ip
 
-		result[key] = devices.DeviceInfo{
-			Name:  key,
-			Label: label,
-			IP: &devices.IPDescriptor{
-				Host: ip,
-			},
-			Ethernet: &devices.EthernetDescriptor{
-				MACAddress: mac,
-				Vendor:     vendor,
+		result[key] = &pb.Entity{
+			Label: proto.String(label),
+			Device: &pb.DeviceComponent{
+				Ip:       &pb.IpDevice{Host: proto.String(ip)},
+				Ethernet: &pb.EthernetDevice{MacAddress: proto.String(mac), Vendor: proto.String(vendor)},
 			},
 		}
 	}

@@ -1,0 +1,35 @@
+appId: com.q.hydris.development
+name: "Reset world clears all entities"
+---
+- runFlow: ../subflows/launch-and-navigate.yaml
+
+# Enable playground radar to populate entities
+- tapOn: "Commands"
+- tapOn:
+    id: "command-configuration"
+- tapOn: "MISSIONS"
+- tapOn: "Playground"
+- scrollUntilVisible:
+    element: "Enable Simulated Radar"
+    direction: DOWN
+- tapOn: "Enable Simulated Radar"
+- tapOn: "APPLY CONFIGURATION"
+- tapOn: "Go back"
+- tapOn: "Close command palette"
+
+# Wait for entities to appear
+- tapOn:
+    id: "tab-assets"
+- extendedWaitUntil:
+    visible: "Simulated Drone Radar"
+    timeout: 30000
+
+# Reset world
+- runFlow: ../subflows/reset-world.yaml
+
+# Verify entities are gone
+- tapOn:
+    id: "tab-assets"
+- extendedWaitUntil:
+    visible: "No assets available"
+    timeout: 15000

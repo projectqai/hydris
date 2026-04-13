@@ -22,7 +22,6 @@ func testWorld(entities map[string]*pb.Entity) *WorldServer {
 		bus:      NewBus(),
 		head:     make(map[string]*entityState),
 		headView: make(map[string]*pb.Entity),
-		store:    NewStore(),
 	}
 	for _, e := range entities {
 		w.initEntity(e)
@@ -874,7 +873,7 @@ func TestExpireEntityPreservesComponents(t *testing.T) {
 
 	// GC picks up the expired entity and fires EntityChangeExpired.
 	time.Sleep(20 * time.Millisecond)
-	world.gc()
+	world.GC()
 	time.Sleep(50 * time.Millisecond)
 
 	mu.Lock()
@@ -944,7 +943,7 @@ func TestPartialComponentExpiry_Unobserved(t *testing.T) {
 
 	// GC should expire Device but keep Geo.
 	time.Sleep(20 * time.Millisecond)
-	world.gc()
+	world.GC()
 	time.Sleep(50 * time.Millisecond)
 
 	mu.Lock()
@@ -1020,7 +1019,7 @@ func TestPartialComponentExpiry_ReappearAfterPush(t *testing.T) {
 
 	// Phase 1: GC expires Device → Unobserved.
 	time.Sleep(20 * time.Millisecond)
-	world.gc()
+	world.GC()
 	time.Sleep(50 * time.Millisecond)
 
 	mu.Lock()

@@ -16,14 +16,17 @@ import (
 type PoseTransformer struct {
 	// byParent maps parent entity ID → child entity IDs that reference it
 	byParent map[string][]string
+	// childParent maps child entity ID → its current parent (reverse index)
+	childParent map[string]string
 	// managed tracks entity IDs whose Geo/Orientation/Bearing are engine-managed
 	managed map[string]struct{}
 }
 
 func NewPoseTransformer() *PoseTransformer {
 	return &PoseTransformer{
-		byParent: make(map[string][]string),
-		managed:  make(map[string]struct{}),
+		byParent:    make(map[string][]string),
+		childParent: make(map[string]string),
+		managed:     make(map[string]struct{}),
 	}
 }
 
@@ -44,6 +47,7 @@ func (pt *PoseTransformer) Resolve(head map[string]*pb.Entity, changedID string)
 		if children, ok := pt.byParent[changedID]; ok {
 			delete(pt.byParent, changedID)
 			for _, childID := range children {
+				delete(pt.childParent, childID)
 				if child := head[childID]; child != nil {
 					child.Geo = nil
 					child.Orientation = nil
@@ -80,7 +84,8 @@ func (pt *PoseTransformer) resolvePose(head map[string]*pb.Entity, childID strin
 	// Always register in the index so that when the parent arrives later,
 	// we re-resolve this child.
 	pt.removeChild(childID)
-	pt.byParent[parentID] = appendUnique(pt.byParent[parentID], childID)
+	pt.byParent[parentID] = append(pt.byParent[parentID], childID)
+	pt.childParent[childID] = parentID
 
 	parent := head[parentID]
 	if parent == nil || parent.Geo == nil {
@@ -205,10 +210,19 @@ func (pt *PoseTransformer) resolvePolar(child *pb.Entity, p *pb.PolarOffset, par
 		child.Geo.Altitude = &alt
 	}
 
-	// Propagate polar covariance to geo via Jacobian transform.
-	// PolarOffset covariance: mxx = azimuth variance (deg²), mzz = range variance (m²).
-	if p.Covariance != nil {
-		child.Geo.Covariance = polarCovToENU(azRad, rng, p.Covariance)
+	// Propagate polar error fields to geo covariance via Jacobian transform.
+	// Build covariance from the normalised error fields (azimuth_error_deg, range_error_m).
+	if p.AzimuthErrorDeg != nil || p.RangeErrorM != nil {
+		cov := &pb.CovarianceMatrix{}
+		if p.AzimuthErrorDeg != nil {
+			v := *p.AzimuthErrorDeg * *p.AzimuthErrorDeg
+			cov.Mxx = &v
+		}
+		if p.RangeErrorM != nil {
+			v := *p.RangeErrorM * *p.RangeErrorM
+			cov.Mzz = &v
+		}
+		child.Geo.Covariance = polarCovToENU(azRad, rng, cov)
 	}
 }
 
@@ -322,19 +336,21 @@ func polarCovToENU(azRad, rng float64, cov *pb.CovarianceMatrix) *pb.CovarianceM
 	}
 }
 
-// removeChild removes childID from whichever parent's list it appears in.
+// removeChild removes childID from its current parent's children list.
 func (pt *PoseTransformer) removeChild(childID string) {
-	for parentID, children := range pt.byParent {
-		filtered := children[:0]
-		for _, c := range children {
-			if c != childID {
-				filtered = append(filtered, c)
-			}
+	parentID, ok := pt.childParent[childID]
+	if !ok {
+		return
+	}
+	delete(pt.childParent, childID)
+	children := pt.byParent[parentID]
+	for i, c := range children {
+		if c == childID {
+			pt.byParent[parentID] = append(children[:i], children[i+1:]...)
+			break
 		}
-		if len(filtered) == 0 {
-			delete(pt.byParent, parentID)
-		} else {
-			pt.byParent[parentID] = filtered
-		}
+	}
+	if len(pt.byParent[parentID]) == 0 {
+		delete(pt.byParent, parentID)
 	}
 }

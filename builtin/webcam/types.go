@@ -1,8 +1,6 @@
 package webcam
 
-import (
-	"github.com/projectqai/hydris/builtin/devices"
-)
+import pb "github.com/projectqai/proto/go"
 
 // webcamInfo describes a discovered webcam device.
 type webcamInfo struct {
@@ -11,7 +9,7 @@ type webcamInfo struct {
 	// DevicePath is the platform-specific device path (e.g. /dev/video0).
 	DevicePath string
 	// USB descriptor, populated when the camera is USB-connected.
-	USB *devices.USBDescriptor
+	USB *pb.UsbDevice
 	// Formats lists the pixel formats the camera natively supports.
 	Formats []pixelFormat
 }

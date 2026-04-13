@@ -110,10 +110,13 @@ func WatchChildren(ctx context.Context, serviceEntityID, controllerName string, 
 					Controller: &pb.Controller{
 						Id: &controllerName,
 					},
-					Configurable: &pb.ConfigurableComponent{
-						Schema: class.Schema,
-						Label:  proto.String(class.Label),
-					},
+					Configurable: func() *pb.ConfigurableComponent {
+						c := &pb.ConfigurableComponent{Schema: class.Schema}
+						if class.Label != "" {
+							c.Label = proto.String(class.Label)
+						}
+						return c
+					}(),
 				}},
 			})
 			if pushErr != nil {

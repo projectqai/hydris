@@ -2,11 +2,13 @@ package logging
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"time"
 
 	"github.com/lmittmann/tint"
+	"github.com/projectqai/hydris/engine"
 )
 
 type modulePrefixHandler struct {
@@ -56,14 +58,20 @@ func (h *modulePrefixHandler) Handle(ctx context.Context, r slog.Record) error {
 	return h.handler.Handle(ctx, r)
 }
 
+// Ring is the global log ring buffer. It captures formatted log output
+// and serves it over HTTP via /logs.
+var Ring *engine.LogRing
+
 func init() {
 	level := slog.LevelInfo
 	if os.Getenv("HYDRIS_DEBUG") != "" {
 		level = slog.LevelDebug
 	}
 
+	Ring = new(engine.LogRing)
+
 	handler := &modulePrefixHandler{
-		handler: tint.NewHandler(os.Stderr, &tint.Options{
+		handler: tint.NewHandler(io.MultiWriter(Ring, os.Stderr), &tint.Options{
 			Level:      level,
 			TimeFormat: time.Kitchen,
 		}),

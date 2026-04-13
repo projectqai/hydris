@@ -20,6 +20,7 @@ func TestClassification_ParsesFriendGround(t *testing.T) {
 	cls := head["e1"].Classification
 	if cls == nil {
 		t.Fatal("expected ClassificationComponent")
+		return
 	}
 	if cls.Identity == nil || *cls.Identity != pb.ClassificationIdentity_ClassificationIdentityFriend {
 		t.Errorf("expected Friend, got %v", cls.Identity)
@@ -43,6 +44,7 @@ func TestClassification_ParsesHostileAir(t *testing.T) {
 	cls := head["e1"].Classification
 	if cls == nil {
 		t.Fatal("expected ClassificationComponent")
+		return
 	}
 	if cls.Identity == nil || *cls.Identity != pb.ClassificationIdentity_ClassificationIdentityHostile {
 		t.Errorf("expected Hostile, got %v", cls.Identity)
@@ -66,6 +68,7 @@ func TestClassification_ParsesUnknownSea(t *testing.T) {
 	cls := head["e1"].Classification
 	if cls == nil {
 		t.Fatal("expected ClassificationComponent")
+		return
 	}
 	if cls.Identity == nil || *cls.Identity != pb.ClassificationIdentity_ClassificationIdentityUnknown {
 		t.Errorf("expected Unknown, got %v", cls.Identity)
@@ -148,6 +151,7 @@ func TestClassification_AssumedFriendMappedToFriend(t *testing.T) {
 	cls := head["e1"].Classification
 	if cls == nil {
 		t.Fatal("expected ClassificationComponent")
+		return
 	}
 	if cls.Identity == nil || *cls.Identity != pb.ClassificationIdentity_ClassificationIdentityFriend {
 		t.Errorf("assumed friend (A) should map to Friend, got %v", cls.Identity)
@@ -168,6 +172,7 @@ func TestClassification_JokerMappedToHostile(t *testing.T) {
 	cls := head["e1"].Classification
 	if cls == nil {
 		t.Fatal("expected ClassificationComponent")
+		return
 	}
 	if cls.Identity == nil || *cls.Identity != pb.ClassificationIdentity_ClassificationIdentityHostile {
 		t.Errorf("joker (J) should map to Hostile, got %v", cls.Identity)
@@ -188,6 +193,7 @@ func TestClassification_SubsurfaceDimension(t *testing.T) {
 	cls := head["e1"].Classification
 	if cls == nil {
 		t.Fatal("expected ClassificationComponent")
+		return
 	}
 	if cls.Dimension == nil || *cls.Dimension != pb.ClassificationBattleDimension_ClassificationBattleDimensionSubsurface {
 		t.Errorf("expected Subsurface, got %v", cls.Dimension)
@@ -208,6 +214,7 @@ func TestClassification_SpaceDimension(t *testing.T) {
 	cls := head["e1"].Classification
 	if cls == nil {
 		t.Fatal("expected ClassificationComponent")
+		return
 	}
 	if cls.Dimension == nil || *cls.Dimension != pb.ClassificationBattleDimension_ClassificationBattleDimensionSpace {
 		t.Errorf("expected Space, got %v", cls.Dimension)

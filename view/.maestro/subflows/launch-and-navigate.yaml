@@ -1,0 +1,4 @@
+appId: com.q.hydris.development
+---
+- launchApp:
+    clearState: true

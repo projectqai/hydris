@@ -376,6 +376,7 @@ func TestFlushToFile_PersistsConfigAndDevice(t *testing.T) {
 	e := w2.GetHead("e1")
 	if e == nil {
 		t.Fatal("e1 should be in file")
+		return
 	}
 	if e.Config == nil || e.Config.Value == nil {
 		t.Fatal("config should survive persistence")

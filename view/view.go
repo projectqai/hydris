@@ -7,11 +7,11 @@ import (
 	"net/http"
 )
 
-//go:embed all:frontend/apps/foss/build
+//go:embed all:apps/foss/build
 var dist embed.FS
 
 func NewWebServer() (http.Handler, error) {
-	distFS, err := fs.Sub(dist, "frontend/apps/foss/build")
+	distFS, err := fs.Sub(dist, "apps/foss/build")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get dist subdirectory: %w", err)
 	}

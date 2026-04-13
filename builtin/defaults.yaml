@@ -22,10 +22,12 @@ config:
     auto_probe: true
     username: admin
 ---
-id: serial.service
+id: hal.service
 config:
   value:
-    enabled: true
+    serial: true
+    bluetooth: true
+    camera: false
 ---
 id: mediaserver.service
 config:

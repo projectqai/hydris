@@ -1,0 +1,23 @@
+pre-commit:
+  parallel: true
+  commands:
+    go-fmt:
+      glob: "*.go"
+      run: gofmt -w {staged_files}
+      stage_fixed: true
+    ts-format:
+      root: "view/"
+      glob: "*.{ts,tsx,js,jsx,json,md,css}"
+      run: bunx prettier --write --ignore-path .prettierignore {staged_files}
+      stage_fixed: true
+    ts-lint:
+      root: "view/"
+      glob: "*.{ts,tsx,js,jsx}"
+      run: bun run lint
+
+pre-push:
+  commands:
+    ts-typecheck:
+      root: "view/"
+      glob: "*.{ts,tsx}"
+      run: bun run type-check

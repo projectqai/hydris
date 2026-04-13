@@ -21,10 +21,6 @@ var (
 	conn         *goclient.Connection
 	serverURL    string
 	wgConfigPath string
-
-	// HydrisVersion is set by main to the build version for plugin
-	// compatibility checks.
-	HydrisVersion string
 )
 
 func AddConnectionFlags(cmd *cobra.Command) {

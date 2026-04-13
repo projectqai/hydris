@@ -9,20 +9,21 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
-	semver "github.com/blang/semver/v4"
 	"github.com/fatih/color"
 	"github.com/projectqai/hydris/builtin"
+	"github.com/projectqai/hydris/builtin/artifacts"
 	"github.com/projectqai/hydris/builtin/mediaserver"
 	"github.com/projectqai/hydris/builtin/plugins"
 	"github.com/projectqai/hydris/engine/transform"
@@ -81,15 +82,11 @@ type WorldServer struct {
 	bus *Bus
 
 	// head maps entity IDs to their state (entity + per-component lifetimes).
-	head  map[string]*entityState
-	store *Store
+	head map[string]*entityState
 
 	// headView mirrors head's entities for the transform API (map[string]*pb.Entity).
 	// Always kept in sync with head.
 	headView map[string]*pb.Entity
-
-	frozen   atomic.Bool
-	frozenAt time.Time
 
 	// worldFile is the path to persist world state (if set)
 	worldFile string
@@ -113,7 +110,6 @@ func NewWorldServer() *WorldServer {
 		bus:              NewBus(),
 		head:             make(map[string]*entityState),
 		headView:         make(map[string]*pb.Entity),
-		store:            NewStore(),
 		mediaTransformer: mediaTransformer,
 		chatTransformer:  transform.NewChatTransformer(),
 		transformers: []transform.Transformer{
@@ -133,7 +129,7 @@ func NewWorldServer() *WorldServer {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			server.gc()
+			server.GC()
 		}
 	}()
 
@@ -236,6 +232,17 @@ func (s *WorldServer) InitNodeIdentity() {
 	s.checkForUpdate()
 }
 
+// SetNodeID overrides the node identity. Used in tests to simulate distinct
+// nodes on the same machine. Must be called after InitNodeIdentity.
+func (s *WorldServer) SetNodeID(id string) {
+	s.l.Lock()
+	defer s.l.Unlock()
+	s.nodeID = id
+	if s.nodeEntity != nil && s.nodeEntity.Controller != nil {
+		s.nodeEntity.Controller.Node = &s.nodeID
+	}
+}
+
 // fillNodeDeviceInfo overwrites the runtime-derived fields of a NodeDevice
 // with current values. Called both for freshly created and persisted nodes
 // so that version info is always up to date.
@@ -243,6 +250,7 @@ func (s *WorldServer) fillNodeDeviceInfo(n *pb.NodeDevice) {
 	n.Os = strPtr(runtime.GOOS)
 	n.Arch = strPtr(runtime.GOARCH)
 	n.HydrisVersion = strPtr(version.Version)
+	n.HydrisUpdateAvailable = nil // clear stale value; checkForUpdate will re-set if needed
 	if v := osVersion(); v != "" {
 		n.OsVersion = &v
 	}
@@ -252,11 +260,6 @@ func (s *WorldServer) fillNodeDeviceInfo(n *pb.NodeDevice) {
 // sets hydris_update_available on the node entity when a newer version exists.
 func (s *WorldServer) checkForUpdate() {
 	if version.Version == "dev" {
-		return
-	}
-	local, err := semver.ParseTolerant(version.Version)
-	if err != nil {
-		slog.Warn("cannot parse local hydris version for update check", "version", version.Version, "error", err)
 		return
 	}
 
@@ -272,12 +275,7 @@ func (s *WorldServer) checkForUpdate() {
 		if idx.HydrisVersion == "" {
 			return
 		}
-		remote, err := semver.ParseTolerant(idx.HydrisVersion)
-		if err != nil {
-			slog.Debug("update check: cannot parse remote version", "version", idx.HydrisVersion, "error", err)
-			return
-		}
-		if remote.GT(local) {
+		if version.IsNewerVersion(idx.HydrisVersion) {
 			s.l.Lock()
 			if s.nodeEntity != nil && s.nodeEntity.Device != nil && s.nodeEntity.Device.Node != nil {
 				s.nodeEntity.Device.Node.HydrisUpdateAvailable = &idx.HydrisVersion
@@ -432,44 +430,41 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 			}
 		}
 
-		_ = s.store.Push(ctx, Event{Entity: e})
-		if !s.frozen.Load() {
-			if es, ok := s.head[e.Id]; ok {
-				merged, accepted := s.mergeEntityComponents(e.Id, es, e)
-				if !accepted {
-					continue
-				}
-				s.head[e.Id].entity = merged
-				s.headView[e.Id] = merged
-			} else {
-				hadNoLifetime := e.Lifetime == nil
-				if hadNoLifetime {
-					e.Lifetime = &pb.Lifetime{}
-				}
-				if !e.Lifetime.From.IsValid() {
-					e.Lifetime.From = timestamppb.Now()
-				}
-				if e.Lifetime.Fresh == nil || !e.Lifetime.Fresh.IsValid() {
-					e.Lifetime.Fresh = e.Lifetime.From
-				}
-				s.initEntity(e, hadNoLifetime)
+		if es, ok := s.head[e.Id]; ok {
+			merged, accepted := s.mergeEntityComponents(e.Id, es, e)
+			if !accepted {
+				continue
 			}
+			s.head[e.Id].entity = merged
+			s.headView[e.Id] = merged
+		} else {
+			hadNoLifetime := e.Lifetime == nil
+			if hadNoLifetime {
+				e.Lifetime = &pb.Lifetime{}
+			}
+			if !e.Lifetime.From.IsValid() {
+				e.Lifetime.From = timestamppb.Now()
+			}
+			if e.Lifetime.Fresh == nil || !e.Lifetime.Fresh.IsValid() {
+				e.Lifetime.Fresh = e.Lifetime.From
+			}
+			s.initEntity(e, hadNoLifetime)
+		}
 
-			// Stamp controller node after merge so we never clobber an
-			// existing Controller.Id with a synthetic empty Controller.
-			stored := s.head[e.Id].entity
-			if s.nodeID != "" {
-				if stored.Controller == nil {
-					stored.Controller = &pb.Controller{}
-				}
-				if stored.Controller.Node == nil {
-					stored.Controller.Node = &s.nodeID
-				}
+		// Stamp controller node after merge so we never clobber an
+		// existing Controller.Id with a synthetic empty Controller.
+		stored := s.head[e.Id].entity
+		if s.nodeID != "" {
+			if stored.Controller == nil {
+				stored.Controller = &pb.Controller{}
 			}
-			changedIDs = append(changedIDs, e.Id)
-			if e.Config != nil {
-				configChanged = true
+			if stored.Controller.Node == nil {
+				stored.Controller.Node = &s.nodeID
 			}
+		}
+		changedIDs = append(changedIDs, e.Id)
+		if e.Config != nil {
+			configChanged = true
 		}
 	}
 
@@ -493,13 +488,10 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 			}
 		}
 
-		_ = s.store.Push(ctx, Event{Entity: e})
-		if !s.frozen.Load() {
-			s.initEntity(e)
-			changedIDs = append(changedIDs, e.Id)
-			if e.Config != nil {
-				configChanged = true
-			}
+		s.initEntity(e)
+		changedIDs = append(changedIDs, e.Id)
+		if e.Config != nil {
+			configChanged = true
 		}
 	}
 
@@ -573,9 +565,6 @@ func (s *WorldServer) HardReset(ctx context.Context, req *connect.Request[pb.Har
 		s.bus.Dirty(id, snapshot, pb.EntityChange_EntityChangeExpired)
 	}
 
-	// Clear the event store.
-	s.store.Reset()
-
 	// Truncate persistence file.
 	if s.worldFile != "" {
 		if err := os.WriteFile(s.worldFile, nil, 0644); err != nil {
@@ -594,7 +583,7 @@ func (s *WorldServer) HardReset(ctx context.Context, req *connect.Request[pb.Har
 	builtin.RestartAll()
 
 	// Reload defaults and re-establish node identity.
-	if err := s.LoadDefaults(builtin.DefaultWorld); err != nil {
+	if err := s.LoadDefaults(builtin.DefaultWorld()); err != nil {
 		slog.Warn("failed to reload defaults after hard reset", "error", err)
 	}
 	s.InitNodeIdentity()
@@ -607,14 +596,16 @@ func (s *WorldServer) HardReset(ctx context.Context, req *connect.Request[pb.Har
 // WHEP/media endpoints, healthz, and metrics registered.
 // It does NOT serve the frontend — callers can add a "/" handler for that.
 // Used by both StartEngine and the Wails desktop app.
-func NewAPIMux(engine *WorldServer, promHandler http.Handler, bridges *media.BridgeManager) *http.ServeMux {
+func NewAPIMux(engine *WorldServer, promHandler http.Handler, bridges *media.BridgeManager, logHandler ...http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	worldPath, worldHandler := _goconnect.NewWorldServiceHandler(engine)
 	mux.Handle(worldPath, worldHandler)
 
-	timelinePath, timelineHandler := _goconnect.NewTimelineServiceHandler(engine)
-	mux.Handle(timelinePath, timelineHandler)
+	if artifacts.Server != nil {
+		artPath, artHandler := _goconnect.NewArtifactServiceHandler(artifacts.Server)
+		mux.Handle(artPath, artHandler)
+	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
@@ -625,6 +616,13 @@ func NewAPIMux(engine *WorldServer, promHandler http.Handler, bridges *media.Bri
 		mux.Handle("/metrics", promHandler)
 	}
 
+	// pprof — guarded to localhost only.
+	pprofMux := http.DefaultServeMux
+	mux.Handle("/debug/pprof/", localhostOnly(pprofMux))
+
+	// Plugin dev loading — localhost only.
+	mux.Handle("POST /plugin/dev", localhostOnly(http.HandlerFunc(handlePluginDev)))
+
 	whepHandler := media.NewHandler(engine, bridges)
 	mux.Handle("POST /media/whep/{entityId...}", mediaAccessControl(whepHandler))
 
@@ -633,6 +631,10 @@ func NewAPIMux(engine *WorldServer, promHandler http.Handler, bridges *media.Bri
 
 	// Mount builtin-registered HTTP handlers (e.g., webcam streams).
 	mux.Handle("/media/webcam/", builtin.HTTPHandler())
+
+	if len(logHandler) > 0 && logHandler[0] != nil {
+		mux.Handle("/logs", logHandler[0])
+	}
 
 	return mux
 }
@@ -654,11 +656,25 @@ func mediaAccessControl(next http.Handler) http.Handler {
 	})
 }
 
+// localhostOnly rejects requests not originating from loopback.
+func localhostOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // EngineConfig holds configuration for starting the engine
 type EngineConfig struct {
 	WorldFile  string
 	PolicyFile string
 	NoDefaults bool
+	LogHandler http.Handler
 }
 
 // StartEngine starts the Hydris engine and returns the server address.
@@ -694,7 +710,7 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	// Load builtin defaults with a very old lifetime.from so they never
 	// overwrite entities that were persisted with a real timestamp.
 	if !cfg.NoDefaults {
-		if err := engine.LoadDefaults(builtin.DefaultWorld); err != nil {
+		if err := engine.LoadDefaults(builtin.DefaultWorld()); err != nil {
 			slog.Warn("failed to load default world", "error", err)
 		}
 	}
@@ -732,8 +748,21 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	}
 	bridges.SetupWebRTCMux(udpListener)
 
+	// Set up artifact storage.
+	artDir := filepath.Join(filepath.Dir(worldFile), "artifacts")
+	artLocal, err := artifacts.NewLocalStore(artDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to create artifact store: %w", err)
+	}
+	grpcConn, err := builtin.BuiltinClientConn()
+	if err != nil {
+		return "", fmt.Errorf("failed to create builtin client: %w", err)
+	}
+	worldClient := pb.NewWorldServiceClient(grpcConn)
+	artifacts.Server = artifacts.NewArtifactServer(artLocal, worldClient)
+
 	// Create HTTP handler: API endpoints + frontend on "/"
-	mux := NewAPIMux(engine, promHandler, bridges)
+	mux := NewAPIMux(engine, promHandler, bridges, cfg.LogHandler)
 
 	webServer, err := view.NewWebServer()
 	if err != nil {

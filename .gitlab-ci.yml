@@ -1,43 +1,78 @@
 stages:
   - build
+  - package
 
 variables:
-  GO_VERSION: "1.25.8"
+  GO_VERSION: "1.26.2"
   PROTOC_VERSION: "28.3"
+  GOPATH: ${CI_PROJECT_DIR}/.cache/go
+  GOMODCACHE: ${CI_PROJECT_DIR}/.cache/go/pkg/mod
+  BUN_INSTALL: ${CI_PROJECT_DIR}/.cache/bun
+  CARGO_HOME: ${CI_PROJECT_DIR}/.cache/cargo
+  ANDROID_SDK_ROOT: ${CI_PROJECT_DIR}/.cache/android-sdk
+  ANDROID_HOME: ${CI_PROJECT_DIR}/.cache/android-sdk
 
-.go-setup: &go-setup
+.go-cache:
+  cache:
+    - key: go-mod-${CI_PROJECT_ID}
+      paths:
+        - .cache/go/pkg/mod/
+      policy: pull-push
+    - key: go-bin-${CI_PROJECT_ID}
+      paths:
+        - .cache/go/bin/
+      policy: pull-push
+
+.bun-cache:
+  cache:
+    - key: bun-${CI_PROJECT_ID}
+      paths:
+        - .cache/bun/
+      policy: pull-push
+
+.cargo-cache:
+  cache:
+    - key: cargo-${CI_PROJECT_ID}
+      paths:
+        - .cache/cargo/
+      policy: pull-push
+
+.android-cache:
+  cache:
+    - key: android-sdk-${CI_PROJECT_ID}
+      paths:
+        - .cache/android-sdk/
+      policy: pull-push
+
+.base-setup: &base-setup
+  - apt-get update && apt-get install -y wget unzip curl sudo git rsync make xz-utils zip ca-certificates build-essential libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev pkg-config mingw-w64 openjdk-17-jdk
   - wget -q https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
   - sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
-  - export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
-
-.protoc-setup: &protoc-setup
+  - export PATH=$PATH:/usr/local/go/bin:${GOPATH}/bin
   - wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip
   - sudo unzip -o protoc-${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
   - sudo chmod +x /usr/local/bin/protoc
-
-.go-tools-setup: &go-tools-setup
-  - go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-  - go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-  - go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
-  - go install github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc@latest
-  - go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
-
-.node-setup: &node-setup
-  - wget -q https://nodejs.org/dist/v20.18.0/node-v20.18.0-linux-x64.tar.gz
-  - sudo tar -xzf node-v20.18.0-linux-x64.tar.gz -C /usr/local --strip-components=1
-
-.bun-setup: &bun-setup
-  - curl -fsSL https://bun.sh/install | bash
-  - export PATH=$PATH:$HOME/.bun/bin
+  - make install-tools
+  - |
+    if ! which node >/dev/null 2>&1; then
+      curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+      sudo apt-get install -y nodejs
+    fi
+  - |
+    if [ ! -f "${BUN_INSTALL}/bin/bun" ]; then
+      curl -fsSL https://bun.sh/install | bash
+    fi
+  - export PATH=$PATH:${BUN_INSTALL}/bin
 
 vet:
   stage: build
+  tags:
+    - saas-linux-2xlarge-amd64
   image: ubuntu:22.04
+  extends:
+    - .go-cache
   before_script:
-    - apt-get update && apt-get install -y wget unzip curl sudo git make
-    - *go-setup
-    - *protoc-setup
-    - *go-tools-setup
+    - *base-setup
     - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
     - go install golang.org/x/vuln/cmd/govulncheck@latest
   script:
@@ -46,33 +81,34 @@ vet:
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_MERGE_REQUEST_ID
 
-build:
+deeptest:
   stage: build
+  tags:
+    - saas-linux-2xlarge-amd64
   image: ubuntu:22.04
+  extends:
+    - .go-cache
   before_script:
-    - apt-get update && apt-get install -y wget unzip curl sudo git rsync make libgtk-3-dev libwebkit2gtk-4.1-dev mingw-w64 zip
-    - *node-setup
-    - *go-setup
-    - *protoc-setup
-    - *go-tools-setup
-    - *bun-setup
+    - *base-setup
   script:
-    - (cd view/frontend && bun i)
+    - make deeptest
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_MERGE_REQUEST_ID
+
+cli:
+  stage: build
+  tags:
+    - saas-linux-2xlarge-amd64
+  image: ubuntu:22.04
+  extends:
+    - .go-cache
+    - .bun-cache
+  before_script:
+    - *base-setup
+  script:
     - make frontend
-    - |
-      if [[ -n "$CI_COMMIT_TAG" ]]; then
-        TAG_NAME=$CI_COMMIT_TAG
-      else
-        TAG_NAME=${CI_COMMIT_SHORT_SHA}
-      fi
     - make cli
-    - make desktop
-    - |
-      for f in bin/hydris-*; do
-        curl --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-          --upload-file "$f" \
-          "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/hydris/$TAG_NAME/$(basename $f)"
-      done
   artifacts:
     paths:
       - bin/
@@ -81,14 +117,81 @@ build:
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_COMMIT_TAG
 
+desktop:
+  stage: build
+  tags:
+    - saas-linux-2xlarge-amd64
+  image: ubuntu:22.04
+  extends:
+    - .go-cache
+    - .bun-cache
+    - .cargo-cache
+  before_script:
+    - *base-setup
+    - |
+      if ! which rustc >/dev/null 2>&1 || [ ! -d "${CARGO_HOME}" ]; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+      fi
+    - export PATH=$PATH:${CARGO_HOME}/bin
+    - which rcodesign || cargo install apple-codesign
+  script:
+    - make frontend
+    - make desktop
+  artifacts:
+    paths:
+      - bin/
+    expire_in: 7 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+android:
+  stage: build
+  tags:
+    - saas-linux-2xlarge-amd64
+  image: ubuntu:22.04
+  extends:
+    - .go-cache
+    - .bun-cache
+    - .android-cache
+  variables:
+    GRADLE_OPTS: '-Dorg.gradle.jvmargs=-Xmx4g'
+  before_script:
+    - *base-setup
+    - |
+      if [ ! -f "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+        mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+        unzip -q cmdline-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
+        mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
+      fi
+    - export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools
+    - |
+      if [ ! -d "$ANDROID_SDK_ROOT/ndk/26.1.10909125" ]; then
+        yes | sdkmanager --licenses || true
+        sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
+      fi
+    - export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
+  script:
+    - make frontend
+    - make android
+  artifacts:
+    paths:
+      - view/apps/foss/android/app/build/outputs/apk/release/app-release.apk
+    expire_in: 7 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
 
 docker:
-  stage: build
+  stage: package
+  tags:
+    - saas-linux-2xlarge-amd64
   image: docker:24
   services:
     - docker:24-dind
   needs:
-    - job: build
+    - job: cli
       artifacts: true
   variables:
     DOCKER_TLS_CERTDIR: ""
@@ -102,27 +205,26 @@ docker:
       cp bin/hydris-cli-linux-amd64-* bin/hydris-amd64
       cp bin/hydris-cli-linux-arm64-* bin/hydris-arm64
       chmod +x bin/hydris-amd64 bin/hydris-arm64
+    - VERSION=$(git describe --tags --always)
     - |
+      TAGS="-t $CI_REGISTRY_IMAGE:$VERSION"
       if [[ -n "$CI_COMMIT_TAG" ]]; then
-        docker buildx build --platform linux/amd64,linux/arm64 \
-          -t $CI_REGISTRY_IMAGE:$CI_COMMIT_TAG \
-          -t $CI_REGISTRY_IMAGE:latest \
-          --push .
-      else
-        docker buildx build --platform linux/amd64,linux/arm64 \
-          -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA \
-          -t $CI_REGISTRY_IMAGE:$CI_COMMIT_BRANCH \
-          --push .
+        TAGS="$TAGS -t $CI_REGISTRY_IMAGE:latest"
       fi
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-    - if: $CI_COMMIT_TAG
+      docker buildx build --platform linux/amd64,linux/arm64 \
+        $TAGS --push .
 
 release:
-  stage: build
+  stage: package
+  tags:
+    - saas-linux-2xlarge-amd64
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   needs:
-    - job: build
+    - job: cli
+      artifacts: true
+    - job: desktop
+      artifacts: true
+    - job: android
       artifacts: true
   script:
     - echo "Creating release for $CI_COMMIT_TAG"
@@ -139,6 +241,7 @@ release:
       - CLI macOS ARM64: hydris-cli-macos-arm64-${CI_COMMIT_TAG}.tar.xz
       - Desktop Windows: hydris-desktop-windows-amd64-${CI_COMMIT_TAG}.zip
       - Desktop macOS ARM64: hydris-desktop-macos-arm64-${CI_COMMIT_TAG}.zip
+      - Android APK: app-release.apk
     assets:
       links:
         - name: "CLI Linux AMD64"
@@ -153,5 +256,7 @@ release:
           url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/hydris/${CI_COMMIT_TAG}/hydris-desktop-windows-amd64-${CI_COMMIT_TAG}.zip"
         - name: "Desktop macOS ARM64"
           url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/hydris/${CI_COMMIT_TAG}/hydris-desktop-macos-arm64-${CI_COMMIT_TAG}.zip"
+        - name: "Android APK"
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/hydris/${CI_COMMIT_TAG}/app-release.apk"
   rules:
     - if: $CI_COMMIT_TAG

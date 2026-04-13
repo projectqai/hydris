@@ -1,0 +1,14 @@
+{
+  "name": "@projectqai/hal",
+  "version": "0.0.4",
+  "author": "projectq-release-bot",
+  "type": "module",
+  "types": "index.d.ts",
+  "files": [
+    "index.d.ts"
+  ],
+  "license": "Apache-2.0",
+  "scripts": {
+    "release": "npm version patch && npm publish --access public"
+  }
+}

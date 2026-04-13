@@ -340,6 +340,7 @@ func TestPush(t *testing.T) {
 	e := w.GetHead("e1")
 	if e == nil {
 		t.Fatal("entity should exist in head")
+		return
 	}
 	if e.Label == nil || *e.Label != "new" {
 		t.Errorf("expected label 'new', got %v", e.Label)
@@ -438,27 +439,6 @@ func TestPush_DoesNotOverwriteExistingNode(t *testing.T) {
 	e := w.GetHead("e1")
 	if e.Controller.Node == nil || *e.Controller.Node != "remotenode" {
 		t.Error("existing controller.Node should not be overwritten")
-	}
-}
-
-func TestPush_Frozen(t *testing.T) {
-	w := testWorld(map[string]*pb.Entity{})
-	w.frozen.Store(true)
-
-	ctx := context.Background()
-	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
-		Changes: []*pb.Entity{
-			{Id: "e1", Label: ptr("frozen")},
-		},
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Entity should NOT be in head when frozen
-	e := w.GetHead("e1")
-	if e != nil {
-		t.Error("entity should not be in head when frozen")
 	}
 }
 
@@ -680,25 +660,5 @@ func TestMergeLifetime_NoLifetimeFirstPushDoesNotMakePermanent(t *testing.T) {
 	}
 	if !e.Lifetime.Until.AsTime().Equal(until) {
 		t.Errorf("Until should be %v, got %v", until, e.Lifetime.Until.AsTime())
-	}
-}
-
-func TestPush_StoresInStore(t *testing.T) {
-	w := testWorld(map[string]*pb.Entity{})
-
-	ctx := context.Background()
-	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
-		Changes: []*pb.Entity{
-			{Id: "e1", Lifetime: &pb.Lifetime{From: timestamppb.Now()}},
-		},
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Store should have the event
-	min, _ := w.store.GetTimeline()
-	if min.IsZero() {
-		t.Error("store should have non-zero min time after Push")
 	}
 }

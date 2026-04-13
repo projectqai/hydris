@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -55,6 +56,9 @@ func FindDataDir(path string) string {
 // RunPluginEnv is like RunPlugin but sets HYDRIS_SERVER first.
 func RunPluginEnv(ctx context.Context, bundlePath, dataDir, serverURL string) error {
 	if serverURL != "" {
+		if !strings.Contains(serverURL, "://") {
+			serverURL = "http://" + serverURL
+		}
 		os.Setenv("HYDRIS_SERVER", serverURL)
 	}
 	return RunPlugin(ctx, bundlePath, dataDir)

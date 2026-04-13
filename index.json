@@ -16,6 +16,14 @@
       "description": "Feeds → Enrich ADS-B aircraft tracks data from the ADS-B Exchange database",
       "icon": "database",
       "compat": ">=0.0.18"
+    },
+    {
+      "name": "airthings",
+      "ref": "ghcr.io/projectqai/hydris/plugins/airthings:0.0.1",
+      "label": "Airthings BLE Air Quality Monitor",
+      "description": "Sensors → Support for Airthings BLE Air Quality Monitor",
+      "icon": "air-vent",
+      "compat": ">=0.0.20"
     }
   ]
 }

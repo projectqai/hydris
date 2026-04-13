@@ -8,7 +8,6 @@ import (
 
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/controller"
-	"github.com/projectqai/hydris/builtin/devices"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -65,7 +64,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 
 	logger.Info("network scan loop started", "nodeEntityID", nodeEntityID)
 
-	known := make(map[string]devices.DeviceInfo)
+	known := make(map[string]*pb.Entity)
 
 	pushMetrics := func(sweepProgress float64, lastSweepDevices int) {
 		_, _ = client.Push(ctx, &pb.EntityChangeRequest{
@@ -101,16 +100,25 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 // entity stays alive as long as the device responds to sweeps. Devices that
 // stop responding simply won't be refreshed and the GC will expire them.
 func reconcile(ctx context.Context, logger *slog.Logger, client pb.WorldServiceClient,
-	nodeEntityID string, known, current map[string]devices.DeviceInfo,
+	nodeEntityID string, known, current map[string]*pb.Entity,
 ) {
 	now := time.Now()
+	controllerName := "netscan"
+	serviceID := "netscan.service"
 	var entities []*pb.Entity
-	for name, info := range current {
-		if _, exists := known[name]; !exists {
-			logger.Info("network device discovered", "name", name, "host", info.IP.Host)
+	for key, entity := range current {
+		if _, exists := known[key]; !exists {
+			host := ""
+			if entity.Device != nil && entity.Device.Ip != nil {
+				host = entity.Device.Ip.GetHost()
+			}
+			logger.Info("network device discovered", "name", key, "host", host)
 		}
-		entity := devices.BuildDeviceEntity("netscan", nodeEntityID, info)
-		serviceID := "netscan.service"
+		entity.Id = controllerName + ".device." + nodeEntityID + "." + key
+		entity.Controller = &pb.Controller{Id: &controllerName}
+		if entity.Device == nil {
+			entity.Device = &pb.DeviceComponent{}
+		}
 		entity.Device.Parent = &serviceID
 		entity.Device.State = pb.DeviceState_DeviceStateActive
 		entity.Lifetime = &pb.Lifetime{

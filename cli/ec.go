@@ -129,6 +129,7 @@ func init() {
 		Short:   "display the device tree",
 		RunE:    runDT,
 	}
+	dtCmd.Flags().StringSlice("ble-service", nil, "filter BLE devices by service UUID")
 
 	ECCMD.AddCommand(lsCmd)
 	ECCMD.AddCommand(watchCmd)

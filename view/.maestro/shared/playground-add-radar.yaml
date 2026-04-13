@@ -1,0 +1,37 @@
+appId: com.q.hydris.development
+name: "Enable playground radar via configuration"
+---
+- runFlow: ../subflows/launch-and-navigate.yaml
+
+# Reset world state
+- runFlow: ../subflows/reset-world.yaml
+
+# Reopen command palette → Configuration
+- tapOn: "Commands"
+- tapOn:
+    id: "command-configuration"
+
+# Expand MISSIONS category, then tap Playground
+- tapOn: "MISSIONS"
+- tapOn: "Playground"
+
+# Enable simulated radar toggle and apply
+- scrollUntilVisible:
+    element: "Enable Simulated Radar"
+    direction: DOWN
+- tapOn: "Enable Simulated Radar"
+- tapOn: "APPLY CONFIGURATION"
+
+# Close: config view → palette root → dismiss palette
+- tapOn: "Go back"
+- tapOn: "Close command palette"
+
+# Tap Assets tab in the left panel sidebar
+- tapOn:
+    id: "tab-assets"
+
+# Wait for the radar entity to appear
+- extendedWaitUntil:
+    visible: "Simulated Drone Radar"
+    timeout: 30000
+- tapOn: "Simulated Drone Radar"

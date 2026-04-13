@@ -12,8 +12,9 @@ import (
 	"unsafe"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/projectqai/hydris/builtin/devices"
+	pb "github.com/projectqai/proto/go"
 	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/proto"
 )
 
 // discoverAndWatch returns a channel that receives snapshots of currently
@@ -141,11 +142,11 @@ func scanWebcams(logger *slog.Logger) map[string]webcamInfo {
 // stableID returns a hardware-based identifier for the webcam that is stable
 // across reboots and re-enumeration.
 func stableID(devName string, info webcamInfo) string {
-	if u := info.USB; u != nil && u.SerialNumber != "" {
-		return fmt.Sprintf("%04x-%04x-%s", u.VendorID, u.ProductID, u.SerialNumber)
+	if u := info.USB; u != nil && u.GetSerialNumber() != "" {
+		return fmt.Sprintf("%04x-%04x-%s", u.GetVendorId(), u.GetProductId(), u.GetSerialNumber())
 	}
 	if u := info.USB; u != nil {
-		return fmt.Sprintf("%04x-%04x-%s", u.VendorID, u.ProductID, devName)
+		return fmt.Sprintf("%04x-%04x-%s", u.GetVendorId(), u.GetProductId(), devName)
 	}
 	return devName
 }
@@ -156,12 +157,12 @@ func readUSBInfo(info *webcamInfo, resolved string) {
 	dir := resolved
 	for dir != "/" {
 		if _, err := os.Stat(filepath.Join(dir, "idVendor")); err == nil {
-			info.USB = &devices.USBDescriptor{
-				VendorID:         readHexFile(filepath.Join(dir, "idVendor")),
-				ProductID:        readHexFile(filepath.Join(dir, "idProduct")),
-				ManufacturerName: readStringFile(filepath.Join(dir, "manufacturer")),
-				ProductName:      readStringFile(filepath.Join(dir, "product")),
-				SerialNumber:     readStringFile(filepath.Join(dir, "serial")),
+			info.USB = &pb.UsbDevice{
+				VendorId:         proto.Uint32(readHexFile(filepath.Join(dir, "idVendor"))),
+				ProductId:        proto.Uint32(readHexFile(filepath.Join(dir, "idProduct"))),
+				ManufacturerName: proto.String(readStringFile(filepath.Join(dir, "manufacturer"))),
+				ProductName:      proto.String(readStringFile(filepath.Join(dir, "product"))),
+				SerialNumber:     proto.String(readStringFile(filepath.Join(dir, "serial"))),
 			}
 			return
 		}

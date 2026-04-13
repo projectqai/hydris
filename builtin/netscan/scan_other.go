@@ -13,7 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/projectqai/hydris/builtin/devices"
+	pb "github.com/projectqai/proto/go"
+	"google.golang.org/protobuf/proto"
 )
 
 var arpLineRe = regexp.MustCompile(`\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-fA-F:]+)`)
@@ -21,8 +22,8 @@ var arpLineRe = regexp.MustCompile(`\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-fA-F:
 // scanNetwork reads the existing ARP table immediately, then sweeps the subnet
 // and reads again. Results are sent on the returned channel: the first value
 // arrives instantly from cached ARP entries, the second after the sweep.
-func scanNetwork(ctx context.Context, logger *slog.Logger, progress progressFunc) <-chan map[string]devices.DeviceInfo {
-	ch := make(chan map[string]devices.DeviceInfo, 2)
+func scanNetwork(ctx context.Context, logger *slog.Logger, progress progressFunc) <-chan map[string]*pb.Entity {
+	ch := make(chan map[string]*pb.Entity, 2)
 
 	go func() {
 		defer close(ch)
@@ -169,14 +170,14 @@ func probeHost(ip string) {
 
 // readARPTable parses output of `arp -a` which is available on macOS, Windows,
 // and most Unix systems.
-func readARPTable(logger *slog.Logger) map[string]devices.DeviceInfo {
+func readARPTable(logger *slog.Logger) map[string]*pb.Entity {
 	out, err := exec.Command("arp", "-a").Output()
 	if err != nil {
 		logger.Error("arp -a failed", "error", err)
 		return nil
 	}
 
-	result := make(map[string]devices.DeviceInfo)
+	result := make(map[string]*pb.Entity)
 	for _, line := range strings.Split(string(out), "\n") {
 		m := arpLineRe.FindStringSubmatch(line)
 		if m == nil {
@@ -197,16 +198,17 @@ func readARPTable(logger *slog.Logger) map[string]devices.DeviceInfo {
 			label = vendor + " " + ip
 		}
 
-		result[key] = devices.DeviceInfo{
-			Name:  key,
-			Label: label,
-			IP: &devices.IPDescriptor{
-				Host: ip,
-			},
-			Ethernet: &devices.EthernetDescriptor{
-				MACAddress: mac,
-				Vendor:     vendor,
-			},
+		dev := &pb.DeviceComponent{
+			Ip:       &pb.IpDevice{Host: proto.String(ip)},
+			Ethernet: &pb.EthernetDevice{MacAddress: proto.String(mac)},
+		}
+		if vendor != "" {
+			dev.Ethernet.Vendor = proto.String(vendor)
+		}
+
+		result[key] = &pb.Entity{
+			Label:  proto.String(label),
+			Device: dev,
 		}
 	}
 

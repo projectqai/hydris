@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"log/slog"
 	"unsafe"
+
+	"github.com/projectqai/hydris/engine"
 )
 
 const (
@@ -26,6 +28,9 @@ const (
 	androidLogWarn    = 5
 	androidLogError   = 6
 )
+
+// Ring captures formatted log output for the /logs HTTP endpoint.
+var Ring engine.LogRing
 
 type androidLogHandler struct {
 	level slog.Level
@@ -63,6 +68,7 @@ func (h *androidLogHandler) Handle(_ context.Context, r slog.Record) error {
 	defer C.free(unsafe.Pointer(cMsg))
 
 	C.androidLog(C.int(priority), cTag, cMsg)
+	fmt.Fprintln(&Ring, msg)
 	return nil
 }
 

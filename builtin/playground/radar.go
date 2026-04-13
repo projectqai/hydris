@@ -320,10 +320,6 @@ func stepAndPush(ctx context.Context, client pb.WorldServiceClient, tracks []*si
 					Up:    proto.Float64(0),
 				},
 			},
-			Detection: &pb.DetectionComponent{
-				Classification: proto.String(classification),
-				LastMeasured:   timestamppb.Now(),
-			},
 			Track:    trackComp,
 			Symbol:   &pb.SymbolComponent{MilStd2525C: t.class.sidc},
 			Lifetime: &pb.Lifetime{Until: ttl},

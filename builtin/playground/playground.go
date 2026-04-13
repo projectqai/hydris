@@ -75,6 +75,11 @@ func serviceSchema() *structpb.Struct {
 				"title":       "Enable Simulated Radar",
 				"description": "When enabled, creates a simulated drone detection radar",
 			},
+			"enable_sensors": map[string]any{
+				"type":        "boolean",
+				"title":       "Enable Sensor Network",
+				"description": "When enabled, creates 32 weather stations around Lake Geneva with hazard sensors",
+			},
 		},
 	})
 	return s
@@ -262,6 +267,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 				{Class: "unconfigured", Label: "Unconfigured Device"},
 				{Class: "manual", Label: "Manual Device"},
 				{Class: "drone_radar", Label: "Simulated Drone Radar"},
+				{Class: "sensor_network", Label: "Sensor Network"},
 			},
 		},
 		Interactivity: &pb.InteractivityComponent{
@@ -283,6 +289,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		{Class: "unconfigured", Label: "Unconfigured Device", Schema: unconfiguredSchema()},
 		{Class: "manual", Label: "Manual Device", Schema: manualSchema()},
 		{Class: "drone_radar", Label: "Simulated Drone Radar", Schema: radarSchema()},
+		{Class: "sensor_network", Label: "Sensor Network", Schema: sensorNetworkSchema()},
 		// "broken" is deliberately NOT in the class list — WatchChildren
 		// will not push a Configurable onto it, so it stays schema-less.
 	}
@@ -307,6 +314,7 @@ var (
 	adsbDevices       []string
 	aisDevices        []string
 	radarDevices      []string
+	sensorDevices     []string
 )
 
 type serviceConfig struct {
@@ -317,6 +325,7 @@ type serviceConfig struct {
 	EnableADSB      bool
 	EnableAIS       bool
 	EnableRadar     bool
+	EnableSensors   bool
 }
 
 func parseServiceConfig(entity *pb.Entity) serviceConfig {
@@ -344,6 +353,9 @@ func parseServiceConfig(entity *pb.Entity) serviceConfig {
 	}
 	if v, ok := entity.Config.Value.Fields["enable_radar"]; ok {
 		cfg.EnableRadar = v.GetBoolValue()
+	}
+	if v, ok := entity.Config.Value.Fields["enable_sensors"]; ok {
+		cfg.EnableSensors = v.GetBoolValue()
 	}
 	return cfg
 }
@@ -493,6 +505,37 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 	} else {
 		logger.Info("playground: radar disabled, cleaning up")
 		expireTrackedEntities(ctx, logger, &radarDevices, "radar")
+	}
+
+	if cfg.EnableSensors {
+		logger.Info("playground: sensors enabled, creating sensor network")
+		sensorEntityID := controllerName + ".discovered.sensor_network"
+		serviceEntityID := controllerName + ".service"
+		sensorCfg, _ := structpb.NewStruct(map[string]any{
+			"update_interval_ms": float64(5000),
+		})
+		pushTrackedEntities(ctx, logger, &sensorDevices, "sensors", []*pb.Entity{
+			{
+				Id:      sensorEntityID,
+				Label:   proto.String("Lake Geneva Sensor Network"),
+				Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
+				Controller: &pb.Controller{
+					Id: proto.String(controllerName),
+				},
+				Device: &pb.DeviceComponent{
+					Parent:   proto.String(serviceEntityID),
+					Class:    proto.String("sensor_network"),
+					Category: proto.String("Missions"),
+				},
+				Configurable: &pb.ConfigurableComponent{
+					Schema: sensorNetworkSchema(),
+				},
+				Config: &pb.ConfigurationComponent{Value: sensorCfg, Version: 1},
+			},
+		})
+	} else {
+		logger.Info("playground: sensors disabled, cleaning up")
+		expireTrackedEntities(ctx, logger, &sensorDevices, "sensors")
 	}
 
 	<-ctx.Done()
@@ -814,6 +857,12 @@ func runChild(ctx context.Context, logger *slog.Logger, entityID string) error {
 		// Simulated drone detection radar.
 		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			return runRadar(ctx, logger, entity, ready)
+		})
+
+	case "sensor_network":
+		// Simulated weather + hazard sensor network around Lake Geneva.
+		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+			return runSensorNetwork(ctx, logger, entity, ready)
 		})
 
 	default:

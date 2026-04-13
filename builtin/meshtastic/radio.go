@@ -33,88 +33,9 @@ type Radio struct {
 	mu      sync.Mutex
 }
 
-// radioConn bridges gomobile callbacks to io.ReadWriteCloser.
-type radioConn struct {
-	writer       SerialWriter
-	readBuf      chan []byte
-	pending      []byte
-	closed       chan struct{}
-	once         sync.Once
-	readDeadline time.Time
-	deadlineMu   sync.Mutex
-}
-
-// NewRadio creates a Radio from a direct io.ReadWriteCloser (e.g. an os.File for a serial port).
+// NewRadio creates a Radio from an io.ReadWriteCloser (e.g. HAL serial port).
 func NewRadio(conn io.ReadWriteCloser) *Radio {
 	return &Radio{conn: conn}
-}
-
-// NewRadioFromCallbacks creates a Radio backed by gomobile serial callbacks.
-func NewRadioFromCallbacks(writer SerialWriter, readBuf chan []byte) *Radio {
-	conn := &radioConn{
-		writer:  writer,
-		readBuf: readBuf,
-		closed:  make(chan struct{}),
-	}
-	return &Radio{conn: conn}
-}
-
-func (c *radioConn) Write(p []byte) (int, error) {
-	return c.writer.Write(p)
-}
-
-func (c *radioConn) SetReadDeadline(t time.Time) error {
-	c.deadlineMu.Lock()
-	c.readDeadline = t
-	c.deadlineMu.Unlock()
-	return nil
-}
-
-func (c *radioConn) Read(p []byte) (int, error) {
-	// Drain pending bytes first
-	if len(c.pending) > 0 {
-		n := copy(p, c.pending)
-		c.pending = c.pending[n:]
-		return n, nil
-	}
-
-	c.deadlineMu.Lock()
-	dl := c.readDeadline
-	c.deadlineMu.Unlock()
-
-	var timeout time.Duration
-	if dl.IsZero() {
-		timeout = recvTimeout
-	} else {
-		timeout = time.Until(dl)
-		if timeout <= 0 {
-			return 0, os.ErrDeadlineExceeded
-		}
-	}
-
-	// Wait for next chunk from USB read thread
-	select {
-	case data, ok := <-c.readBuf:
-		if !ok {
-			return 0, io.EOF
-		}
-		n := copy(p, data)
-		if n < len(data) {
-			c.pending = data[n:]
-		}
-		return n, nil
-	case <-c.closed:
-		return 0, io.EOF
-	case <-time.After(timeout):
-		return 0, os.ErrDeadlineExceeded
-	}
-}
-
-func (c *radioConn) Close() error {
-	c.once.Do(func() {
-		close(c.closed)
-	})
-	return nil
 }
 
 // RadioHandshake holds the configuration received during the init handshake.

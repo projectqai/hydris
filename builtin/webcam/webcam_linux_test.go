@@ -24,7 +24,7 @@ func TestScanWebcams(t *testing.T) {
 		t.Logf("  id=%s name=%q device=%s formats=%v", id, info.Name, info.DevicePath, info.Formats)
 		if info.USB != nil {
 			t.Logf("    USB: vid=%04x pid=%04x mfg=%q prod=%q serial=%q",
-				info.USB.VendorID, info.USB.ProductID, info.USB.ManufacturerName, info.USB.ProductName, info.USB.SerialNumber)
+				info.USB.GetVendorId(), info.USB.GetProductId(), info.USB.GetManufacturerName(), info.USB.GetProductName(), info.USB.GetSerialNumber())
 		}
 	}
 

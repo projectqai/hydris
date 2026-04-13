@@ -68,6 +68,7 @@ func TestTransformLocalToWGS84_Point(t *testing.T) {
 	result := transformLocalToWGS84(local, 48.0, 11.0, nil)
 	if result == nil {
 		t.Fatal("expected non-nil result")
+		return
 	}
 	pp, ok := result.Plane.(*pb.PlanarGeometry_Point)
 	if !ok {
@@ -93,6 +94,7 @@ func TestTransformLocalToWGS84_Circle(t *testing.T) {
 	result := transformLocalToWGS84(local, 48.0, 11.0, nil)
 	if result == nil {
 		t.Fatal("expected non-nil result")
+		return
 	}
 	pc, ok := result.Plane.(*pb.PlanarGeometry_Circle)
 	if !ok {
@@ -124,6 +126,7 @@ func TestTransformLocalToWGS84_Polygon(t *testing.T) {
 	result := transformLocalToWGS84(local, 48.0, 11.0, nil)
 	if result == nil {
 		t.Fatal("expected non-nil result")
+		return
 	}
 	pp, ok := result.Plane.(*pb.PlanarGeometry_Polygon)
 	if !ok {

@@ -11,8 +11,10 @@ import (
 func LookupMAC(ip string) string {
 	table := readARPTable(slog.Default())
 	for _, dev := range table {
-		if dev.IP != nil && dev.IP.Host == ip {
-			return strings.ReplaceAll(strings.ToLower(dev.Ethernet.MACAddress), ":", "")
+		if dev.Device != nil && dev.Device.Ip != nil && dev.Device.Ip.GetHost() == ip {
+			if dev.Device.Ethernet != nil {
+				return strings.ReplaceAll(strings.ToLower(dev.Device.Ethernet.GetMacAddress()), ":", "")
+			}
 		}
 	}
 	return ""

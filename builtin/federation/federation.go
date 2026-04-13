@@ -275,14 +275,44 @@ func federateNodeEntity(ctx context.Context, dst pb.WorldServiceClient, node *pb
 	})
 }
 
-// filterForFederation checks whether an entity is eligible for federation and
-// scrubs fields that must never be distributed. It returns false if the entity
-// should be skipped entirely. sourceNodeID is the node whose entities we want
-// to forward — only entities originating from this node pass through (no
-// multi-hop). keepaliveTTL is used to bind the lifetime of components without
-// an explicit lifetime.until to the connection: we set their TTL to 2× the
-// keepalive interval so they expire when the connection dies but survive
-// intermediate re-streams.
+// filterForFederation prepares an entity for federation. It returns false if
+// the entity should be skipped entirely (no Routing, missing Controller).
+//
+// All entities with Routing are forwarded — there is no node-based reject.
+// This enables star topology (a hub redistributes entities from all spokes)
+// and multi-hop relay (A→B→C without explicit configuration).
+//
+// Fresh bumping rule — only the origin bumps:
+//
+// Lifetime.Fresh is bumped ONLY when the entity originates from the source
+// node of this hop (entity.Controller.Node == sourceNodeID). Relayed
+// entities (from a third node) preserve their original Fresh. This single
+// rule prevents federation loops in any topology:
+//
+//   - Push direction: sourceNodeID = localNodeID. The pushing node bumps
+//     fresh for its own entities. Entities it received via federation from
+//     other nodes are relayed with preserved fresh.
+//
+//   - Pull direction: sourceNodeID = remoteNodeID. The pulling node bumps
+//     fresh for the remote's own entities. Entities the remote is relaying
+//     from third nodes are pulled with preserved fresh.
+//
+// Why this prevents loops (A→B→C→B, entity node=A):
+//
+//  1. A pushes to B: node=A == A (origin) → bump fresh to T2. B has T2.
+//  2. B pushes to C: node=A ≠ B (relay) → preserve fresh T2. C has T2.
+//  3. B pulls from C: node=A ≠ C (relay) → preserve fresh T2.
+//     B already has T2 → LWW rejects (identical fresh+until). No loop.
+//
+// Why star topology works (Spoke A → Hub → Spoke B):
+//
+//  1. Spoke A pushes to Hub: origin → bump fresh T2.
+//  2. Spoke B pulls from Hub: node=A ≠ Hub (relay) → preserve fresh T2.
+//     B gets A's entity.
+//  3. Keepalive: A pushes again → bump fresh T3. B pulls → T3 > T2 →
+//     accepted. Entity stays alive.
+//
+// Formally verified: see ha_sync.qnt (Quint) and ha_sync.als (Alloy).
 func filterForFederation(entity *pb.Entity, sourceNodeID string, keepaliveTTL time.Duration) bool {
 	if entity == nil {
 		return false
@@ -294,37 +324,33 @@ func filterForFederation(entity *pb.Entity, sourceNodeID string, keepaliveTTL ti
 		return false
 	}
 
-	// Only forward entities that originated on sourceNodeID. This prevents
-	// multi-hop: entities that arrived via federation from a third node are
-	// not re-distributed.
-	if entity.Controller == nil || entity.Controller.Node == nil || *entity.Controller.Node != sourceNodeID {
+	if entity.Controller == nil || entity.Controller.Node == nil {
 		return false
 	}
 
-	// For entities without a lifetime.until we stamp a TTL derived from the
-	// keepalive interval so they auto-expire if the source disappears.
-	// Entities that already carry a lifetime.until are forwarded as-is.
-	// We also bump fresh to now so that the receiving engine's LWW merge
-	// accepts the update — otherwise equal freshness + longer until loses.
+	// Determine if the source node of this hop is the entity's origin.
+	// Only the origin bumps fresh — relays preserve it to prevent loops.
+	isOrigin := *entity.Controller.Node == sourceNodeID
+
 	if entity.Lifetime == nil {
 		entity.Lifetime = &pb.Lifetime{}
 	}
 	now := timestamppb.Now()
 	keepaliveUntil := now.AsTime().Add(keepaliveTTL)
-	// Always stamp the keepalive-based TTL, unless the source already has a
-	// shorter lifetime.until (we don't want to extend entities that are about
-	// to expire).
+	// Stamp the keepalive-based TTL, unless the entity already has a
+	// shorter lifetime.until (we don't want to extend entities that are
+	// about to expire). Only bump Fresh when we are the origin — relayed
+	// entities keep their original Fresh so that LWW dedup stops loops.
 	if entity.Lifetime.Until == nil || entity.Lifetime.Until.AsTime().After(keepaliveUntil) {
-		entity.Lifetime.Fresh = now
+		if isOrigin {
+			entity.Lifetime.Fresh = now
+		}
 		entity.Lifetime.Until = timestamppb.New(keepaliveUntil)
 	}
 
-	// Scrub fields that must never be distributed
+	// Scrub fields that must never be distributed.
 	entity.Lease = nil
 	entity.Config = nil
-	// TODO: we need to think about Configurable and Device components
-	// they might cause a local controller to pick them up and act on,
-	// even when the device is remote
 
 	// Strip engine-managed GeoShapeComponent when LocalShapeComponent has
 	// relative_to set. The receiving engine will recompute GeoShapeComponent

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Match all USB serial devices supported by usb-serial-for-android -->
+
+    <!-- FTDI -->
+    <usb-device vendor-id="1027" product-id="24577" /> <!-- FT232R -->
+    <usb-device vendor-id="1027" product-id="24592" /> <!-- FT2232H -->
+    <usb-device vendor-id="1027" product-id="24593" /> <!-- FT4232H -->
+    <usb-device vendor-id="1027" product-id="24596" /> <!-- FT232H -->
+    <usb-device vendor-id="1027" product-id="24597" /> <!-- FT231X -->
+
+    <!-- Silicon Labs CP210x -->
+    <usb-device vendor-id="4292" product-id="60000" /> <!-- CP2102 -->
+    <usb-device vendor-id="4292" product-id="60016" /> <!-- CP2105 -->
+    <usb-device vendor-id="4292" product-id="60017" /> <!-- CP2108 -->
+
+    <!-- Prolific PL2303 -->
+    <usb-device vendor-id="1659" product-id="8963" />  <!-- PL2303Hx -->
+
+    <!-- Qinheng CH340 -->
+    <usb-device vendor-id="6790" product-id="29987" /> <!-- CH340 -->
+    <usb-device vendor-id="6790" product-id="21972" /> <!-- CH9102F -->
+
+    <!-- CDC ACM devices -->
+    <usb-device vendor-id="9025" />  <!-- Arduino -->
+    <usb-device vendor-id="5824" product-id="1155" />  <!-- Teensy -->
+    <usb-device vendor-id="9114" />  <!-- Adafruit (all products) -->
+    <usb-device vendor-id="11914" /> <!-- Raspberry Pi -->
+    <usb-device vendor-id="1155" />  <!-- STMicroelectronics -->
+    <usb-device vendor-id="12346" /> <!-- Espressif -->
+</resources>

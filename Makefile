@@ -1,9 +1,13 @@
-.PHONY: all build clean frontend aio android desktop desktop-dev all pre-release release install-tools docker desktop_windows
+.PHONY: all build clean frontend aio android desktop desktop-dev all pre-release release install-tools docker desktop_windows setup
 
 VERSION ?= $(shell git describe --always --dirty --tags)
-LDFLAGS  = -X 'github.com/projectqai/hydris/version.Version=$(VERSION)'
+LDFLAGS  = -X 'github.com/projectqai/hydris/pkg/version.Version=$(VERSION)'
 
 default: all
+
+setup:
+	go tool lefthook install
+	cd view && bun i
 
 install-tools:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
@@ -13,8 +17,8 @@ install-tools:
 	go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
 
 frontend:
-	cd view/frontend && bun i
-	cd view/frontend && bun run build:web -c
+	cd view && bun i
+	cd view && bun run build:web -c
 
 all:
 	make frontend
@@ -47,6 +51,14 @@ desktop: desktop_windows desktop_mac
 desktop_native:
 	cd desktop && go build -ldflags="$(LDFLAGS)" -o ../bin/hydris-desktop-$$(go env GOOS)-$$(go env GOARCH)-$(VERSION) .
 
+# Compile the native macOS HAL dylib (run once on a Mac).
+# Provides BLE (CoreBluetooth), serial (IOKit/POSIX) access.
+hal_dylib:
+	clang -dynamiclib -framework Foundation -framework IOKit -framework CoreBluetooth \
+		-arch arm64 -O2 -fobjc-arc \
+		hal/macos/hal_serial.m hal/macos/hal_ble.m \
+		-o hal/macos/libhydris_hal.dylib
+
 # Compile the native macOS WKWebView helper (run once on a Mac).
 # Produces a universal binary (arm64 + x86_64).
 desktop_shim:
@@ -65,6 +77,7 @@ desktop_mac:
 	cd desktop && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o ../bin/hydris-desktop-macos-arm64-$(VERSION) .
 	$(call make_app_bundle_base,bin/hydris-desktop-macos-arm64-$(VERSION),bin/Hydris.app)
 	cp desktop/shim/hydris-webview-webkit bin/Hydris.app/Contents/MacOS/hydris-webview
+	@test -f hal/macos/libhydris_hal.dylib && cp hal/macos/libhydris_hal.dylib bin/Hydris.app/Contents/MacOS/libhydris_hal.dylib || echo "warning: HAL dylib not built, run 'make hal_dylib' on a Mac"
 	$(call codesign_app,bin/Hydris.app)
 	cd bin && rm -f hydris-desktop-macos-arm64-$(VERSION).zip && zip -r hydris-desktop-macos-arm64-$(VERSION).zip Hydris.app
 	rm -rf bin/Hydris.app bin/hydris-desktop-macos-arm64-$(VERSION)
@@ -112,18 +125,31 @@ desktop_windows:
 	cd desktop && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS) -H windowsgui" -o ../bin/hydris-desktop-windows-amd64-$(VERSION).exe .
 	cd bin && zip hydris-desktop-windows-amd64-$(VERSION).zip hydris-desktop-windows-amd64-$(VERSION).exe && rm hydris-desktop-windows-amd64-$(VERSION).exe
 
-android: android_
-	cp android/hydris.aar view/frontend/packages/hydris-engine/android/libs/hydris.aar
-	cd view/frontend && bun i
-	cd view/frontend && bun run build:android
-	@echo adb install -r view/frontend/apps/foss/android/app/build/outputs/apk/release/app-release.apk
-android_:
-	cd android && go mod tidy && go install golang.org/x/mobile/cmd/gomobile && gomobile init && gomobile bind -target=android/arm64 -androidapi 24 -ldflags "-checklinkname=0" -o hydris.aar
+android: android_aar
+	cp android/aar/build/outputs/aar/aar-release.aar view/packages/hydris-engine/android/libs/hydris.aar
+	cd view/packages/hydris-engine/android/libs && unzip -o hydris.aar classes.jar 'jni/*' -d . && unzip -o hydris.aar libs/classes.jar -d . && mv libs/classes.jar go-classes.jar && rmdir libs 2>/dev/null || true
+	cp hal/android/build/intermediates/compile_library_classes_jar/release/bundleLibCompileToJarRelease/classes.jar view/packages/hydris-engine/android/libs/hal-classes.jar
+	cd view && bun i
+	cd view && bun run build:android
+	@echo adb install -r view/apps/foss/android/app/build/outputs/apk/release/app-release.apk
+
+android_go:
+	cd android && go mod tidy && go install golang.org/x/mobile/cmd/gomobile && gomobile init && gomobile bind -target=android/arm64 -androidapi 24 -ldflags "-checklinkname=0 $(LDFLAGS)" -o hydris-go.aar
+
+android_aar: android_go
+	cp android/hydris-go.aar android/aar/libs/hydris-go.aar
+	cd android && ./gradlew :aar:assembleRelease
+
+android_test: android_aar
+	cd android && ./gradlew :testapp:assembleDebug
+	adb install -r android/testapp/build/outputs/apk/debug/testapp-debug.apk
+
+DOCKER_IMAGE ?= ghcr.io/projectqai/hydris
 
 docker:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o bin/hydris .
 	cp bin/hydris bin/hydris-$$(go env GOARCH)
-	docker build -t hydris:$(VERSION) .
+	docker build -t $(DOCKER_IMAGE):$(VERSION) .
 	rm -f bin/hydris-$$(go env GOARCH)
 
 pre-release: vet
@@ -138,6 +164,11 @@ release: pre-release
 	git -c user.name="Project Q" -c user.email="opensource@project-q.ai" tag -f $(VERSION) github/main
 	git push -f github $(VERSION)
 
+deeptest:
+	mkdir -p view/apps/foss/build
+	touch view/apps/foss/build/.gitkeep
+	go run ./cmd/deeptest
+
 clean:
 	rm -rf bin/
 	rm -rf view/dist
@@ -145,8 +176,8 @@ clean:
 lint: vet
 
 vet:
-	mkdir -p view/frontend/apps/foss/build
-	touch view/frontend/apps/foss/build/.gitkeep
+	mkdir -p view/apps/foss/build
+	touch view/apps/foss/build/.gitkeep
 	go fmt ./...
 	go vet ./...
 	go test  ./...

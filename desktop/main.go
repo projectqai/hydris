@@ -9,15 +9,25 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/projectqai/hydris/pkg/logging"
+	"github.com/projectqai/hydris/pkg/logging"
 
 	"github.com/projectqai/hydris/builtin"
 	_ "github.com/projectqai/hydris/builtin/all"
+	"github.com/projectqai/hydris/cli"
 	"github.com/projectqai/hydris/engine"
 	_ "github.com/projectqai/hydris/view"
 )
 
 func main() {
+	// When spawned as a plugin subprocess (e.g. "hydris plugin run ..."),
+	// delegate to the CLI command tree instead of starting the engine again.
+	if len(os.Args) > 1 && os.Args[1] == "plugin" {
+		if err := cli.CMD.Execute(); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Work around WebKitGTK DMA-BUF renderer crash on wlroots compositors (Hyprland).
 	// Use multithreaded CPU Skia rendering instead of GPU to avoid GBM buffer issues
 	// while keeping acceptable performance through Skia's threaded tile pipeline.
@@ -31,7 +41,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	serverAddr, err := engine.StartEngine(ctx, engine.EngineConfig{})
+	serverAddr, err := engine.StartEngine(ctx, engine.EngineConfig{
+		LogHandler: logging.Ring,
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "failed to start engine:", err)
 		os.Exit(1)

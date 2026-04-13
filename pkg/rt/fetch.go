@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -12,13 +13,26 @@ import (
 	"github.com/dop251/goja_nodejs/eventloop"
 )
 
-// setupFetch registers global fetch(url, opts?) and Headers class, backed by
-// Go's net/http.
+// setupFetch registers global fetch(url, opts?), Headers, and Request classes,
+// backed by Go's net/http.
 func setupFetch(loop *eventloop.EventLoop, vm *goja.Runtime) {
 	setupHeaders(vm)
+	setupURL(vm)
+	setupRequest(vm)
 
 	vm.Set("fetch", func(call goja.FunctionCall) goja.Value {
-		urlStr := call.Argument(0).String()
+		// Support both fetch(url, opts) and fetch(Request).
+		arg0 := call.Argument(0)
+		urlStr := ""
+		if obj := arg0.ToObject(vm); obj != nil && obj.Get("_isRequest") != nil && obj.Get("_isRequest").ToBoolean() {
+			urlStr = obj.Get("url").String()
+			// Merge Request fields into a synthetic opts argument.
+			if len(call.Arguments) < 2 || goja.IsUndefined(call.Argument(1)) {
+				call.Arguments = append(call.Arguments[:0], arg0, arg0)
+			}
+		} else {
+			urlStr = arg0.String()
+		}
 
 		method := "GET"
 		var reqBody []byte
@@ -30,7 +44,7 @@ func setupFetch(loop *eventloop.EventLoop, vm *goja.Runtime) {
 			if v := opts.Get("method"); v != nil && !goja.IsUndefined(v) {
 				method = v.String()
 			}
-			if v := opts.Get("body"); v != nil && !goja.IsUndefined(v) {
+			if v := opts.Get("body"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
 				if obj := v.ToObject(vm); obj != nil {
 					if flag := obj.Get("_isFormData"); flag != nil && flag.ToBoolean() {
 						fd := obj.Get("_data").Export().(*formDataInternal)
@@ -254,6 +268,96 @@ func exportBytes(vm *goja.Runtime, val goja.Value) []byte {
 	return []byte(val.String())
 }
 
+// --- URL class ---
+
+// setupURL provides a minimal URL constructor for libraries that parse URLs.
+// new URL(url) → { href, protocol, hostname, port, pathname, search, hash, toString() }
+func setupURL(vm *goja.Runtime) {
+	vm.Set("URL", func(call goja.ConstructorCall) *goja.Object {
+		rawURL := call.Argument(0).String()
+		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Argument(1)) {
+			base := call.Argument(1).String()
+			if parsed, err := url.Parse(base); err == nil {
+				if ref, err := url.Parse(rawURL); err == nil {
+					rawURL = parsed.ResolveReference(ref).String()
+				}
+			}
+		}
+		parsed, _ := url.Parse(rawURL)
+		if parsed == nil {
+			parsed = &url.URL{}
+		}
+
+		call.This.Set("href", parsed.String())
+		call.This.Set("protocol", parsed.Scheme+":")
+		call.This.Set("hostname", parsed.Hostname())
+		call.This.Set("port", parsed.Port())
+		call.This.Set("pathname", parsed.Path)
+		call.This.Set("search", "")
+		if parsed.RawQuery != "" {
+			call.This.Set("search", "?"+parsed.RawQuery)
+		}
+		call.This.Set("hash", "")
+		if parsed.Fragment != "" {
+			call.This.Set("hash", "#"+parsed.Fragment)
+		}
+		call.This.Set("host", parsed.Host)
+		call.This.Set("origin", parsed.Scheme+"://"+parsed.Host)
+
+		// Build a URLSearchParams from the query string.
+		uspCtor := vm.Get("URLSearchParams")
+		if uspCtor != nil {
+			qs := parsed.RawQuery
+			usp, _ := vm.New(uspCtor, vm.ToValue(qs))
+			call.This.Set("searchParams", usp)
+		} else {
+			call.This.Set("searchParams", vm.NewObject())
+		}
+
+		call.This.Set("toString", func() string { return parsed.String() })
+		return nil
+	})
+}
+
+// --- Request class ---
+
+// setupRequest provides a minimal Request constructor for libraries like aws4fetch.
+// new Request(url, init?) → { url, method, headers, body, _isRequest: true }
+func setupRequest(vm *goja.Runtime) {
+	vm.Set("Request", func(call goja.ConstructorCall) *goja.Object {
+		url := call.Argument(0).String()
+		call.This.Set("_isRequest", true)
+		call.This.Set("url", url)
+		call.This.Set("method", "GET")
+		call.This.Set("body", goja.Null())
+		call.This.Set("duplex", "half")
+
+		// Create empty Headers by default.
+		headersCtor := vm.Get("Headers")
+		if headersCtor != nil {
+			hdrs, _ := vm.New(headersCtor)
+			call.This.Set("headers", hdrs)
+		}
+
+		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Argument(1)) {
+			opts := call.Argument(1).ToObject(vm)
+			if v := opts.Get("method"); v != nil && !goja.IsUndefined(v) {
+				call.This.Set("method", v.String())
+			}
+			if v := opts.Get("body"); v != nil && !goja.IsUndefined(v) {
+				call.This.Set("body", v)
+			}
+			if v := opts.Get("headers"); v != nil && !goja.IsUndefined(v) {
+				call.This.Set("headers", v)
+			}
+			if v := opts.Get("duplex"); v != nil && !goja.IsUndefined(v) {
+				call.This.Set("duplex", v.String())
+			}
+		}
+		return nil
+	})
+}
+
 // --- Headers class ---
 
 func setupHeaders(vm *goja.Runtime) {
@@ -287,8 +391,22 @@ func setupHeaders(vm *goja.Runtime) {
 			}
 			return goja.Undefined()
 		})
+		obj.Set("keys", func() goja.Value {
+			keys := make([]interface{}, 0, len(store))
+			for k := range store {
+				keys = append(keys, k)
+			}
+			return vm.ToValue(keys)
+		})
+		obj.Set("values", func() goja.Value {
+			vals := make([]interface{}, 0, len(store))
+			for _, v := range store {
+				vals = append(vals, v)
+			}
+			return vm.ToValue(vals)
+		})
 		obj.Set("entries", func() goja.Value {
-			var pairs []interface{}
+			pairs := make([]interface{}, 0, len(store))
 			for k, v := range store {
 				pairs = append(pairs, []interface{}{k, v})
 			}

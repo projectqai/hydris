@@ -11,6 +11,7 @@ import (
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/controller"
 	"github.com/projectqai/hydris/builtin/meshtastic/meshpb"
+	"github.com/projectqai/hydris/hal"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -34,7 +35,6 @@ func init() {
 }
 
 func Run(ctx context.Context, logger *slog.Logger, _ string) error {
-	go maintainDeviceEntities(ctx, logger)
 	go watchDevicesAndPublishMeshtasticDevices(ctx, logger)
 
 	// Build default config schema.
@@ -270,40 +270,16 @@ func runInstance(parentCtx context.Context, logger *slog.Logger, entity *pb.Enti
 			return fmt.Errorf("parent device %s has empty serial path", parentDeviceEntityID)
 		}
 
-		// Try direct serial open on Linux.
-		registryMu.Lock()
-		hasOpener := opener != nil
-		registryMu.Unlock()
-
-		if !hasOpener {
-			logger.Info("Opening serial port directly", "path", serialPath)
-			f, err := openSerialPort(serialPath)
-			if err != nil {
-				return fmt.Errorf("open serial %s: %w", serialPath, err)
-			}
-			defer func() { _ = f.Close() }()
-			logger.Info("Serial port opened", "path", serialPath)
-			radio = NewRadio(f)
-		} else {
-			// Android/Kotlin path: use waitForDevice.
-			conn, err := waitForDevice(ctx, entity.Id)
-			if err != nil {
-				return err
-			}
-			radio = NewRadioFromCallbacks(conn.writer, conn.recvCh)
-		}
-	} else {
-		// Freestanding config (no matched device) -- use waitForDevice with empty filter.
-		logger.Info("No matched device, requesting any USB device...",
-			"entityID", entity.Id,
-			"channel", channel,
-			"hopLimit", hopLimit,
-		)
-		conn, err := waitForDevice(ctx, "")
+		logger.Info("Opening serial port via HAL", "path", serialPath)
+		port, err := hal.OpenSerial(serialPath, 115200)
 		if err != nil {
-			return err
+			return fmt.Errorf("open serial %s: %w", serialPath, err)
 		}
-		radio = NewRadioFromCallbacks(conn.writer, conn.recvCh)
+		defer func() { _ = port.Close() }()
+		logger.Info("Serial port opened", "path", serialPath)
+		radio = NewRadio(port)
+	} else {
+		return fmt.Errorf("no matched device for entity %s", entity.Id)
 	}
 
 	grpcConn, err := builtin.BuiltinClientConn()

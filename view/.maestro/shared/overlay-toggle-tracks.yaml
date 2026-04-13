@@ -1,0 +1,26 @@
+appId: com.q.hydris.development
+name: "Toggle track affiliations and verify sidebar updates"
+---
+- runFlow: ../subflows/launch-and-navigate.yaml
+- runFlow: ../subflows/reset-world.yaml
+
+# Enable playground radar to get some entities
+- tapOn: "Commands"
+- tapOn:
+    id: "command-configuration"
+- tapOn: "MISSIONS"
+- tapOn: "Playground"
+- scrollUntilVisible:
+    element: "Enable Simulated Radar"
+    direction: DOWN
+- tapOn: "Enable Simulated Radar"
+- tapOn: "APPLY CONFIGURATION"
+- tapOn: "Go back"
+- tapOn: "Close command palette"
+
+# Wait for tracks to appear in the sidebar
+- tapOn:
+    id: "tab-tracks"
+- extendedWaitUntil:
+    visible: "drone"
+    timeout: 30000

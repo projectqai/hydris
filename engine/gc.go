@@ -1,19 +1,18 @@
 package engine
 
 import (
+	"log/slog"
 	"reflect"
 	"time"
 
+	"github.com/projectqai/hydris/builtin/artifacts"
 	"github.com/projectqai/hydris/engine/transform"
 	proto "github.com/projectqai/proto/go"
 	goproto "google.golang.org/protobuf/proto"
 )
 
-func (s *WorldServer) gc() {
+func (s *WorldServer) GC() {
 	now := time.Now()
-	if s.frozen.Load() {
-		now = s.frozenAt
-	}
 
 	s.l.Lock()
 	var changed []string
@@ -25,9 +24,10 @@ func (s *WorldServer) gc() {
 		if !es.hardExpire {
 			continue
 		}
-		snapshot := goproto.Clone(es.entity).(*proto.Entity)
+		entity := es.entity
+		deleteArtifactBlob(entity)
 		s.deleteEntity(entityID)
-		s.bus.Dirty(entityID, snapshot, proto.EntityChange_EntityChangeExpired)
+		s.bus.Dirty(entityID, entity, proto.EntityChange_EntityChangeExpired)
 		expired = append(expired, entityID)
 	}
 
@@ -63,10 +63,10 @@ func (s *WorldServer) gc() {
 		}
 
 		if allExpiring {
-			// Snapshot before removing so expiry notifications carry the full entity.
-			snapshot := goproto.Clone(es.entity).(*proto.Entity)
+			entity := es.entity
+			deleteArtifactBlob(entity)
 			s.deleteEntity(entityID)
-			s.bus.Dirty(entityID, snapshot, proto.EntityChange_EntityChangeExpired)
+			s.bus.Dirty(entityID, entity, proto.EntityChange_EntityChangeExpired)
 			expired = append(expired, entityID)
 		} else {
 			// Clone so we don't mutate the pointer already shared with the bus.
@@ -96,6 +96,7 @@ func (s *WorldServer) gc() {
 		}
 		e := es.entity
 		if e.Lifetime != nil && e.Lifetime.Until.IsValid() && now.After(e.Lifetime.Until.AsTime()) {
+			deleteArtifactBlob(e)
 			s.deleteEntity(k)
 			s.bus.Dirty(k, e, proto.EntityChange_EntityChangeExpired)
 			expired = append(expired, k)
@@ -111,4 +112,17 @@ func (s *WorldServer) gc() {
 		s.syncTransformerResults(upserted, removed)
 	}
 	s.l.Unlock()
+}
+
+// deleteArtifactBlob deletes the blob for an artifact entity from storage.
+func deleteArtifactBlob(entity *proto.Entity) {
+	if entity.Artifact == nil || entity.Artifact.Id == "" {
+		return
+	}
+	if artifacts.Server == nil {
+		return
+	}
+	if err := artifacts.Server.DeleteBlob(entity.Artifact.Id); err != nil {
+		slog.Warn("failed to delete artifact blob on expiry", "id", entity.Artifact.Id, "error", err)
+	}
 }
