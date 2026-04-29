@@ -102,3 +102,26 @@ body,
 *::-webkit-scrollbar-thumb:active {
   background: rgb(var(--color-glass) / 0.5);
 }
+
+/* Override sonner's inline flex layout to stack buttons below content */
+[data-sonner-toast][data-styled="true"] {
+  flex-wrap: wrap;
+}
+
+[data-sonner-toast][data-styled="true"] [data-content] {
+  flex: 1;
+}
+
+[data-sonner-toast][data-styled="true"] [data-button] {
+  width: 100% !important;
+  height: 36px !important;
+  padding: 10px !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  justify-content: center;
+  order: 2;
+}
+
+[data-sonner-toast][data-styled="true"] [data-action] {
+  order: 1;
+}

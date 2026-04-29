@@ -3,7 +3,7 @@
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { format } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
-import { Thermometer, Wifi, WifiOff, Wind } from "lucide-react-native";
+import { Wifi, WifiOff } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Text, View } from "react-native";
 
@@ -49,16 +49,7 @@ function ConnectionIndicator() {
   );
 }
 
-const MOCK_WEATHER = { temperature: 12, windSpeed: 18 };
-
-export function ContextStrip({
-  showWeather,
-  showConnection = true,
-}: {
-  showWeather?: boolean;
-  showConnection?: boolean;
-}) {
-  const t = useThemeColors();
+export function ContextStrip({ showConnection = true }: { showConnection?: boolean }) {
   const [time, setTime] = useState(() => new Date());
 
   useEffect(() => {
@@ -120,47 +111,9 @@ export function ContextStrip({
         </Text>
       </Inset>
 
-      {(showWeather || showConnection) && (
+      {showConnection && (
         <Inset>
-          {showWeather && (
-            <>
-              <View
-                role="group"
-                accessible
-                accessibilityLabel={`Temperature ${MOCK_WEATHER.temperature} degrees`}
-                className="flex-row items-center gap-1.5"
-              >
-                <Thermometer aria-hidden size={15} strokeWidth={1.8} color={t.iconDefault} />
-                <Text
-                  className="text-13 text-on-surface/70 font-mono"
-                  style={{ fontVariant: ["tabular-nums"] }}
-                >
-                  {MOCK_WEATHER.temperature}°
-                </Text>
-              </View>
-
-              <View className="bg-surface-overlay/15 h-3.5 w-px" />
-
-              <View
-                role="group"
-                accessible
-                accessibilityLabel={`Wind ${MOCK_WEATHER.windSpeed} knots`}
-                className="flex-row items-center gap-1.5"
-              >
-                <Wind aria-hidden size={15} strokeWidth={1.8} color={t.iconDefault} />
-                <Text
-                  className="text-13 text-on-surface/70 font-mono"
-                  style={{ fontVariant: ["tabular-nums"] }}
-                >
-                  {MOCK_WEATHER.windSpeed}
-                  <Text className="text-10 text-on-surface/70">kn</Text>
-                </Text>
-              </View>
-
-              {showConnection && <View className="bg-surface-overlay/15 h-3.5 w-px" />}
-            </>
-          )}
-          {showConnection && <ConnectionIndicator />}
+          <ConnectionIndicator />
         </Inset>
       )}
     </View>

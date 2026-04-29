@@ -1,7 +1,7 @@
 import type { Metric } from "@projectqai/proto/metrics";
 import { MetricKind, MetricUnit } from "@projectqai/proto/metrics";
 import type { Entity } from "@projectqai/proto/world";
-import { DeviceState } from "@projectqai/proto/world";
+import { LinkStatus } from "@projectqai/proto/world";
 import { format } from "date-fns";
 
 import type {
@@ -156,22 +156,22 @@ export function hasHardwareAlarm(entity: Entity): boolean {
   );
 }
 
-function deriveStatus(entity: Entity): CardStatus {
-  if (!entity.device) return "disconnected";
+function deriveStatus(connectionState: ConnectionState): CardStatus {
+  if (connectionState === "disconnected") return "disconnected";
   return "normal";
 }
 
 function deriveConnectionState(entity: Entity): ConnectionState {
-  if (!entity.device) return "disconnected";
-  switch (entity.device.state) {
-    case DeviceState.DeviceStateActive:
+  if (!entity.link) return "disconnected";
+  switch (entity.link.status) {
+    case LinkStatus.LinkStatusConnected:
       return "connected";
-    case DeviceState.DeviceStatePending:
+    case LinkStatus.LinkStatusDegraded:
       return "reconnecting";
-    case DeviceState.DeviceStateFailed:
+    case LinkStatus.LinkStatusLost:
       return "disconnected";
     default:
-      return "connected";
+      return "disconnected";
   }
 }
 
@@ -188,13 +188,16 @@ export function entityToSensorData(entity: Entity): SensorWidgetData | null {
   if (!kind) return null;
 
   const reading = extractReading(entity, kind);
-  const status = deriveStatus(entity);
-
   const connectionState = deriveConnectionState(entity);
+  const status = deriveStatus(connectionState);
   const signalStrength = deriveSignalStrength(entity);
 
   const isInitializing = connectionState !== "disconnected" && !reading;
   const timestamp = extractTimestamp(entity);
+
+  const cfgValue = entity.configurable?.value;
+  const isLocked = cfgValue?.locked === true;
+  const isSilent = cfgValue?.silent === true;
 
   return {
     id: entity.id,
@@ -204,6 +207,8 @@ export function entityToSensorData(entity: Entity): SensorWidgetData | null {
     reading,
     connectionState,
     signalStrength,
+    isLocked,
+    isSilent,
     isInitializing,
     timestamp,
   };

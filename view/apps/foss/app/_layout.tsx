@@ -29,7 +29,8 @@ import { Appearance, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { Toaster } from "sonner-native";
+
+import { AppToaster } from "../components/app-toaster";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -71,9 +72,9 @@ export default function RootLayout() {
       apply(themePreference);
       return;
     }
-    apply(Appearance.getColorScheme() ?? "dark");
-    const sub = Appearance.addChangeListener(({ colorScheme: cs }) => {
-      apply(cs ?? "dark");
+    apply(Appearance.getColorScheme() === "light" ? "light" : "dark");
+    const sub = Appearance.addChangeListener(({ colorScheme }) => {
+      apply(colorScheme === "light" ? "light" : "dark");
     });
     return () => sub.remove();
   }, [themePreference, setColorScheme]);
@@ -128,26 +129,7 @@ export default function RootLayout() {
               <Stack.Screen name="aware" />
             </Stack>
             <StatusBar hidden style={colorScheme === "dark" ? "light" : "dark"} />
-            <Toaster
-              position="top-center"
-              offset={68}
-              toastOptions={{
-                style: {
-                  backgroundColor: t.card,
-                  borderColor: t.border,
-                  borderWidth: 1,
-                  borderRadius: 4,
-                  paddingHorizontal: 16,
-                  paddingVertical: 10,
-                  ...(process.env.EXPO_OS === "web"
-                    ? { alignSelf: "center", flexGrow: 0, flexShrink: 1 }
-                    : { marginHorizontal: "35%" }),
-                },
-                titleStyle: {
-                  color: t.foreground,
-                },
-              }}
-            />
+            <AppToaster />
           </View>
           <AlarmOverlay />
         </SafeAreaProvider>

@@ -1,0 +1,48 @@
+diff --git a/src/dom/marshal.tsx b/src/dom/marshal.tsx
+index 26e42d6da28d5060ce6564377c7851d6850196b7..f3e5aad26d2cf74d1b65efaf7fc8fb8cf8709057 100644
+--- a/src/dom/marshal.tsx
++++ b/src/dom/marshal.tsx
+@@ -1,15 +1,18 @@
+ import { BridgeMessage, JSONValue } from './dom.types';
+ import { DOM_EVENT, NATIVE_ACTION, NATIVE_ACTION_RESULT } from './injection';
+
+-const IS_DOM =
+-  typeof window !== 'undefined' &&
+-  // @ts-expect-error: Added via expo/dom
+-  typeof window.$$EXPO_INITIAL_PROPS !== 'undefined' &&
+-  // @ts-expect-error: Added via react-native-webview
+-  typeof window.ReactNativeWebView !== 'undefined';
++function isDom(): boolean {
++  return (
++    typeof window !== 'undefined' &&
++    // @ts-expect-error: Added via expo/dom
++    typeof window.$$EXPO_INITIAL_PROPS !== 'undefined' &&
++    // @ts-expect-error: Added via react-native-webview
++    typeof window.ReactNativeWebView !== 'undefined'
++  );
++}
+
+ const emit = <TData extends JSONValue>(message: BridgeMessage<TData>) => {
+-  if (!IS_DOM) {
++  if (!isDom()) {
+     return;
+   }
+   (window as any).ReactNativeWebView.postMessage(JSON.stringify(message));
+@@ -18,7 +21,7 @@ const emit = <TData extends JSONValue>(message: BridgeMessage<TData>) => {
+ export const addEventListener = <TData extends JSONValue>(
+   onSubscribe: (message: BridgeMessage<TData>) => void
+ ): (() => void) => {
+-  if (!IS_DOM) {
++  if (!isDom()) {
+     return () => {};
+   }
+   const listener = ({ detail }: any) => {
+@@ -33,7 +36,7 @@ export const addEventListener = <TData extends JSONValue>(
+ };
+
+ function invokeNativeAction(actionId: string, args: any[]): Promise<any> {
+-  if (!IS_DOM) {
++  if (!isDom()) {
+     throw new Error('Cannot invoke native actions outside of a webview');
+   }
+   return new Promise((res, rej) => {

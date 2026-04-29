@@ -80,6 +80,7 @@
     "lucide-react-native": "*",
     "react": "*",
     "react-native": "*",
+    "react-native-gesture-handler": "*",
     "react-native-reanimated": "*",
     "react-native-safe-area-context": "*",
     "react-native-video": "*",
@@ -87,6 +88,7 @@
     "react-native-webview": "*",
     "@shopify/react-native-skia": "*",
     "expo-audio": "*",
+    "sonner": "*",
     "sonner-native": "*",
     "zustand": "*"
   },
@@ -94,6 +96,7 @@
     "@hydris/eslint-config": "workspace:*",
     "@hydris/typescript-config": "workspace:*",
     "@shopify/flash-list": "2.0.2",
+    "@shopify/react-native-skia": "2.4.18",
     "@types/react": "catalog:",
     "eslint": "catalog:",
     "expo": "catalog:",
@@ -106,19 +109,25 @@
     "nativewind": "catalog:",
     "react": "catalog:",
     "react-native": "catalog:",
+    "react-native-gesture-handler": "catalog:",
     "react-native-reanimated": "catalog:",
     "react-native-safe-area-context": "catalog:",
     "react-native-video": "catalog:",
     "react-native-webrtc": "catalog:",
     "react-native-webview": "catalog:",
-    "sonner-native": "^0.22.2",
+    "sonner": "^2.0.7",
+    "sonner-native": "^0.24.0",
     "typescript": "catalog:",
     "vitest": "^3.2.4",
-    "zustand": "^5.0.8"
+    "zustand": "^5.0.12"
   },
   "dependencies": {
     "@leeoniya/ufuzzy": "^1.0.19",
-    "expo-crypto": "~15.0.8",
-    "react-native-keyboard-controller": "catalog:"
+    "@react-native-menu/menu": "^2.0.0",
+    "expo-crypto": "~55.0.14",
+    "react-native-ios-context-menu": "^3.2.1",
+    "react-native-ios-utilities": "^5.2.0",
+    "react-native-keyboard-controller": "catalog:",
+    "zeego": "^3.0.6"
   }
 }

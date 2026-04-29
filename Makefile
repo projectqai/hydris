@@ -18,7 +18,7 @@ install-tools:
 
 frontend:
 	cd view && bun i
-	cd view && bun run build:web -c
+	cd view && bun run build:web
 
 all:
 	make frontend

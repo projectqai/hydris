@@ -3,7 +3,7 @@ import { InfoRow } from "@hydris/ui/info-row";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import type { Entity } from "@projectqai/proto/world";
-import { DeviceState, LinkStatus } from "@projectqai/proto/world";
+import { DeviceState } from "@projectqai/proto/world";
 import * as Clipboard from "expo-clipboard";
 import {
   AlertTriangle,
@@ -14,33 +14,22 @@ import {
   Copy,
   Cpu,
   Fingerprint,
+  Network,
   Plug,
   Signal,
   Tag,
   Wifi,
 } from "lucide-react-native";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { toast } from "sonner-native";
 
 import { formatTime } from "../../../../lib/api/use-track-utils";
+import { toast } from "../../../../lib/sonner";
+import { formatDeviceState, formatDuration, formatLinkStatus } from "../../utils/format-entity";
 import { EntityLinkRow } from "./entity-link-row";
 
 type InfoTabProps = {
   entity: Entity;
 };
-
-function formatLinkStatus(status?: LinkStatus) {
-  switch (status) {
-    case LinkStatus.LinkStatusConnected:
-      return { label: "Connected", className: "text-success-foreground" };
-    case LinkStatus.LinkStatusDegraded:
-      return { label: "Degraded", className: "text-pending-foreground" };
-    case LinkStatus.LinkStatusLost:
-      return { label: "Lost", className: "text-red-foreground" };
-    default:
-      return { label: "Unknown", className: "text-muted-foreground" };
-  }
-}
 
 function LinkSection({ entity }: { entity: Entity }) {
   const t = useThemeColors();
@@ -62,21 +51,14 @@ function LinkSection({ entity }: { entity: Entity }) {
         </View>
       </View>
       {entity.link.rssiDbm !== undefined && (
-        <InfoRow icon={Signal} label="RSSI" value={`${entity.link.rssiDbm} dBm`} />
+        <InfoRow icon={Signal} label="RSSI" value={`${entity.link.rssiDbm} dBm`} mono />
       )}
       {entity.link.snrDb !== undefined && (
-        <InfoRow icon={AudioWaveform} label="SNR" value={`${entity.link.snrDb} dB`} />
+        <InfoRow icon={AudioWaveform} label="SNR" value={`${entity.link.snrDb} dB`} mono />
       )}
       {!!entity.link.via && <EntityLinkRow icon={Wifi} label="Via" entityId={entity.link.via} />}
     </View>
   );
-}
-
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
 }
 
 function PowerSection({ entity }: { entity: Entity }) {
@@ -92,33 +74,22 @@ function PowerSection({ entity }: { entity: Entity }) {
           icon={Battery}
           label="Battery"
           value={`${Math.round(entity.power.batteryChargeRemaining * 100)}%`}
+          mono
         />
       )}
       {entity.power.voltage !== undefined && (
-        <InfoRow icon={Plug} label="Voltage" value={`${entity.power.voltage.toFixed(1)} V`} />
+        <InfoRow icon={Plug} label="Voltage" value={`${entity.power.voltage.toFixed(1)} V`} mono />
       )}
       {entity.power.remainingSeconds !== undefined && (
         <InfoRow
           icon={Clock}
           label="Remaining"
           value={formatDuration(entity.power.remainingSeconds)}
+          mono
         />
       )}
     </View>
   );
-}
-
-function formatDeviceState(state: DeviceState) {
-  switch (state) {
-    case DeviceState.DeviceStateActive:
-      return { label: "Active", className: "text-success-foreground" };
-    case DeviceState.DeviceStatePending:
-      return { label: "Pending", className: "text-pending-foreground" };
-    case DeviceState.DeviceStateFailed:
-      return { label: "Failed", className: "text-red-foreground" };
-    default:
-      return { label: "Unknown", className: "text-muted-foreground" };
-  }
 }
 
 function DeviceSection({ entity }: { entity: Entity }) {
@@ -154,7 +125,9 @@ function DeviceSection({ entity }: { entity: Entity }) {
           onCopy
         />
       )}
-      {!!entity.device.parent && <EntityLinkRow label="Parent" entityId={entity.device.parent} />}
+      {!!entity.device.parent && (
+        <EntityLinkRow icon={Network} label="Parent" entityId={entity.device.parent} />
+      )}
       {labelEntries.map(([key, val]) => (
         <InfoRow key={key} icon={Tag} label={key} value={String(val)} />
       ))}
@@ -167,7 +140,7 @@ export function InfoTab({ entity }: InfoTabProps) {
   const copyMilSymbol = async () => {
     if (entity.symbol?.milStd2525C) {
       await Clipboard.setStringAsync(entity.symbol.milStd2525C);
-      toast("Copied to clipboard");
+      toast.success("Copied to clipboard");
     }
   };
 
@@ -210,10 +183,15 @@ export function InfoTab({ entity }: InfoTabProps) {
               Lifetime
             </Text>
             {entity.lifetime.from && (
-              <InfoRow icon={Calendar} label="From" value={formatTime(entity.lifetime.from)} />
+              <InfoRow icon={Calendar} label="From" value={formatTime(entity.lifetime.from)} mono />
             )}
             {entity.lifetime.until && (
-              <InfoRow icon={Calendar} label="Until" value={formatTime(entity.lifetime.until)} />
+              <InfoRow
+                icon={Calendar}
+                label="Until"
+                value={formatTime(entity.lifetime.until)}
+                mono
+              />
             )}
           </View>
         )}

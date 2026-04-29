@@ -27,16 +27,14 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { ViewStyle } from "react-native";
 import { Dimensions, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import Animated, { FadeIn } from "react-native-reanimated";
-import { toast } from "sonner-native";
 
+import { toast } from "../../../../lib/sonner";
 import {
+  buildShareViewUrl,
   copyShareableLink,
-  encodeViewState,
   getShareableEntityUrl,
   getShareableLocationUrl,
-  getShareableViewUrl,
   useUrlParams,
-  type ViewStatePayload,
 } from "../../../../lib/use-url-params";
 import { layoutSnapshotRef } from "../../hooks/layout-snapshot";
 import type { MapViewRef } from "../../map-view";
@@ -353,55 +351,26 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
   };
 
   const handleCopyLinkWithLayout = () => {
-    const url = getBaseShareUrl();
-    if (!url) return;
-
-    const snap = layoutSnapshotRef.current;
-    const payload: ViewStatePayload = { p: snap.activePresetId };
-
-    if (snap.isModified) {
-      payload.t = snap.tree;
-    }
-
-    const overlayState = useOverlayStore.getState();
-    const overlayDiff: Record<string, Record<string, boolean>> = {};
-    for (const cat of Object.keys(DEFAULT_OVERLAYS) as (keyof typeof DEFAULT_OVERLAYS)[]) {
-      const defaults = DEFAULT_OVERLAYS[cat];
-      const current = overlayState[cat];
-      const diff: Record<string, boolean> = {};
-      let hasDiff = false;
-      for (const key of Object.keys(defaults) as (keyof typeof defaults)[]) {
-        if (current[key] !== defaults[key]) {
-          diff[key] = current[key] as boolean;
-          hasDiff = true;
-        }
-      }
-      if (hasDiff) overlayDiff[cat] = diff;
-    }
-    if (Object.keys(overlayDiff).length > 0) {
-      payload.o = overlayDiff;
-    }
-
-    const layer = useMapStore.getState().layer;
-    if (layer !== "satellite") {
-      payload.l = layer;
-    }
-
-    const listMode = useLeftPanelStore.getState().listMode;
-    if (listMode !== "tracks") {
-      payload.list = listMode;
-    }
-
-    const selectedEntityId = useSelectionStore.getState().selectedEntityId;
-    if (selectedEntityId) {
-      const detailTab = useTabStore.getState().activeDetailTab;
-      if (detailTab !== "overview") {
-        payload.tab = detailTab;
-      }
-    }
-
-    const viewState = encodeViewState(payload);
-    const fullUrl = getShareableViewUrl(url, viewState);
+    const fullUrl = buildShareViewUrl({
+      getSelectedEntityId: () => useSelectionStore.getState().selectedEntityId,
+      getMapView: () => viewRef?.current ?? mapEngineActions.getView(),
+      getTab: () => paramsRef.current.tab,
+      getLayoutSnapshot: () => layoutSnapshotRef.current,
+      getOverlayState: () => {
+        const overlays = useOverlayStore.getState();
+        return {
+          tracks: overlays.tracks,
+          sensors: overlays.sensors,
+          network: overlays.network,
+          visualization: overlays.visualization,
+        };
+      },
+      getDefaultOverlays: () => DEFAULT_OVERLAYS,
+      getLayer: () => useMapStore.getState().layer,
+      getListMode: () => useLeftPanelStore.getState().listMode,
+      getDetailTab: () => useTabStore.getState().activeDetailTab,
+    });
+    if (!fullUrl) return;
 
     if (fullUrl.length > 2000) {
       toast.warning("URL is very long and may not work in all browsers");

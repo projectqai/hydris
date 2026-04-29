@@ -242,6 +242,9 @@ function CommandRow({
           className="font-sans-medium text-foreground text-sm"
           highlightClassName="text-blue-foreground"
         />
+        {command.description && (
+          <Text className="text-muted-foreground text-11 font-mono">{command.description}</Text>
+        )}
       </View>
       {command.shortcut && Platform.OS === "web" && (
         <View className="bg-surface-overlay/6 h-4 items-center justify-center rounded px-1">

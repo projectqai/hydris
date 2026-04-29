@@ -36,6 +36,7 @@
     "./layout/layout-renderer": "./src/layout/layout-renderer.tsx",
     "./top-bar/command-trigger": "./src/top-bar/command-trigger.tsx",
     "./top-bar/customize-help-icon": "./src/top-bar/customize-help-icon.tsx",
+    "./top-bar/placement-help-icon": "./src/top-bar/placement-help-icon.tsx",
     "./action-button": "./src/action-button.tsx",
     "./middle-truncate-text": "./src/middle-truncate-text.tsx"
   },
@@ -50,8 +51,9 @@
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
     "expo-clipboard": "catalog:",
-    "sonner-native": "^0.22.2",
-    "tailwind-merge": "^3.4.0"
+    "sonner": "^2.0.7",
+    "sonner-native": "^0.24.0",
+    "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
     "@hydris/eslint-config": "workspace:*",
@@ -63,14 +65,14 @@
     "babel-preset-expo": "catalog:",
     "eslint": "catalog:",
     "expo": "catalog:",
-    "jest": "^30.2.0",
+    "jest": "^30.3.0",
     "jest-expo": "catalog:",
     "nativewind": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-native": "catalog:",
     "react-native-web": "catalog:",
-    "zustand": "^5.0.8"
+    "zustand": "^5.0.12"
   },
   "peerDependencies": {
     "expo-linear-gradient": "*",

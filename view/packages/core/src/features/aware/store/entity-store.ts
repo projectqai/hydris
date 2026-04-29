@@ -1,4 +1,5 @@
 import type { Entity, GeoSpatialComponent } from "@projectqai/proto/world";
+import { SortField } from "@projectqai/proto/world";
 import { create } from "zustand";
 
 import {
@@ -12,6 +13,8 @@ import { worldClient } from "../../../lib/api/world-client";
 import { createBackoff } from "../../../lib/backoff";
 import type { ChangeSet } from "../utils/transform-entities";
 import { accumulateChanges, resetDeltaState } from "../utils/transform-entities";
+import type { SortConfig } from "./left-panel-store";
+import { useLeftPanelStore } from "./left-panel-store";
 import { classifyEvent } from "./process-events";
 
 const BATCH_INTERVAL_MS = 250;
@@ -84,6 +87,7 @@ type EntityActions = {
   stopStream: () => void;
   updateEntity: (id: string, updates: Partial<Entity>) => void;
   fetchEntity: (id: string) => Promise<Entity | null>;
+  resortEntities: () => void;
   reset: () => void;
 };
 
@@ -99,7 +103,74 @@ export const selectLastChange = (state: EntityState) => state.lastChange;
 export const selectDetectionEntityIds = (state: EntityState) => state.detectionEntityIds;
 export const selectSelfGeo = (state: EntityState) => state.selfGeo;
 
-function computeDerivedState(entities: Map<string, Entity>) {
+function entitySortComparator(sort: SortConfig) {
+  const dir = sort.descending ? -1 : 1;
+  return (a: Entity, b: Entity) => {
+    const fieldComparison = compareByField(a, b, sort.field);
+    if (fieldComparison !== 0) return fieldComparison * dir;
+    if (sort.field === SortField.SortFieldLabel) return 0;
+    const nameA = getEntityName(a);
+    const nameB = getEntityName(b);
+    return nameA < nameB ? -1 : nameA > nameB ? 1 : 0;
+  };
+}
+
+function compareByField(a: Entity, b: Entity, field: SortField): number {
+  switch (field) {
+    case SortField.SortFieldLabel: {
+      const nameA = getEntityName(a);
+      const nameB = getEntityName(b);
+      return nameA < nameB ? -1 : nameA > nameB ? 1 : 0;
+    }
+    case SortField.SortFieldPriority:
+      return (a.priority ?? 0) - (b.priority ?? 0);
+    case SortField.SortFieldLifetimeFrom:
+      return timestampToMs(a.lifetime?.from) - timestampToMs(b.lifetime?.from);
+    case SortField.SortFieldLifetimeUntil:
+      return timestampToMs(a.lifetime?.until) - timestampToMs(b.lifetime?.until);
+    case SortField.SortFieldLifetimeFresh:
+      return timestampToMs(a.lifetime?.fresh) - timestampToMs(b.lifetime?.fresh);
+    case SortField.SortFieldGeoAltitude:
+      return compareNullableNumbers(a.geo?.altitude, b.geo?.altitude);
+    case SortField.SortFieldGeoLatitude:
+      return compareNullableNumbers(a.geo?.latitude, b.geo?.latitude);
+    case SortField.SortFieldGeoLongitude:
+      return compareNullableNumbers(a.geo?.longitude, b.geo?.longitude);
+    case SortField.SortFieldClassificationIdentity:
+      return (a.classification?.identity ?? 0) - (b.classification?.identity ?? 0);
+    case SortField.SortFieldClassificationDimension:
+      return (a.classification?.dimension ?? 0) - (b.classification?.dimension ?? 0);
+    case SortField.SortFieldBearingAzimuth:
+      return compareNullableNumbers(a.bearing?.azimuth, b.bearing?.azimuth);
+    case SortField.SortFieldBearingElevation:
+      return compareNullableNumbers(a.bearing?.elevation, b.bearing?.elevation);
+    case SortField.SortFieldLinkLastSeen:
+      return timestampToMs(a.link?.lastSeen) - timestampToMs(b.link?.lastSeen);
+    case SortField.SortFieldLinkQuality:
+      return compareNullableNumbers(a.link?.linkQualityPercent, b.link?.linkQualityPercent);
+    case SortField.SortFieldPowerBatteryCharge:
+      return compareNullableNumbers(
+        a.power?.batteryChargeRemaining,
+        b.power?.batteryChargeRemaining,
+      );
+    case SortField.SortFieldDeviceState:
+      return (a.device?.state ?? 0) - (b.device?.state ?? 0);
+    default:
+      return 0;
+  }
+}
+
+function compareNullableNumbers(
+  a: number | undefined | null,
+  b: number | undefined | null,
+): number {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return a - b;
+}
+
+function computeDerivedState(entities: Map<string, Entity>, sort: SortConfig) {
   const tracks: Entity[] = [];
   const assets: Entity[] = [];
   const detections: Entity[] = [];
@@ -116,14 +187,9 @@ function computeDerivedState(entities: Map<string, Entity>) {
     }
   }
 
-  const sortByName = (a: Entity, b: Entity) => {
-    const nameA = getEntityName(a);
-    const nameB = getEntityName(b);
-    return nameA < nameB ? -1 : nameA > nameB ? 1 : 0;
-  };
-
-  tracks.sort(sortByName);
-  assets.sort(sortByName);
+  const comparator = entitySortComparator(sort);
+  tracks.sort(comparator);
+  assets.sort(comparator);
   detections.sort((a, b) => {
     return timestampToMs(b.lifetime?.from) - timestampToMs(a.lifetime?.from);
   });
@@ -142,7 +208,8 @@ function scheduleDerivedStateUpdate() {
   derivedStateTimeout = setTimeout(() => {
     derivedStateTimeout = null;
     const state = useEntityStore.getState();
-    useEntityStore.setState(computeDerivedState(state.entities));
+    const { sort } = useLeftPanelStore.getState();
+    useEntityStore.setState(computeDerivedState(state.entities, sort));
   }, DERIVED_STATE_INTERVAL_MS);
 }
 
@@ -348,8 +415,11 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
       const signal = abortController.signal;
 
       try {
+        const { sort } = useLeftPanelStore.getState();
+        const sortOptions = [{ field: sort.field, descending: sort.descending }];
+
         const { entities: initial } = await worldClient.listEntities(
-          { filter: ENTITY_STREAM_FILTER },
+          { filter: ENTITY_STREAM_FILTER, sort: sortOptions },
           { signal },
         );
         if (signal.aborted) return;
@@ -393,7 +463,7 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
         let receivedFirst = initial.length > 0;
         let eventsSinceYield = 0;
         for await (const event of worldClient.watchEntities(
-          { filter: ENTITY_STREAM_FILTER, behaviour: { maxRateHz: 10000 } },
+          { filter: ENTITY_STREAM_FILTER, sort: sortOptions, behaviour: { maxRateHz: 10000 } },
           { signal },
         )) {
           if (signal.aborted) break;
@@ -504,6 +574,13 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
     }
   },
 
+  resortEntities: () => {
+    const state = useEntityStore.getState();
+    if (state.entities.size === 0) return;
+    const { sort } = useLeftPanelStore.getState();
+    useEntityStore.setState(computeDerivedState(state.entities, sort));
+  },
+
   reset: () => {
     abortController?.abort();
     abortController = null;
@@ -536,3 +613,12 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
     });
   },
 }));
+
+let prevSort = useLeftPanelStore.getState().sort;
+useLeftPanelStore.subscribe((state) => {
+  const { sort } = state;
+  if (sort.field !== prevSort.field || sort.descending !== prevSort.descending) {
+    prevSort = sort;
+    useEntityStore.getState().resortEntities();
+  }
+});

@@ -34,6 +34,11 @@ func NewArtifactServer(local *LocalStore, world pb.WorldServiceClient) *Artifact
 	}
 }
 
+// Local returns the local filesystem store.
+func (s *ArtifactServer) Local() *LocalStore {
+	return s.local
+}
+
 // SetStore swaps the active storage backend.
 // SetStore sets a specific backend. Disables auto mode.
 func (s *ArtifactServer) SetStore(store Store) {

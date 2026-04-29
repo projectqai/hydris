@@ -114,7 +114,8 @@ func (ct *CameraTransformer) Resolve(head map[string]*pb.Entity, changedID strin
 
 	wedge := buildWedge(fov, rangeMin, rangeMax, bearingDeg)
 	upsert = append(upsert, &pb.Entity{
-		Id: covID,
+		Id:      covID,
+		Routing: entity.Routing,
 		LocalShape: &pb.LocalShapeComponent{
 			RelativeTo: changedID,
 			Geometry: &pb.LocalGeometry{
@@ -143,7 +144,8 @@ func (ct *CameraTransformer) Resolve(head map[string]*pb.Entity, changedID strin
 		}
 
 		upsert = append(upsert, &pb.Entity{
-			Id: lineID,
+			Id:      lineID,
+			Routing: entity.Routing,
 			LocalShape: &pb.LocalShapeComponent{
 				RelativeTo: changedID,
 				Geometry: &pb.LocalGeometry{

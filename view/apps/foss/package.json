@@ -21,11 +21,10 @@
     "ios": "expo run:ios"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.10.2",
+    "@bufbuild/protobuf": "^2.11.0",
     "@connectrpc/connect": "^2.1.1",
     "@connectrpc/connect-web": "^2.1.1",
     "@expo-google-fonts/inter": "^0.4.2",
-    "@expo/config-plugins": "^54.0.4",
     "@hydris/core": "workspace:*",
     "@hydris/engine": "workspace:*",
     "@hydris/map-engine": "workspace:*",
@@ -33,13 +32,13 @@
     "@projectqai/proto": "catalog:",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-navigation/bottom-tabs": "^7.4.0",
-    "@react-navigation/elements": "^2.6.3",
+    "@react-navigation/elements": "^2.9.14",
     "@react-navigation/native": "^7.1.8",
     "@shopify/flash-list": "2.0.2",
-    "@shopify/react-native-skia": "2.5.3",
-    "app-icon-badge": "^0.1.2",
+    "@shopify/react-native-skia": "2.4.18",
     "date-fns": "^4.1.0",
     "expo": "catalog:",
+    "expo-asset": "~55.0.16",
     "expo-audio": "catalog:",
     "expo-battery": "catalog:",
     "expo-build-properties": "catalog:",
@@ -75,11 +74,12 @@
     "react-native-webrtc": "catalog:",
     "react-native-webview": "catalog:",
     "react-native-worklets": "catalog:",
-    "sonner-native": "^0.22.2",
-    "zustand": "^5.0.8"
+    "sonner": "^2.0.7",
+    "sonner-native": "^0.24.0",
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
-    "@babel/plugin-transform-react-jsx": "^7.27.1",
+    "@babel/plugin-transform-react-jsx": "^7.28.6",
     "@expo/config": "catalog:",
     "@expo/config-types": "catalog:",
     "@expo/metro": "catalog:",
@@ -93,13 +93,13 @@
     "@types/react-dom": "catalog:",
     "babel-preset-expo": "catalog:",
     "cross-env": "^7.0.3",
-    "dotenv": "^17.2.3",
+    "dotenv": "^17.4.2",
     "eslint": "catalog:",
     "jest": "^29.7.0",
     "jest-expo": "catalog:",
     "tailwindcss": "catalog:",
     "typescript": "catalog:",
-    "zod": "^4.1.12"
+    "zod": "^4.3.6"
   },
   "jest": {
     "preset": "jest-expo"

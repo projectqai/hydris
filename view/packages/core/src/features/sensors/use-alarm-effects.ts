@@ -38,7 +38,7 @@ export function useAlarmEffects() {
 
         const data = entityToSensorData(entity);
         if (!data || !data.reading) continue;
-        if (data.isLocked) continue;
+        if (data.isLocked || data.isSilent) continue;
 
         const levelCode =
           data.reading.shape === "levels" && data.reading.levels.length

@@ -99,19 +99,43 @@ export function VignetteGlow({ color, intensity }: VignetteGlowProps) {
 
     glRef.current = { gl, resolutionLoc, colorLoc, intensityLoc, draw };
 
+    // Debounce WebGL canvas resize: reallocating the framebuffer on every
+    // ResizeObserver fire stalls fast window drags. Let CSS stretch the
+    // existing canvas during the drag and only resize after it settles.
+    const RESIZE_SETTLE_MS = 120;
+    let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingWidth = 0;
+    let pendingHeight = 0;
+    let hasInitialSize = false;
+    const applyResize = () => {
+      pendingTimer = null;
+      const dpr = window.devicePixelRatio || 1;
+      const nextW = Math.round(pendingWidth * dpr);
+      const nextH = Math.round(pendingHeight * dpr);
+      if (canvas.width === nextW && canvas.height === nextH) return;
+      canvas.width = nextW;
+      canvas.height = nextH;
+      gl.viewport(0, 0, nextW, nextH);
+      draw();
+    };
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
       const { width, height } = entry.contentRect;
       if (width === 0 || height === 0) return;
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = width * dpr;
-      canvas.height = height * dpr;
-      gl.viewport(0, 0, canvas.width, canvas.height);
-      draw();
+      pendingWidth = width;
+      pendingHeight = height;
+      if (!hasInitialSize) {
+        hasInitialSize = true;
+        applyResize();
+        return;
+      }
+      if (pendingTimer !== null) clearTimeout(pendingTimer);
+      pendingTimer = setTimeout(applyResize, RESIZE_SETTLE_MS);
     });
     observer.observe(container);
 
     return () => {
+      if (pendingTimer !== null) clearTimeout(pendingTimer);
       observer.disconnect();
       gl.deleteShader(vs);
       gl.deleteShader(fs);

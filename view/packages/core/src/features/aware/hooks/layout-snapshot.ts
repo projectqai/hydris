@@ -9,3 +9,5 @@ export const layoutSnapshotRef: {
     isModified: false,
   },
 };
+
+export const layoutResetRef: { current: (() => void) | null } = { current: null };

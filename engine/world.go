@@ -55,6 +55,15 @@ type entityState struct {
 	hardExpire bool                    // set by ExpireEntity; GC removes unconditionally
 }
 
+func (es *entityState) isInfinite(protoNum int32) bool {
+	m, ok := es.lifetimes[protoNum]
+	if !ok || m.noLifetime {
+		lt := es.entity.GetLifetime()
+		return lt == nil || !lt.GetUntil().IsValid()
+	}
+	return m.until.IsZero()
+}
+
 // protoNumToFieldIdx maps proto field numbers to Go struct field indices for Entity.
 var protoNumToFieldIdx map[int32]int
 
@@ -337,7 +346,7 @@ func (s *WorldServer) ListEntities(ctx context.Context, req *connect.Request[pb.
 		}
 		el = append(el, es.entity)
 	}
-	slices.SortFunc(el, func(a, b *pb.Entity) int { return strings.Compare(a.Id, b.Id) })
+	sortEntities(el, req.Msg.Sort)
 
 	response := &pb.ListEntitiesResponse{
 		Entities: el,
@@ -388,6 +397,15 @@ func (s *WorldServer) GetLocalNode(ctx context.Context, req *connect.Request[pb.
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no local node entity"))
 	}
 	return connect.NewResponse(&pb.GetLocalNodeResponse{Entity: s.nodeEntity, NodeId: s.nodeID}), nil
+}
+
+func (s *WorldServer) TimeSync(_ context.Context, req *connect.Request[pb.TimeSyncRequest]) (*connect.Response[pb.TimeSyncResponse], error) {
+	now := timestamppb.Now()
+	return connect.NewResponse(&pb.TimeSyncResponse{
+		T1: req.Msg.T1,
+		T2: now,
+		T3: now,
+	}), nil
 }
 
 func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityChangeRequest]) (*connect.Response[pb.EntityChangeResponse], error) {
@@ -551,13 +569,35 @@ func (s *WorldServer) HardReset(ctx context.Context, req *connect.Request[pb.Har
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("hard reset is only callable from localhost"))
 	}
 
-	slog.Warn("hard reset requested", "peer", req.Peer().Addr)
+	missionID := req.Msg.GetMissionId()
+
+	slog.Warn("hard reset requested", "peer", req.Peer().Addr, "mission_id", missionID)
 
 	s.l.Lock()
 
-	// Expire every entity and let transformers see the removal.
+	// If a mission is requested, validate it exists and has an artifact before deleting anything.
+	var missionEntity *pb.Entity
+	if missionID != "" {
+		es, ok := s.head[missionID]
+		if !ok {
+			s.l.Unlock()
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("mission entity %q not found", missionID))
+		}
+		if es.entity.Artifact == nil {
+			s.l.Unlock()
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("mission entity %q has no artifact component", missionID))
+		}
+		missionEntity = proto.Clone(es.entity).(*pb.Entity)
+		missionEntity.Id = "mission"
+	}
+
+	// Expire every entity (except the mission) and let transformers see the removal.
 	for id, es := range s.head {
+		if missionEntity != nil && id == missionID {
+			continue
+		}
 		snapshot := es.entity
+		deleteArtifactBlob(snapshot)
 		s.deleteEntity(id)
 		for _, t := range s.transformers {
 			t.Resolve(s.headView, id)
@@ -565,10 +605,25 @@ func (s *WorldServer) HardReset(ctx context.Context, req *connect.Request[pb.Har
 		s.bus.Dirty(id, snapshot, pb.EntityChange_EntityChangeExpired)
 	}
 
-	// Truncate persistence file.
+	// Remove the original mission entry (under old ID) and re-insert under "mission".
+	if missionEntity != nil {
+		s.deleteEntity(missionID)
+		s.initEntity(missionEntity)
+	}
+
+	// Truncate persistence file, then write back the mission entity if present.
 	if s.worldFile != "" {
-		if err := os.WriteFile(s.worldFile, nil, 0644); err != nil {
-			slog.Warn("failed to truncate world file during hard reset", "error", err)
+		if missionEntity != nil {
+			yamlBytes, err := entitiesToYAML([]*pb.Entity{missionEntity})
+			if err != nil {
+				slog.Warn("failed to marshal mission entity during hard reset", "error", err)
+			} else if err := os.WriteFile(s.worldFile, yamlBytes, 0644); err != nil {
+				slog.Warn("failed to write mission entity during hard reset", "error", err)
+			}
+		} else {
+			if err := os.WriteFile(s.worldFile, nil, 0644); err != nil {
+				slog.Warn("failed to truncate world file during hard reset", "error", err)
+			}
 		}
 	}
 
@@ -998,6 +1053,7 @@ func (s *WorldServer) mergeEntityComponents(entityID string, existing *entitySta
 		}
 
 		mf.Set(sf)
+		applyComponentMergers(protoNum, merged, existing.entity)
 		if existing.lifetimes == nil {
 			existing.lifetimes = make(map[int32]componentMeta)
 		}

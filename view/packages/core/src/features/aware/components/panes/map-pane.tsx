@@ -7,6 +7,7 @@ import { View } from "react-native";
 import { MapAttribution } from "../../map-search";
 import type { MapViewRef } from "../../map-view";
 import MapView from "../../map-view";
+import { usePlacement } from "../../placement-context";
 import {
   selectDetectionEntityIds,
   selectLastChange,
@@ -23,6 +24,7 @@ import { useOverlayStore } from "../../store/overlay-store";
 import { useRangeRingStore } from "../../store/range-ring-store";
 import { useSelectionStore } from "../../store/selection-store";
 import { buildDelta, buildDeltaChunked } from "../../utils/transform-entities";
+import { PlacementOverlay } from "../placement-overlay";
 import { MapControls } from "./map-controls";
 
 const BRIDGE_CHUNK_SIZE = 5000;
@@ -50,6 +52,7 @@ export function MapPane() {
   const rangeRingsActive = useRangeRingStore((s) => s.isPlacing);
   const primaryRef = useMapEngineStore((s) => s.primaryRef);
   const isPrimary = primaryRef === localRef;
+  const { isPlacing } = usePlacement();
 
   useEffect(() => {
     registerMapRef(localRef);
@@ -274,6 +277,7 @@ export function MapPane() {
         <MapControls mapRef={localRef} viewRef={localViewRef} />
         <MapAttribution />
       </View>
+      {isPlacing && isPrimary && <PlacementOverlay />}
     </View>
   );
 }

@@ -86,6 +86,7 @@ export const COMMAND_SUBCATEGORIES: { id: string; label: string }[] = [
   { id: "overlay", label: "Overlays" },
   { id: "preset", label: "Presets" },
   { id: "selection", label: "Selection" },
+  { id: "sharing", label: "Sharing" },
   { id: "world", label: "World" },
 ];
 

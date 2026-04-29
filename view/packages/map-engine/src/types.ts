@@ -56,6 +56,8 @@ export type EntityData = {
   shape?: ShapeGeometry;
   coverageEntityIds?: string[];
   parentEntityId?: string;
+  assemblyParentId?: string;
+  assemblyOutlineIds?: string[];
   isDetection?: boolean;
 };
 

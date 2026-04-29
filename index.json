@@ -19,7 +19,7 @@
     },
     {
       "name": "airthings",
-      "ref": "ghcr.io/projectqai/hydris/plugins/airthings:0.0.1",
+      "ref": "ghcr.io/projectqai/hydris/plugins/airthings:0.0.2",
       "label": "Airthings BLE Air Quality Monitor",
       "description": "Sensors → Support for Airthings BLE Air Quality Monitor",
       "icon": "air-vent",

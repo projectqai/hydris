@@ -142,7 +142,7 @@ export function ControlIconButton({
       accessibilityState={disabled ? { disabled: true } : undefined}
       tabIndex={disabled ? -1 : 0}
       className={cn(
-        "group focus:outline-none",
+        "group select-none focus:outline-none",
         disabled ? "cursor-not-allowed" : "cursor-pointer active:opacity-90",
       )}
     >
@@ -225,7 +225,7 @@ export function ControlButton({
       accessibilityState={disabled ? { disabled: true, ...accessibilityState } : accessibilityState}
       tabIndex={disabled ? -1 : 0}
       className={cn(
-        "group focus:outline-none",
+        "group select-none focus:outline-none",
         disabled ? "cursor-not-allowed" : "cursor-pointer active:opacity-90",
         fullWidth && "w-full",
         className,

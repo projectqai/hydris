@@ -12,6 +12,7 @@ import {
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import { ChevronDown, Eye, EyeOff } from "lucide-react-native";
+import type { ReactNode } from "react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TextInput } from "react-native";
 import { Alert, Platform, Pressable, Text, View } from "react-native";
@@ -852,6 +853,7 @@ export function SchemaForm({
   onRemove,
   isPending,
   isConfigured,
+  extraActions,
 }: {
   schema: JsonObject;
   value: JsonObject | undefined;
@@ -859,6 +861,7 @@ export function SchemaForm({
   onRemove?: () => void;
   isPending: boolean;
   isConfigured: boolean;
+  extraActions?: ReactNode;
 }) {
   const submitRef = useRef<() => void>(() => {});
   const parsed = useMemo(() => parseJsonSchema(schema), [schema]);
@@ -948,6 +951,8 @@ export function SchemaForm({
           );
         })}
       </View>
+
+      {extraActions}
 
       <ControlButton
         onPress={handleSubmit}

@@ -1,2 +1,4 @@
 bin/
 android/.gradle/
+android/aar/libs/hydris-go.aar
+android/hydris-go.aar

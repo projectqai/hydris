@@ -1,25 +1,6 @@
 import type { ConfigContext, ExpoConfig } from "@expo/config";
-import type { AppIconBadgeConfig } from "app-icon-badge/types";
 
 import { ClientEnv, Env } from "./env";
-
-const appIconBadgeConfig: AppIconBadgeConfig = {
-  enabled: Env.APP_ENV !== "production",
-  badges: [
-    {
-      text: Env.APP_ENV,
-      type: "banner",
-      background: "#000000",
-      color: "white",
-    },
-    {
-      text: Env.VERSION.toString(),
-      type: "ribbon",
-      background: "#000000",
-      color: "white",
-    },
-  ],
-};
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
@@ -31,9 +12,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   orientation: "landscape",
   icon: "./assets/images/icon.png",
   userInterfaceStyle: "automatic",
-  newArchEnabled: true,
   androidStatusBar: {
-    translucent: true,
     hidden: true,
   },
   android: {
@@ -44,7 +23,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       monochromeImage: "./assets/images/android-icon-monochrome.png",
     },
     package: Env.PACKAGE,
-    edgeToEdgeEnabled: true,
     predictiveBackGestureEnabled: false,
     splash: {
       image: "./assets/images/splash-icon.png",
@@ -68,7 +46,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         backgroundColor: "#161616",
       },
     ],
-    ["app-icon-badge", appIconBadgeConfig],
     [
       "expo-build-properties",
       {

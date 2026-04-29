@@ -456,6 +456,7 @@ export function CommandPalette({
               query={state.query}
               commands={commands}
               onClose={handleClose}
+              initialCommandId={mode.initialCommandId}
             />
           )}
           {mode.kind === "config" && <ConfigView entityId={mode.entityId} query={state.query} />}

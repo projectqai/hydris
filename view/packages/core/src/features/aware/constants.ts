@@ -8,6 +8,7 @@ import { EntityListPane } from "./components/panes/entity-list-pane";
 import { MapPane } from "./components/panes/map-pane";
 import { AlertsPlaceholder } from "./components/panes/placeholder-panes";
 import { EnvironmentWidget } from "./widgets/environment-widget";
+import { VitalWidget } from "./widgets/vital-widget";
 
 export const TIMING_CONFIG = { duration: 220 };
 export const DIVIDER_SIZE = 6;
@@ -22,6 +23,7 @@ export const PERSIST_DEBOUNCE_MS = 500;
 export const Z = {
   PALETTE: 100,
   WIDGET_PICKER: 90,
+  SCREEN_LOCK: 70,
   FLOATING_WINDOW: 60,
   TOPBAR: 50,
   SWAP_OVERLAY: 25,
@@ -49,6 +51,7 @@ export const COMPONENT_REGISTRY: Record<string, ComponentType> = {
   alerts: AlertsPlaceholder,
   chat: ChatPane,
   environment: EnvironmentWidget,
+  vitals: VitalWidget,
 };
 
 export const COMPONENT_LABELS: Record<string, string> = {
@@ -59,6 +62,7 @@ export const COMPONENT_LABELS: Record<string, string> = {
   alerts: "Alerts",
   chat: "Chat",
   environment: "Environment",
+  vitals: "Vitals",
 };
 
 export const PRESETS: Preset[] = [

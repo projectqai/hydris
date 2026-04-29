@@ -8,7 +8,6 @@ import { Copy, Eye, Info, MapPin, SquareStack } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { createContext, useContext, useEffect, useState } from "react";
 import { Pressable, View } from "react-native";
-import { toast } from "sonner-native";
 
 import {
   getEntityName,
@@ -16,6 +15,7 @@ import {
   getTrackStatus,
   type TrackStatus,
 } from "../../../../lib/api/use-track-utils";
+import { toast } from "../../../../lib/sonner";
 import { useUrlParams } from "../../../../lib/use-url-params";
 import { useTabStore } from "../../store/tab-store";
 import { ComponentsTab } from "./components-tab";
@@ -54,7 +54,7 @@ function Header({ children }: { children?: ReactNode }) {
 
   const copyToClipboard = async (text: string) => {
     await Clipboard.setStringAsync(text);
-    toast("Copied to clipboard");
+    toast.success("Copied to clipboard");
   };
 
   return (

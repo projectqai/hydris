@@ -1,13 +1,14 @@
 /// <reference types="@projectqai/hal" />
 import { create, EntitySchema, EntityFilterSchema, ListEntitiesRequestSchema, EntityChange, attach, push } from "@projectqai/proto/device";
-import { MetricComponentSchema, MetricSchema, MetricKind, MetricUnit } from "@projectqai/proto/metrics";
-import { DeviceFilterSchema, BleDeviceFilterSchema, DeviceComponentSchema, ControllerSchema, AdministrativeComponentSchema } from "@projectqai/proto/world";
+import { MetricComponentSchema, MetricSchema, MetricRangeSchema, MetricKind, MetricUnit } from "@projectqai/proto/metrics";
+import { DeviceFilterSchema, BleDeviceFilterSchema, DeviceComponentSchema, DeviceState, ControllerSchema, AdministrativeComponentSchema, SymbolComponentSchema, LinkComponentSchema, LinkStatus } from "@projectqai/proto/world";
 import { SERVICE_UUIDS, CHAR_MODEL_NUMBER, MODEL_NAMES, readSensors, type DeviceModel, type SensorReadings } from "./protocol";
 
 interface TrackedDevice {
 	address: string;
 	model?: DeviceModel;
 	registered?: boolean;
+	rssiDbm?: number;
 }
 
 function entityId(dev: TrackedDevice) {
@@ -29,14 +30,14 @@ const MID_VOC = 5, MID_RADON_1DAY = 6, MID_RADON_LONG = 7, MID_ILLUMINANCE = 8;
 
 function buildMetrics(r: SensorReadings) {
 	const m = [];
-	if (r.temperature !== undefined)  m.push(create(MetricSchema, { id: MID_TEMPERATURE, label: "Temperature",               kind: MetricKind.MetricKindTemperature,    unit: MetricUnit.MetricUnitCelsius,          val: { case: "float", value: r.temperature } }));
-	if (r.humidity !== undefined)     m.push(create(MetricSchema, { id: MID_HUMIDITY,    label: "Humidity",                  kind: MetricKind.MetricKindHumidity,       unit: MetricUnit.MetricUnitPercent,          val: { case: "float", value: r.humidity } }));
-	if (r.pressure !== undefined)     m.push(create(MetricSchema, { id: MID_PRESSURE,    label: "Pressure",                  kind: MetricKind.MetricKindPressure,       unit: MetricUnit.MetricUnitMillibar,         val: { case: "float", value: r.pressure } }));
-	if (r.co2 !== undefined)          m.push(create(MetricSchema, { id: MID_CO2,         label: "CO\u2082",                  kind: MetricKind.MetricKindCo2,            unit: MetricUnit.MetricUnitPartsPerMillion,  val: { case: "float", value: r.co2 } }));
-	if (r.voc !== undefined)          m.push(create(MetricSchema, { id: MID_VOC,         label: "VOC",                       kind: MetricKind.MetricKindChemicalHazard, unit: MetricUnit.MetricUnitPartsPerBillion,  val: { case: "float", value: r.voc } }));
-	if (r.radon1day !== undefined)    m.push(create(MetricSchema, { id: MID_RADON_1DAY,  label: "Radon (1-day avg) Bq/m\u00b3",  kind: MetricKind.MetricKindRadiationHazard, unit: MetricUnit.MetricUnitUnspecified, val: { case: "float", value: r.radon1day } }));
-	if (r.radonLongterm !== undefined) m.push(create(MetricSchema, { id: MID_RADON_LONG, label: "Radon (long-term) Bq/m\u00b3",  kind: MetricKind.MetricKindRadiationHazard, unit: MetricUnit.MetricUnitUnspecified, val: { case: "float", value: r.radonLongterm } }));
-	if (r.illuminance !== undefined)  m.push(create(MetricSchema, { id: MID_ILLUMINANCE, label: "Illuminance",               kind: MetricKind.MetricKindIlluminance,    unit: MetricUnit.MetricUnitPercent,          val: { case: "float", value: r.illuminance / 2.55 } }));
+	if (r.temperature !== undefined) m.push(create(MetricSchema, { id: MID_TEMPERATURE, label: "Temperature", kind: MetricKind.MetricKindTemperature, unit: MetricUnit.MetricUnitCelsius, val: { case: "float", value: r.temperature } }));
+	if (r.humidity !== undefined) m.push(create(MetricSchema, { id: MID_HUMIDITY, label: "Humidity", kind: MetricKind.MetricKindHumidity, unit: MetricUnit.MetricUnitPercent, val: { case: "float", value: r.humidity } }));
+	if (r.pressure !== undefined) m.push(create(MetricSchema, { id: MID_PRESSURE, label: "Pressure", kind: MetricKind.MetricKindPressure, unit: MetricUnit.MetricUnitMillibar, val: { case: "float", value: r.pressure } }));
+	if (r.co2 !== undefined) m.push(create(MetricSchema, { id: MID_CO2, label: "CO\u2082", kind: MetricKind.MetricKindCo2, unit: MetricUnit.MetricUnitPartsPerMillion, val: { case: "float", value: r.co2 } }));
+	if (r.voc !== undefined) m.push(create(MetricSchema, { id: MID_VOC, label: "VOC", kind: MetricKind.MetricKindChemicalHazard, unit: MetricUnit.MetricUnitPartsPerBillion, range: create(MetricRangeSchema, { max: { case: "maxFloat", value: 65534 } }), val: { case: "float", value: r.voc } }));
+	if (r.radon1day !== undefined) m.push(create(MetricSchema, { id: MID_RADON_1DAY, label: "Radon (1-day avg) Bq/m\u00b3", kind: MetricKind.MetricKindRadiationHazard, unit: MetricUnit.MetricUnitUnspecified, val: { case: "float", value: r.radon1day } }));
+	if (r.radonLongterm !== undefined) m.push(create(MetricSchema, { id: MID_RADON_LONG, label: "Radon (long-term) Bq/m\u00b3", kind: MetricKind.MetricKindRadiationHazard, unit: MetricUnit.MetricUnitUnspecified, val: { case: "float", value: r.radonLongterm } }));
+	if (r.illuminance !== undefined) m.push(create(MetricSchema, { id: MID_ILLUMINANCE, label: "Illuminance", kind: MetricKind.MetricKindIlluminance, unit: MetricUnit.MetricUnitPercent, val: { case: "float", value: r.illuminance / 2.55 } }));
 	return m;
 }
 
@@ -84,8 +85,9 @@ await attach({
 					await push(client, create(EntitySchema, {
 						id,
 						label: MODEL_NAMES[dev.model] ?? `Airthings ${dev.model}`,
+						symbol: create(SymbolComponentSchema, { milStd2525C: "SNGPESE---*****" }),
 						controller: create(ControllerSchema, { id: "airthings" }),
-						device: create(DeviceComponentSchema, { parent: "airthings.service", category: "Sensors" }),
+						device: create(DeviceComponentSchema, { parent: "airthings.service", category: "Sensors", state: DeviceState.DeviceStateActive }),
 						administrative: create(AdministrativeComponentSchema, { manufacturer: "Airthings", model: dev.model }),
 					}));
 					dev.registered = true;
@@ -98,6 +100,7 @@ await attach({
 					await push(client, create(EntitySchema, {
 						id,
 						metric: create(MetricComponentSchema, { metrics }),
+						link: create(LinkComponentSchema, { status: LinkStatus.LinkStatusConnected, via: "airthings.service", rssiDbm: dev.rssiDbm }),
 					}));
 					console.log(`${id}: ${metrics.length} metrics`);
 				}
@@ -144,9 +147,12 @@ await attach({
 
 			if (event.t === EntityChange.EntityChangeUpdated) {
 				const address = event.entity.device?.ble?.address;
-				if (address && !tracked.has(event.entity.id)) {
+				const existing = tracked.get(event.entity.id);
+				if (existing) {
+					existing.rssiDbm = event.entity.link?.rssiDbm ?? existing.rssiDbm;
+				} else if (address) {
 					console.log(`discovered ${event.entity.id} at ${address}`);
-					tracked.set(event.entity.id, { address });
+					tracked.set(event.entity.id, { address, rssiDbm: event.entity.link?.rssiDbm });
 					deviceCount = tracked.size;
 					pollPending = true;
 				}

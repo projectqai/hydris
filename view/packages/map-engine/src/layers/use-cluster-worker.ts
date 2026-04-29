@@ -83,7 +83,6 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
     const versionChanged = version !== lastSentVersionRef.current;
     const filterJson = JSON.stringify({ ...filter.tracks, shapesVisible, detectionsVisible });
     const filterChanged = filterJson !== lastFilterRef.current;
-
     if (!versionChanged && !zoomChanged && !filterChanged) return;
 
     const now = performance.now();
@@ -146,6 +145,10 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
 
       let i = 0;
       for (const e of map.values()) {
+        // Always filter assembly children from worker — they bypass Supercluster
+        if (e.assemblyParentId && map.has(e.assemblyParentId)) {
+          continue;
+        }
         positions[i * 2] = e.position.lat;
         positions[i * 2 + 1] = e.position.lng;
         affiliations[i] = AFFILIATION_CODE[e.affiliation ?? "unknown"];
@@ -156,15 +159,16 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
         i++;
       }
 
+      const actualCount = i;
       workerRef.current.postMessage(
         {
-          positions,
-          affiliations,
-          hasShape,
-          isDetection,
+          positions: positions.subarray(0, actualCount * 2),
+          affiliations: affiliations.subarray(0, actualCount),
+          hasShape: hasShape.subarray(0, actualCount),
+          isDetection: isDetection.subarray(0, actualCount),
           ids,
           symbols,
-          count,
+          count: actualCount,
           filter: filterInput,
           zoom: z,
           geoChanged: geo,

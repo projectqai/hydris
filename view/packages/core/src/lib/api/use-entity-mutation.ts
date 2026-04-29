@@ -30,10 +30,15 @@ export function useEntityMutation() {
 
   const updateEntityLocation = async (
     entity: Entity,
-    geo: { latitude: number; longitude: number; altitude: number },
+    geo: { latitude: number; longitude: number; altitude?: number },
   ) => {
     const previousGeo = entity.geo;
-    const geoComponent = create(GeoSpatialComponentSchema, geo);
+    const geoComponent = create(GeoSpatialComponentSchema, {
+      ...previousGeo,
+      latitude: geo.latitude,
+      longitude: geo.longitude,
+      ...(geo.altitude !== undefined && { altitude: geo.altitude }),
+    });
 
     setIsPending(true);
     setError(null);
@@ -41,7 +46,13 @@ export function useEntityMutation() {
 
     try {
       const response = await worldClient.push({
-        changes: [{ ...entity, geo: geoComponent }],
+        changes: [
+          {
+            ...entity,
+            geo: geoComponent,
+            lifetime: create(LifetimeSchema, { from: timestampNow() }),
+          },
+        ],
       });
 
       if (!response.accepted) {

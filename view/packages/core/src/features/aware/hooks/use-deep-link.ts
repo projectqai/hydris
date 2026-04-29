@@ -1,14 +1,16 @@
+import type { PaletteMode } from "@hydris/ui/command-palette/palette-reducer";
 import { validateLayoutNode } from "@hydris/ui/layout/tree-utils";
 import type { LayoutNode } from "@hydris/ui/layout/types";
-import { useEffect, useRef } from "react";
-import { toast } from "sonner-native";
+import { useEffect, useRef, useState } from "react";
 
+import { toast } from "../../../lib/sonner";
 import { type AwareUrlParams, decodeViewState, useUrlParams } from "../../../lib/use-url-params";
-import { COMPONENT_REGISTRY } from "../constants";
+import { COMPONENT_REGISTRY, PRESETS } from "../constants";
 import { useEntityStore } from "../store/entity-store";
 import { useLeftPanelStore } from "../store/left-panel-store";
 import { mapEngineActions } from "../store/map-engine-store";
 import { useMapStore } from "../store/map-store";
+import { useMissionKitStore } from "../store/mission-kit-store";
 import { DEFAULT_OVERLAYS, useOverlayStore } from "../store/overlay-store";
 import { useSelectionStore } from "../store/selection-store";
 import { useTabStore } from "../store/tab-store";
@@ -56,6 +58,13 @@ function validateParams(params: AwareUrlParams): ValidationResult {
 
 type DeepLinkOptions = {
   applyExternalLayout: (presetId: string, tree?: LayoutNode) => void;
+  openPalette: (mode: PaletteMode) => void;
+};
+
+type PendingSharedLayout = {
+  presetId: string;
+  presetName: string;
+  tree: LayoutNode;
 };
 
 export function useDeepLink(mapReady: boolean, options: DeepLinkOptions) {
@@ -68,6 +77,38 @@ export function useDeepLink(mapReady: boolean, options: DeepLinkOptions) {
   const entities = useEntityStore((s) => s.entities);
   const isConnected = useEntityStore((s) => s.isConnected);
   const fetchEntity = useEntityStore((s) => s.fetchEntity);
+  const [pendingSharedLayout, setPendingSharedLayout] = useState<PendingSharedLayout | null>(null);
+
+  useEffect(() => {
+    if (!pendingSharedLayout) return;
+    const { presetId, presetName, tree } = pendingSharedLayout;
+    setPendingSharedLayout(null);
+
+    useMissionKitStore.getState().setPendingLayout(presetId, presetName, tree);
+
+    toast("Shared layout applied", {
+      id: "shared-layout",
+      duration: Infinity,
+      action: {
+        label: "Save",
+        onClick: () => {
+          optionsRef.current.openPalette({
+            kind: "command-group",
+            groupId: "save-shared-view",
+            groupLabel: "Save shared view",
+            initialCommandId: `save-shared-view-${presetId}`,
+          });
+        },
+      },
+      cancel: {
+        label: "Dismiss",
+        onClick: () => {
+          toast.dismiss("shared-layout");
+          useMissionKitStore.getState().clearPendingLayout();
+        },
+      },
+    });
+  }, [pendingSharedLayout]);
 
   useEffect(() => {
     if (!mapReady) return;
@@ -101,6 +142,11 @@ export function useDeepLink(mapReady: boolean, options: DeepLinkOptions) {
 
         if (payload.tab) {
           useTabStore.setState({ initialTab: payload.tab });
+        }
+
+        if (validatedTree) {
+          const presetName = PRESETS.find((p) => p.id === payload.p)?.name ?? payload.p;
+          setPendingSharedLayout({ presetId: payload.p, presetName, tree: validatedTree });
         }
       }
       requestAnimationFrame(() => clearParams(["layout"]));

@@ -5,8 +5,28 @@ import { Activity, GripHorizontal, X } from "lucide-react-native";
 import { useEffect, useRef } from "react";
 import { Pressable, Text, useWindowDimensions, View } from "react-native";
 
+import { CameraPanOverlay } from "./components/video-stream/camera-pan-overlay";
+import type { VideoProtocol } from "./components/video-stream/types";
 import { VideoStream } from "./components/video-stream/video-stream";
 import { getInitialPosition, updateLastWindowPosition, usePIPContext } from "./pip-context";
+import { useEntityStore } from "./store/entity-store";
+
+function PIPContent({
+  entityId,
+  url,
+  protocol,
+}: {
+  entityId: string;
+  url: string;
+  protocol: VideoProtocol;
+}) {
+  const entity = useEntityStore((s) => s.entities.get(entityId));
+  return (
+    <CameraPanOverlay camera={entity}>
+      <VideoStream url={url} protocol={protocol} objectFit="contain" />
+    </CameraPanOverlay>
+  );
+}
 
 type PIPPlayerProps = {
   minTop?: number;
@@ -83,10 +103,10 @@ export function PIPPlayer({ minTop = PANEL_TOP_OFFSET - 12 }: PIPPlayerProps) {
             </View>
           }
           content={
-            <VideoStream
+            <PIPContent
+              entityId={window.entityId}
               url={window.cameraUrl}
               protocol={window.cameraProtocol}
-              objectFit="contain"
             />
           }
           footer={

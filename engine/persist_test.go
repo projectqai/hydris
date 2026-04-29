@@ -15,7 +15,7 @@ func TestParseEntities_SingleEntity(t *testing.T) {
 	yaml := `id: "e1"
 label: "tank"
 `
-	entities, err := parseEntities([]byte(yaml))
+	entities, err := ParseEntities([]byte(yaml))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ label: "alpha"
 id: "e2"
 label: "bravo"
 `
-	entities, err := parseEntities([]byte(yaml))
+	entities, err := ParseEntities([]byte(yaml))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestParseEntities_EmptyDocument(t *testing.T) {
 ---
 id: "e2"
 `
-	entities, err := parseEntities([]byte(yaml))
+	entities, err := ParseEntities([]byte(yaml))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,14 +65,14 @@ id: "e2"
 }
 
 func TestParseEntities_InvalidYAML(t *testing.T) {
-	_, err := parseEntities([]byte(`{{{invalid`))
+	_, err := ParseEntities([]byte(`{{{invalid`))
 	if err == nil {
 		t.Error("expected error for invalid YAML")
 	}
 }
 
 func TestParseEntities_EmptyInput(t *testing.T) {
-	entities, err := parseEntities([]byte(""))
+	entities, err := ParseEntities([]byte(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestEntitiesToYAML_Roundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	parsed, err := parseEntities(b)
+	parsed, err := ParseEntities(b)
 	if err != nil {
 		t.Fatal(err)
 	}

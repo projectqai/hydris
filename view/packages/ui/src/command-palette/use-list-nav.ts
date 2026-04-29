@@ -20,12 +20,14 @@ export function useListNav<T>({
   onActivate,
   resetKey,
   stateKey,
+  initialIndex,
 }: {
   items: readonly T[];
   isSelectable?: (item: T) => boolean;
   onActivate: (item: T) => void;
   resetKey: string;
   stateKey?: string;
+  initialIndex?: number;
 }) {
   const checkSelectable = isSelectable ?? alwaysTrue;
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
@@ -86,7 +88,9 @@ export function useListNav<T>({
         return;
       }
     }
-    setHighlightedIndex(Platform.OS === "web" ? (selectableIndicesRef.current[0] ?? -1) : -1);
+    setHighlightedIndex(
+      Platform.OS === "web" ? (initialIndex ?? selectableIndicesRef.current[0] ?? -1) : -1,
+    );
     listRef.current?.scrollToOffset?.({ offset: 0, animated: false });
   }, [resetKey, stateKey]);
 

@@ -7,11 +7,5 @@ const IS_MOBILE = process.env.EXPO_OS !== "web";
 const ADDITIONAL_WIDGETS = [...SENSOR_WIDGETS, ...CAMERA_WIDGETS];
 
 export default function AwarePage() {
-  return (
-    <AwareScreen
-      showWeather
-      additionalWidgets={ADDITIONAL_WIDGETS}
-      commandButtonRight={IS_MOBILE}
-    />
-  );
+  return <AwareScreen additionalWidgets={ADDITIONAL_WIDGETS} commandButtonRight={IS_MOBILE} />;
 }

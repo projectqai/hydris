@@ -259,7 +259,7 @@ func discoverNode(ctx context.Context, client pb.WorldServiceClient) (string, *p
 
 // federateNodeEntity pushes a scrubbed copy of a node entity to a destination.
 // This lets the receiving side know who a sender ID refers to.
-func federateNodeEntity(ctx context.Context, dst pb.WorldServiceClient, node *pb.Entity, keepaliveTTL time.Duration) {
+func federateNodeEntity(ctx context.Context, dst pb.WorldServiceClient, node *pb.Entity, keepaliveTTL time.Duration, clockOffset time.Duration) {
 	e := proto.Clone(node).(*pb.Entity)
 	e.Lease = nil
 	e.Config = nil
@@ -270,6 +270,7 @@ func federateNodeEntity(ctx context.Context, dst pb.WorldServiceClient, node *pb
 		Fresh: now,
 		Until: timestamppb.New(now.AsTime().Add(keepaliveTTL)),
 	}
+	shiftEntityTimestamps(e, clockOffset)
 	_, _ = dst.Push(ctx, &pb.EntityChangeRequest{
 		Changes: []*pb.Entity{e},
 	})
@@ -389,8 +390,14 @@ func (i *Instance) runPull(ctx context.Context) error {
 	}
 	i.logger.Info("pull: discovered remote node", "nodeID", remoteNodeID)
 
+	clockOffset := estimateClockOffset(ctx, remoteClient)
+	if clockOffset != 0 {
+		i.logger.Info("pull: clock offset estimated", "offset", clockOffset)
+	}
+
 	// Push the remote node entity to local so receivers can resolve the sender.
-	federateNodeEntity(ctx, localClient, remoteNodeEntity, i.keepaliveTTL())
+	// No clock offset: the node entity lifetime is stamped with local now.
+	federateNodeEntity(ctx, localClient, remoteNodeEntity, i.keepaliveTTL(), 0)
 
 	stream, err := goclient.WatchEntitiesWithRetry(ctx, remoteClient, &pb.ListEntitiesRequest{
 		Filter:    i.filter,
@@ -417,6 +424,9 @@ func (i *Instance) runPull(ctx context.Context) error {
 		}
 
 		entitiesReceived++
+
+		// Translate timestamps from remote clock domain to local.
+		shiftEntityTimestamps(event.Entity, -clockOffset)
 
 		if !filterForFederation(event.Entity, remoteNodeID, keepaliveTTL) {
 			continue
@@ -477,8 +487,13 @@ func (i *Instance) runPush(ctx context.Context) error {
 	}
 	i.logger.Info("push: discovered local node", "nodeID", localNodeID)
 
+	clockOffset := estimateClockOffset(ctx, remoteClient)
+	if clockOffset != 0 {
+		i.logger.Info("push: clock offset estimated", "offset", clockOffset)
+	}
+
 	// Push the local node entity to remote so receivers can resolve the sender.
-	federateNodeEntity(ctx, remoteClient, localNodeEntity, i.keepaliveTTL())
+	federateNodeEntity(ctx, remoteClient, localNodeEntity, i.keepaliveTTL(), clockOffset)
 
 	stream, err := goclient.WatchEntitiesWithRetry(ctx, localClient, &pb.ListEntitiesRequest{
 		Filter:    i.filter,
@@ -515,6 +530,9 @@ func (i *Instance) runPush(ctx context.Context) error {
 			origin := detectOrigin(i.remote)
 			rewriteCameraURLs(event.Entity, origin)
 		}
+
+		// Translate timestamps from local clock domain to remote.
+		shiftEntityTimestamps(event.Entity, clockOffset)
 
 		_, err = remoteClient.Push(ctx, &pb.EntityChangeRequest{
 			Changes: []*pb.Entity{event.Entity},

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectqai/hydris/builtin"
 	pb "github.com/projectqai/proto/go"
 
 	"connectrpc.com/connect"
@@ -617,6 +618,114 @@ func TestMergeLifetime_NoLifetimePushDoesNotAffectSpan(t *testing.T) {
 	}
 	if !e.Lifetime.Until.AsTime().Equal(until) {
 		t.Errorf("Until should remain %v, got %v", until, e.Lifetime.Until.AsTime())
+	}
+}
+
+func initBuiltins(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	builtin.StartAll(ctx, "")
+}
+
+func TestHardReset_ClearsAllEntities(t *testing.T) {
+	initBuiltins(t)
+	w := testWorld(map[string]*pb.Entity{
+		"e1": {Id: "e1", Label: ptr("one")},
+		"e2": {Id: "e2", Label: ptr("two")},
+	})
+
+	ctx := context.Background()
+	_, err := w.HardReset(ctx, peerRequest(&pb.HardResetRequest{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if w.GetHead("e1") != nil {
+		t.Error("e1 should be deleted")
+	}
+	if w.GetHead("e2") != nil {
+		t.Error("e2 should be deleted")
+	}
+}
+
+func TestHardReset_MissionKeepsAndRenames(t *testing.T) {
+	initBuiltins(t)
+	w := testWorld(map[string]*pb.Entity{
+		"e1":            {Id: "e1", Label: ptr("other")},
+		"mission:alpha": {Id: "mission:alpha", Label: ptr("my mission"), Artifact: &pb.ArtifactComponent{Id: "mission:alpha", ContentType: "application/gzip"}},
+	})
+
+	ctx := context.Background()
+	missionID := "mission:alpha"
+	_, err := w.HardReset(ctx, peerRequest(&pb.HardResetRequest{MissionId: &missionID}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if w.GetHead("e1") != nil {
+		t.Error("e1 should be deleted")
+	}
+	if w.GetHead("mission:alpha") != nil {
+		t.Error("original mission:alpha should be removed (renamed)")
+	}
+
+	m := w.GetHead("mission")
+	if m == nil {
+		t.Fatal("mission entity should exist under ID 'mission'")
+	}
+	if m.Label == nil || *m.Label != "my mission" {
+		t.Error("mission entity should preserve label")
+	}
+	if m.Artifact == nil || m.Artifact.ContentType != "application/gzip" {
+		t.Error("mission entity should preserve artifact component")
+	}
+	// artifact.id stays unchanged (points to original blob)
+	if m.Artifact.Id != "mission:alpha" {
+		t.Errorf("artifact.id should remain 'mission:alpha', got %q", m.Artifact.Id)
+	}
+}
+
+func TestHardReset_MissionNotFound(t *testing.T) {
+	initBuiltins(t)
+	w := testWorld(map[string]*pb.Entity{
+		"e1": {Id: "e1", Label: ptr("one")},
+	})
+
+	ctx := context.Background()
+	missionID := "nonexistent"
+	_, err := w.HardReset(ctx, peerRequest(&pb.HardResetRequest{MissionId: &missionID}))
+	if err == nil {
+		t.Fatal("expected error for missing mission entity")
+	}
+	if connect.CodeOf(err) != connect.CodeNotFound {
+		t.Errorf("expected CodeNotFound, got %v", connect.CodeOf(err))
+	}
+	// entities should NOT have been deleted since validation failed
+	if w.GetHead("e1") == nil {
+		t.Error("e1 should still exist — reset should not proceed on validation failure")
+	}
+}
+
+func TestHardReset_MissionNoArtifact(t *testing.T) {
+	initBuiltins(t)
+	w := testWorld(map[string]*pb.Entity{
+		"e1":     {Id: "e1", Label: ptr("one")},
+		"no-art": {Id: "no-art", Label: ptr("no artifact")},
+	})
+
+	ctx := context.Background()
+	missionID := "no-art"
+	_, err := w.HardReset(ctx, peerRequest(&pb.HardResetRequest{MissionId: &missionID}))
+	if err == nil {
+		t.Fatal("expected error for entity without artifact")
+	}
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("expected CodeInvalidArgument, got %v", connect.CodeOf(err))
+	}
+	// entities should NOT have been deleted
+	if w.GetHead("e1") == nil {
+		t.Error("e1 should still exist")
 	}
 }
 

@@ -180,6 +180,8 @@ function transformEntity(entity: Entity): Omit<EntityData, "activeSectors"> | nu
   const coverageIds = entity.sensor?.coverage;
 
   const parentId = entity.pose?.parent;
+  const assemblyParentId = entity.assembly?.parent;
+  const assemblyOutlineIds = entity.assembly?.outline;
 
   return {
     id: entity.id,
@@ -193,6 +195,8 @@ function transformEntity(entity: Entity): Omit<EntityData, "activeSectors"> | nu
     trackPredictionId: entity.track?.prediction,
     coverageEntityIds: coverageIds?.length ? coverageIds : undefined,
     parentEntityId: parentId || undefined,
+    assemblyParentId: assemblyParentId || undefined,
+    assemblyOutlineIds: assemblyOutlineIds?.length ? assemblyOutlineIds : undefined,
     isDetection: entity.detection != null ? true : undefined,
   };
 }

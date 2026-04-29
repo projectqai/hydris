@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/projectqai/hydris v0.0.0-20251120150826-be1f2bb9404a
-	github.com/projectqai/proto/go v0.0.0-20260413141839-ec089d868eba
+	github.com/projectqai/proto/go v0.0.0-20260429120609-6631b7e8f440
 	github.com/rs/cors v1.7.0
 	golang.org/x/mobile v0.0.0-20260120165949-40bd9ace6ce4
 	golang.org/x/net v0.51.0

@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Globe,
+  HeartPulse,
   Info,
   Leaf,
   List,
@@ -38,6 +39,7 @@ const LAYOUT_WIDGETS: WidgetOption[] = [
 
 const MONITORING_WIDGETS: WidgetOption[] = [
   { id: "environment", label: "Environment", description: "Environmental metrics", icon: Leaf },
+  { id: "vitals", label: "Vitals", description: "Heart rate, SpO₂, temperature", icon: HeartPulse },
 ];
 
 type Tab = string;

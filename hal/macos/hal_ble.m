@@ -35,6 +35,7 @@ extern int64_t _watchNextHandle;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, CBPeripheral *> *peripherals;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDictionary *> *deviceInfo;
 @property (nonatomic, assign) BOOL ready;
+@property (nonatomic, assign) BOOL failed;
 @property (nonatomic, strong) dispatch_semaphore_t readySem;
 @end
 
@@ -62,13 +63,39 @@ extern int64_t _watchNextHandle;
 
 - (BOOL)waitReady {
     if (_ready) return YES;
-    return dispatch_semaphore_wait(_readySem, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) == 0;
+    if (_failed) return NO;
+    if (dispatch_semaphore_wait(_readySem, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) != 0) {
+        NSLog(@"[hal] BLE adapter wait timed out");
+        return NO;
+    }
+    return _ready;
 }
 
 - (void)centralManagerDidUpdateState:(CBCentralManager *)central {
-    if (central.state == CBManagerStatePoweredOn && !_ready) {
-        _ready = YES;
+    switch (central.state) {
+    case CBManagerStatePoweredOn:
+        if (!_ready) {
+            _ready = YES;
+            dispatch_semaphore_signal(_readySem);
+        }
+        break;
+    case CBManagerStatePoweredOff:
+        NSLog(@"[hal] BLE adapter is powered off");
+        _failed = YES;
         dispatch_semaphore_signal(_readySem);
+        break;
+    case CBManagerStateUnauthorized:
+        NSLog(@"[hal] BLE access unauthorized — check System Settings > Privacy > Bluetooth");
+        _failed = YES;
+        dispatch_semaphore_signal(_readySem);
+        break;
+    case CBManagerStateUnsupported:
+        NSLog(@"[hal] BLE not supported on this hardware");
+        _failed = YES;
+        dispatch_semaphore_signal(_readySem);
+        break;
+    default:
+        break;
     }
 }
 

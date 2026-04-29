@@ -7,6 +7,7 @@ type LabelData = {
   position: [number, number];
   label: string;
   offsetY: number;
+  pixelOffset?: [number, number];
 };
 
 type Color = [number, number, number, number];
@@ -42,7 +43,7 @@ export function createLabelLayer({ data, visible, baseLayer = "dark" }: LabelLay
     getColor: config.text,
     getTextAnchor: "middle",
     getAlignmentBaseline: "top",
-    getPixelOffset: (d) => [0, d.offsetY / 2 + 4],
+    getPixelOffset: (d) => [d.pixelOffset?.[0] ?? 0, d.offsetY / 2 + 4 + (d.pixelOffset?.[1] ?? 0)],
     fontFamily: "Inter, sans-serif",
     fontWeight: "normal",
     fontSettings: { sdf: true, buffer: 8, cutoff: 0.15 },

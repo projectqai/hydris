@@ -123,7 +123,17 @@ export function WidgetCard({
       <View
         onLayout={(e) => {
           const { width, height } = e.nativeEvent.layout;
-          setScale(computeScale(width, height));
+          const next = computeScale(width, height);
+          // Skip re-render when clamped scale fields are unchanged; layout
+          // events fire many times per resize but most produce identical scale.
+          setScale((prev) =>
+            prev.hero === next.hero &&
+            prev.body === next.body &&
+            prev.element === next.element &&
+            prev.padding === next.padding
+              ? prev
+              : next,
+          );
         }}
         className={cn(
           "border-background bg-background flex-1 border",

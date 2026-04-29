@@ -32,7 +32,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 				Id: proto.String(controllerName),
 			},
 			Device: &pb.DeviceComponent{
-				Category: proto.String("Storage"),
+				Category: proto.String("Plugins"),
 			},
 			Configurable: &pb.ConfigurableComponent{
 				Label:  proto.String("Artifact Storage"),

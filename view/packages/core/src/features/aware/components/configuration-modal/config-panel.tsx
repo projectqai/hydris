@@ -6,21 +6,42 @@ import { useThemeColors } from "@hydris/ui/lib/theme";
 import { SegmentedControl } from "@hydris/ui/segmented-control";
 import type { DeviceClassOption, Entity } from "@projectqai/proto/world";
 import { ConfigurableState } from "@projectqai/proto/world";
-import { AlertTriangle, Plus, Server, Trash2, X } from "lucide-react-native";
+import { AlertTriangle, MapPin, Plus, Server, Timer, Trash2, X } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
 import { Alert, Platform, ScrollView, Text, View } from "react-native";
-import { toast } from "sonner-native";
 
 import { useEntityMutation } from "../../../../lib/api/use-entity-mutation";
 import { getEntityName } from "../../../../lib/api/use-track-utils";
+import { toast } from "../../../../lib/sonner";
+import { usePlacement } from "../../placement-context";
 import { useEntityStore } from "../../store/entity-store";
 import { getEntityIcon } from "../../utils/entity-helpers";
 import { formatRelativeTime, getSharedTimestamp } from "../../utils/format-metrics";
 import { SchemaForm } from "../schema-form";
 import { MetricsSection } from "./metrics-section";
+import { StatusSection } from "./status-section";
 import type { ConfigSelection } from "./use-config-tree";
 
 const HANDSHAKE_TIMEOUT_MS = 30_000;
+
+function useCooldownRemaining(until: number | undefined): string | null {
+  const [remaining, setRemaining] = useState(() =>
+    until ? Math.max(0, Math.ceil((until - Date.now()) / 1000)) : 0,
+  );
+
+  useEffect(() => {
+    if (!until) return;
+    const tick = () => setRemaining(Math.max(0, Math.ceil((until - Date.now()) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [until]);
+
+  if (!until || remaining <= 0) return null;
+  const m = Math.floor(remaining / 60);
+  const s = remaining % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
 
 function ConfigurableSection({ entity }: { entity: Entity }) {
   const { pushDeviceConfig, removeDeviceConfig, isPending } = useEntityMutation();
@@ -29,6 +50,11 @@ function ConfigurableSection({ entity }: { entity: Entity }) {
   const sentVersionRef = useRef<bigint | null>(null);
 
   const configurable = liveEntity?.configurable;
+  const cooldownUntil =
+    typeof configurable?.value?.cooldownUntil === "number"
+      ? configurable.value.cooldownUntil
+      : undefined;
+  const cooldownLabel = useCooldownRemaining(cooldownUntil);
 
   // watch for handshake completion
   useEffect(() => {
@@ -40,7 +66,7 @@ function ConfigurableSection({ entity }: { entity: Entity }) {
       state === ConfigurableState.ConfigurableStateActive ||
       state === ConfigurableState.ConfigurableStateScheduled
     ) {
-      toast("Config applied");
+      toast.success("Config applied");
     } else if (state === ConfigurableState.ConfigurableStateFailed) {
       toast.error(configurable.error ?? "Config failed");
     }
@@ -64,6 +90,7 @@ function ConfigurableSection({ entity }: { entity: Entity }) {
 
   const configValue = liveEntity?.config?.value ?? configurable.value;
   const awaitingHandshake = sentVersion != null;
+  const isCooldownActive = configurable.value?.cooldown === true;
 
   const handleSubmit = async (value: JsonObject) => {
     if (!liveEntity) return;
@@ -80,7 +107,7 @@ function ConfigurableSection({ entity }: { entity: Entity }) {
     if (!liveEntity) return;
     try {
       await removeDeviceConfig(liveEntity);
-      toast("Configuration removed");
+      toast.success("Configuration removed");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Remove failed");
     }
@@ -106,6 +133,25 @@ function ConfigurableSection({ entity }: { entity: Entity }) {
           onRemove={handleRemove}
           isPending={isPending || awaitingHandshake}
           isConfigured={!!liveEntity?.config}
+          extraActions={
+            isCooldownActive ? (
+              <ControlButton
+                onPress={() =>
+                  handleSubmit({ ...((configValue ?? {}) as object), cooldown: false })
+                }
+                icon={Timer}
+                label={cooldownLabel ? `Abort cooldown (${cooldownLabel})` : "Abort cooldown"}
+                hoverVariant="destructive"
+                disabled={isPending || awaitingHandshake}
+                loading={isPending || awaitingHandshake}
+                size="lg"
+                fullWidth
+                labelClassName="font-mono text-xs font-semibold uppercase"
+                className="mt-3"
+                accessibilityLabel="Abort cooldown"
+              />
+            ) : undefined
+          }
         />
       ) : (
         <View className="items-center justify-center gap-2 px-4 py-6">
@@ -136,6 +182,7 @@ function EntityHeader({
   isAddMode,
   onAddPress,
   onDeletePress,
+  onPositionPress,
   metricsTimestamp,
 }: {
   entity: Entity;
@@ -143,6 +190,7 @@ function EntityHeader({
   isAddMode?: boolean;
   onAddPress?: () => void;
   onDeletePress?: () => void;
+  onPositionPress?: () => void;
   metricsTimestamp?: string;
 }) {
   const t = useThemeColors();
@@ -179,6 +227,15 @@ function EntityHeader({
               )}
             </View>
           </View>
+          {onPositionPress && (
+            <ControlButton
+              onPress={onPositionPress}
+              icon={MapPin}
+              label="Position"
+              size="sm"
+              accessibilityLabel="Set position on map"
+            />
+          )}
           {onAddPress && (
             <ControlButton
               onPress={onAddPress}
@@ -285,8 +342,9 @@ export function ConfigPanel({
   const entityId = selection?.entityId ?? null;
   const entity = useEntityStore((s) => (entityId ? s.entities.get(entityId) : undefined));
   const { deleteDevice } = useEntityMutation();
+  const { enterPlacement, canPlace } = usePlacement();
   const [isAddMode, setIsAddMode] = useState(false);
-  const [panelTab, setPanelTab] = useState<"config" | "metrics">("config");
+  const [panelTab, setPanelTab] = useState<"config" | "metrics" | "status">("config");
 
   // exit add mode when selection changes
   const prevEntityId = useRef(entityId);
@@ -338,6 +396,7 @@ export function ConfigPanel({
   const hasSchema =
     entity.configurable?.schema && Object.keys(entity.configurable.schema).length > 0;
   const hasMetrics = (entity.metric?.metrics.length ?? 0) > 0;
+  const hasStatus = !!(entity.device || entity.power || entity.link);
   const metrics = entity.metric?.metrics ?? [];
   const sharedTs = getSharedTimestamp(metrics);
   const metricsTimestamp = sharedTs ? formatRelativeTime(sharedTs) : undefined;
@@ -351,6 +410,25 @@ export function ConfigPanel({
 
   const showAddMode = isAddMode && deviceClasses.length > 0;
 
+  const tabs = [
+    ...(hasSchema ? [{ id: "config" as const, label: "Config" }] : []),
+    ...(hasMetrics ? [{ id: "metrics" as const, label: "Metrics" }] : []),
+    ...(hasStatus ? [{ id: "status" as const, label: "Status" }] : []),
+  ];
+
+  const activeTab = tabs.some((t) => t.id === panelTab) ? panelTab : (tabs[0]?.id ?? "config");
+
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case "config":
+        return <ConfigurableSection key={entity.id} entity={entity} />;
+      case "metrics":
+        return <MetricsSection entity={entity} sharedTimestamp={sharedTs} />;
+      case "status":
+        return <StatusSection entity={entity} />;
+    }
+  };
+
   const renderContent = () => {
     if (showAddMode) {
       return (
@@ -363,49 +441,30 @@ export function ConfigPanel({
       );
     }
 
-    if (hasSchema && hasMetrics) {
+    if (tabs.length === 0) {
       return (
-        <View className="flex-1">
-          <SegmentedControl
-            tabs={[
-              { id: "config" as const, label: "Config" },
-              { id: "metrics" as const, label: "Metrics" },
-            ]}
-            activeTab={panelTab}
-            onTabChange={setPanelTab}
-          />
-          <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-            {panelTab === "config" ? (
-              <ConfigurableSection key={entity.id} entity={entity} />
-            ) : (
-              <MetricsSection entity={entity} sharedTimestamp={sharedTs} />
-            )}
-          </ScrollView>
+        <View className="items-center justify-center gap-2 px-4 py-8">
+          <Text className="text-muted-foreground font-sans text-sm">
+            Select a configurable from the sidebar
+          </Text>
         </View>
       );
     }
 
-    if (hasSchema) {
+    if (tabs.length === 1) {
       return (
         <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-          <ConfigurableSection key={entity.id} entity={entity} />
-        </ScrollView>
-      );
-    }
-
-    if (hasMetrics) {
-      return (
-        <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-          <MetricsSection entity={entity} sharedTimestamp={sharedTs} />
+          {renderTabContent()}
         </ScrollView>
       );
     }
 
     return (
-      <View className="items-center justify-center gap-2 px-4 py-8">
-        <Text className="text-muted-foreground font-sans text-sm">
-          Select a configurable from the sidebar
-        </Text>
+      <View className="flex-1">
+        <SegmentedControl tabs={tabs} activeTab={activeTab} onTabChange={setPanelTab} />
+        <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+          {renderTabContent()}
+        </ScrollView>
       </View>
     );
   };
@@ -418,6 +477,7 @@ export function ConfigPanel({
         isAddMode={isAddMode}
         onAddPress={deviceClasses.length > 0 ? handleAddPress : undefined}
         onDeletePress={handleDeletePress}
+        onPositionPress={entity.symbol && canPlace ? () => enterPlacement(entity) : undefined}
         metricsTimestamp={metricsTimestamp}
       />
       <View className="bg-surface-overlay/6 h-px" />

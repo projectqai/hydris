@@ -1,7 +1,8 @@
 import { cn } from "@hydris/ui/lib/utils";
+import { ShieldCheck } from "lucide-react-native";
 import { Platform, Text, View } from "react-native";
 
-import type { LevelsReading, LevelValue } from "../types";
+import type { ConnectionState, LevelsReading, LevelValue } from "../types";
 import { BASE, useWidgetScale } from "./scale-context";
 import { SensorWidgetShell } from "./sensor-widget-shell";
 
@@ -62,15 +63,49 @@ function LevelRow({ level, maxBars }: { level: LevelValue | null; maxBars: numbe
   );
 }
 
+function ClearState() {
+  const { body } = useWidgetScale();
+  const iconSize = Math.round(32 * body);
+
+  return (
+    <View className="flex-1 items-center justify-center" style={{ gap: 6 * body }}>
+      <ShieldCheck size={iconSize} className="color-green" strokeWidth={1.5} />
+      <Text
+        className="font-sans-semibold text-green tracking-wider uppercase"
+        style={{ fontSize: BASE.labelText * body }}
+      >
+        No Detections
+      </Text>
+      <Text
+        className="text-foreground/40 font-sans"
+        style={{ fontSize: BASE.smallText * body * 0.85 }}
+      >
+        Active monitoring
+      </Text>
+    </View>
+  );
+}
+
 function LevelsDisplay({
   reading,
   maxBars,
   displaySlots,
+  connectionState,
 }: {
   reading: LevelsReading;
   maxBars: number;
   displaySlots: number;
+  connectionState: ConnectionState;
 }) {
+  const allClear =
+    connectionState === "connected" &&
+    reading.levels.length > 0 &&
+    reading.levels.every((l) => l.value === 0);
+
+  if (allClear) {
+    return <ClearState />;
+  }
+
   const sorted = [...reading.levels]
     .sort((a, b) => b.value - a.value || a.code.localeCompare(b.code))
     .slice(0, displaySlots);
@@ -103,7 +138,12 @@ export function LevelsWidget({
     <SensorWidgetShell entityId={entityId}>
       {(data) =>
         data.reading?.shape === "levels" ? (
-          <LevelsDisplay reading={data.reading} maxBars={maxBars} displaySlots={displaySlots} />
+          <LevelsDisplay
+            reading={data.reading}
+            maxBars={maxBars}
+            displaySlots={displaySlots}
+            connectionState={data.connectionState}
+          />
         ) : null
       }
     </SensorWidgetShell>

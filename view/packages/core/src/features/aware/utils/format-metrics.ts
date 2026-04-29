@@ -66,6 +66,7 @@ const UNIT_SYMBOLS: Partial<Record<MetricUnit, string>> = {
   [MetricUnit.MetricUnitCubicMeterPerHour]: "m³/h",
   [MetricUnit.MetricUnitDecibelMilliwatt]: "dBm",
   [MetricUnit.MetricUnitWattPerSquareMeter]: "W/m²",
+  [MetricUnit.MetricUnitBeatsPerMinute]: "bpm",
   [MetricUnit.MetricUnitNanosievert]: "nSv",
   [MetricUnit.MetricUnitNanosievertPerHour]: "nSv/h",
   [MetricUnit.MetricUnitMicrosievert]: "µSv",
@@ -120,6 +121,9 @@ const KIND_LABELS: Partial<Record<MetricKind, string>> = {
   [MetricKind.MetricKindChemicalHazard]: "Chemical",
   [MetricKind.MetricKindBiologicalHazard]: "Biological",
   [MetricKind.MetricKindNuclearHazard]: "Nuclear",
+  [MetricKind.MetricKindHeartRate]: "Heart Rate",
+  [MetricKind.MetricKindOxygenSaturation]: "SpO₂",
+  [MetricKind.MetricKindBodyTemperature]: "Body Temp",
 };
 
 export function getMetricValue(metric: Metric): number {
@@ -186,6 +190,7 @@ export type MetricCategory =
   | "network"
   | "airQuality"
   | "cbrn"
+  | "vital"
   | "general";
 
 const GAUGE_KINDS = new Set([
@@ -232,6 +237,9 @@ const KIND_CATEGORY: Partial<Record<MetricKind, MetricCategory>> = {
   [MetricKind.MetricKindChemicalHazard]: "cbrn",
   [MetricKind.MetricKindBiologicalHazard]: "cbrn",
   [MetricKind.MetricKindNuclearHazard]: "cbrn",
+  [MetricKind.MetricKindHeartRate]: "vital",
+  [MetricKind.MetricKindOxygenSaturation]: "vital",
+  [MetricKind.MetricKindBodyTemperature]: "vital",
 };
 
 export function getMetricCategory(metric: Metric): MetricCategory {
@@ -245,7 +253,8 @@ const CATEGORY_ORDER: { category: MetricCategory; label: string }[] = [
   { category: "spatial", label: "Spatial" },
   { category: "network", label: "Network" },
   { category: "airQuality", label: "Air Quality" },
-  { category: "cbrn", label: "CBRN" },
+  { category: "cbrn", label: "Hazards" },
+  { category: "vital", label: "Vitals" },
   { category: "general", label: "General" },
 ];
 

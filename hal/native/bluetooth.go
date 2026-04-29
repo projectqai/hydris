@@ -4,6 +4,7 @@ package platform
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,8 +23,13 @@ var (
 )
 
 func bleWatch(serviceUUIDs []string, cb func([]hal.BLEDevice)) (stop func()) {
-	adapter := bluetooth.DefaultAdapter
+	adapter, err := bleAdapter()
+	if err != nil {
+		slog.Error("failed to find BLE adapter", "error", err)
+		return func() {}
+	}
 	if err := adapter.Enable(); err != nil {
+		slog.Error("failed to enable BLE adapter", "error", err)
 		return func() {}
 	}
 
@@ -33,7 +39,7 @@ func bleWatch(serviceUUIDs []string, cb func([]hal.BLEDevice)) (stop func()) {
 	devices := make(map[string]*hal.BLEDevice)
 
 	go func() {
-		_ = adapter.Scan(func(_ *bluetooth.Adapter, result bluetooth.ScanResult) {
+		if err := adapter.Scan(func(_ *bluetooth.Adapter, result bluetooth.ScanResult) {
 			addr := result.Address.String()
 			name := result.LocalName()
 
@@ -63,7 +69,9 @@ func bleWatch(serviceUUIDs []string, cb func([]hal.BLEDevice)) (stop func()) {
 				}
 			}
 			mu.Unlock()
-		})
+		}); err != nil {
+			slog.Error("BLE scan failed", "error", err)
+		}
 	}()
 
 	// Probe devices for GATT services in the background so it
@@ -122,7 +130,10 @@ func bleWatch(serviceUUIDs []string, cb func([]hal.BLEDevice)) (stop func()) {
 }
 
 func bleConnect(address string) (int64, error) {
-	adapter := bluetooth.DefaultAdapter
+	adapter, err := bleAdapter()
+	if err != nil {
+		return 0, fmt.Errorf("find BLE adapter: %w", err)
+	}
 	if err := adapter.Enable(); err != nil {
 		return 0, fmt.Errorf("enable BLE adapter: %w", err)
 	}
@@ -326,29 +337,6 @@ func (c *bleConn) Close() error {
 		delete(c.subs, uuid)
 	}
 	return c.device.Disconnect()
-}
-
-// bleProbeServices connects briefly to a device to discover its GATT
-// service UUIDs. This is needed because not all devices advertise
-// service UUIDs in their advertisement packets.
-func bleProbeServices(addr bluetooth.Address) []string {
-	adapter := bluetooth.DefaultAdapter
-	device, err := adapter.Connect(addr, bluetooth.ConnectionParams{})
-	if err != nil {
-		return nil
-	}
-	defer func() { _ = device.Disconnect() }()
-
-	services, err := device.DiscoverServices(nil)
-	if err != nil {
-		return nil
-	}
-
-	uuids := make([]string, 0, len(services))
-	for _, svc := range services {
-		uuids = append(uuids, svc.UUID().String())
-	}
-	return uuids
 }
 
 func parseAddress(addr string) (bluetooth.Address, error) {

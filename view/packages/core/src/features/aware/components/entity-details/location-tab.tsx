@@ -21,6 +21,7 @@ export function LocationTab({ entity }: LocationTabProps) {
                 icon={Compass}
                 label="Azimuth"
                 value={`${entity.bearing.azimuth.toFixed(1)}°`}
+                mono
               />
             )}
             {entity.bearing.elevation !== undefined && (
@@ -28,6 +29,7 @@ export function LocationTab({ entity }: LocationTabProps) {
                 icon={Compass}
                 label="Elevation"
                 value={`${entity.bearing.elevation.toFixed(1)}°`}
+                mono
               />
             )}
           </View>
@@ -50,7 +52,7 @@ export function LocationTab({ entity }: LocationTabProps) {
             ).map(([key, label]) => {
               const v = entity.geo!.covariance![key as keyof typeof entity.geo.covariance];
               if (typeof v !== "number") return null;
-              return <InfoRow key={key} label={label} value={`${v.toFixed(4)} m²`} />;
+              return <InfoRow key={key} label={label} value={`${v.toFixed(4)} m²`} mono />;
             })}
           </View>
         )}

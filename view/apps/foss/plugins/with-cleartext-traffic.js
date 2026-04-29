@@ -1,4 +1,4 @@
-const { withAndroidManifest } = require("@expo/config-plugins");
+const { withAndroidManifest } = require("expo/config-plugins");
 
 /**
  * Expo config plugin to enable cleartext traffic and enforce landscape orientation

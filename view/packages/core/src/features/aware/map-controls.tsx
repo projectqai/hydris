@@ -6,6 +6,7 @@ import { cn } from "@hydris/ui/lib/utils";
 import { PANEL_TOP_OFFSET, usePanelContext } from "@hydris/ui/panels";
 import { LinearGradient } from "expo-linear-gradient";
 import {
+  ExternalLink,
   Eye,
   Hexagon,
   Layers,
@@ -33,16 +34,20 @@ import Animated, {
 } from "react-native-reanimated";
 
 import {
+  buildShareViewUrl,
   copyShareableLink,
   getShareableEntityUrl,
   getShareableLocationUrl,
   useUrlParams,
 } from "../../lib/use-url-params";
+import { layoutSnapshotRef } from "./hooks/layout-snapshot";
 import { MapSearchControl } from "./map-search";
+import { useLeftPanelStore } from "./store/left-panel-store";
 import { mapEngineActions, useMapEngine } from "./store/map-engine-store";
 import { useMapStore } from "./store/map-store";
-import { useOverlayStore } from "./store/overlay-store";
+import { DEFAULT_OVERLAYS, useOverlayStore } from "./store/overlay-store";
 import { useSelectionStore } from "./store/selection-store";
+import { useTabStore } from "./store/tab-store";
 
 type NetworkType = "datalinks";
 type SensorStatus = "online" | "degraded";
@@ -133,14 +138,16 @@ export function MapControls() {
   const [showLayerMenu, setShowLayerMenu] = useState(false);
   const [showOverlayMenu, setShowOverlayMenu] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
+  const [showShareMenu, setShowShareMenu] = useState(false);
   const [isFullscreenActive, setIsFullscreenActive] = useState(false);
 
-  const anyMenuOpen = showLayerMenu || showOverlayMenu || showSearch;
+  const anyMenuOpen = showLayerMenu || showOverlayMenu || showSearch || showShareMenu;
 
   const closeAllMenus = () => {
     setShowLayerMenu(false);
     setShowOverlayMenu(false);
     setShowSearch(false);
+    setShowShareMenu(false);
   };
 
   // Sync isFullscreenActive with isFullscreen SharedValue
@@ -182,6 +189,47 @@ export function MapControls() {
     item: string,
   ) => {
     toggleOverlayStore(category, item as never);
+  };
+
+  const handleCopyLink = () => {
+    const selectedEntityId = useSelectionStore.getState().selectedEntityId;
+    const view = mapEngineActions.getView();
+    const currentParams = paramsRef.current;
+    if (!view) return;
+    const url = selectedEntityId
+      ? getShareableEntityUrl(selectedEntityId, {
+          tab: currentParams.tab,
+          zoom: view.zoom,
+          lat: view.lat,
+          lng: view.lng,
+        })
+      : getShareableLocationUrl(view.lat, view.lng, { zoom: view.zoom });
+    copyShareableLink(url);
+    setShowShareMenu(false);
+  };
+
+  const handleCopyLinkWithLayout = () => {
+    const fullUrl = buildShareViewUrl({
+      getSelectedEntityId: () => useSelectionStore.getState().selectedEntityId,
+      getMapView: () => mapEngineActions.getView(),
+      getTab: () => paramsRef.current.tab,
+      getLayoutSnapshot: () => layoutSnapshotRef.current,
+      getOverlayState: () => {
+        const overlays = useOverlayStore.getState();
+        return {
+          tracks: overlays.tracks,
+          sensors: overlays.sensors,
+          network: overlays.network,
+          visualization: overlays.visualization,
+        };
+      },
+      getDefaultOverlays: () => DEFAULT_OVERLAYS,
+      getLayer: () => useMapStore.getState().layer,
+      getListMode: () => useLeftPanelStore.getState().listMode,
+      getDetailTab: () => useTabStore.getState().activeDetailTab,
+    });
+    if (fullUrl) copyShareableLink(fullUrl);
+    setShowShareMenu(false);
   };
 
   const handleLayout = (event: { nativeEvent: { layout: { height: number } } }) => {
@@ -353,30 +401,74 @@ export function MapControls() {
           accessibilityLabel="Zoom out"
         />
 
-        <ControlIconButton
-          icon={Link2}
-          iconSize={ICON_SIZE}
-          accessibilityLabel="Copy shareable link"
-          onPress={() => {
-            const selectedEntityId = useSelectionStore.getState().selectedEntityId;
-            const view = mapEngineActions.getView();
-            const currentParams = paramsRef.current;
-            if (!view) return;
-            if (selectedEntityId) {
-              copyShareableLink(
-                getShareableEntityUrl(selectedEntityId, {
-                  tab: currentParams.tab,
-                  zoom: view?.zoom,
-                  lat: view?.lat,
-                  lng: view?.lng,
-                }),
-              );
-            } else if (view) {
-              copyShareableLink(getShareableLocationUrl(view.lat, view.lng, { zoom: view.zoom }));
-            }
-          }}
-          size="lg"
-        />
+        <View className="relative">
+          <ControlIconButton
+            icon={Link2}
+            iconSize={ICON_SIZE}
+            onPress={() => {
+              setShowShareMenu(!showShareMenu);
+              setShowLayerMenu(false);
+              setShowOverlayMenu(false);
+              setShowSearch(false);
+            }}
+            variant={showShareMenu ? "active" : "default"}
+            size="lg"
+            accessibilityLabel="Share"
+          />
+
+          <ControlMenu visible={showShareMenu}>
+            <LinearGradient
+              colors={t.gradients.default}
+              {...GRADIENT_PROPS}
+              className="border-border/40 w-64 gap-0.5 overflow-hidden rounded-lg border p-1"
+            >
+              <Pressable
+                onPress={handleCopyLink}
+                className="hover:bg-surface-overlay/10 active:bg-surface-overlay/15 rounded"
+              >
+                <View className="gap-0.5 px-3 py-2.5 select-none">
+                  <View className="flex-row items-center gap-2.5">
+                    <Link2 size={ICON_SIZE} color={t.iconDefault} />
+                    <Text
+                      selectable={false}
+                      className="text-on-surface/70 font-sans-medium text-sm"
+                    >
+                      Share focus
+                    </Text>
+                  </View>
+                  <Text
+                    selectable={false}
+                    className="text-on-surface/65 pl-[26px] font-sans text-xs"
+                  >
+                    Link to current entity or position
+                  </Text>
+                </View>
+              </Pressable>
+              <Pressable
+                onPress={handleCopyLinkWithLayout}
+                className="hover:bg-surface-overlay/10 active:bg-surface-overlay/15 rounded"
+              >
+                <View className="gap-0.5 px-3 py-2.5 select-none">
+                  <View className="flex-row items-center gap-2.5">
+                    <ExternalLink size={ICON_SIZE} color={t.iconDefault} />
+                    <Text
+                      selectable={false}
+                      className="text-on-surface/70 font-sans-medium text-sm"
+                    >
+                      Share view
+                    </Text>
+                  </View>
+                  <Text
+                    selectable={false}
+                    className="text-on-surface/65 pl-[26px] font-sans text-xs"
+                  >
+                    Link with layout, layers and filters
+                  </Text>
+                </View>
+              </Pressable>
+            </LinearGradient>
+          </ControlMenu>
+        </View>
       </Animated.View>
     </>
   );

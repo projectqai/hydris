@@ -1,23 +1,28 @@
 import type { PaletteMode } from "@hydris/ui/command-palette/palette-reducer";
+import type { LayoutNode } from "@hydris/ui/layout/types";
 import type { LucideIcon } from "lucide-react-native";
 import {
   Eye,
   Layout,
+  Link2,
+  Lock,
   Map,
   MapPin,
   MousePointerClick,
   Pencil,
   RotateCcw,
+  Save,
   Settings,
   SunMoon,
   ZoomIn,
   ZoomOut,
 } from "lucide-react-native";
-import { toast } from "sonner-native";
 
-import { PRESET_KEYBINDS } from "../../constants";
+import { toast } from "../../../../lib/sonner";
+import { PRESET_KEYBINDS, PRESETS } from "../../constants";
 import { mapEngineActions } from "../../store/map-engine-store";
 import { useMapStore } from "../../store/map-store";
+import { useMissionKitStore } from "../../store/mission-kit-store";
 import { useOverlayStore } from "../../store/overlay-store";
 import { resetWorld } from "../../store/reset-world";
 import { useSelectionStore } from "../../store/selection-store";
@@ -37,6 +42,8 @@ export type Command = {
     | "preset"
     | "layout"
     | "selection"
+    | "sharing"
+    | "save-shared-view"
     | "world";
   action: () => void;
   mode?: PaletteMode;
@@ -47,6 +54,10 @@ export type LayoutActions = {
   presetSelect: (id: string) => void;
   customize: () => void;
   resetLayout: () => void;
+  shareView: () => void;
+  saveCustomTree: (presetId: string, tree: LayoutNode) => void;
+  clearCustomTree: (presetId: string) => void;
+  toggleScreenLock: () => boolean;
 };
 
 export function buildCommands(layout: LayoutActions): Command[] {
@@ -54,6 +65,7 @@ export function buildCommands(layout: LayoutActions): Command[] {
     {
       id: "configuration",
       label: "Configuration",
+      description: "Device and sensor settings",
       icon: Settings,
       category: "configuration",
       action: () => {},
@@ -82,6 +94,21 @@ export function buildCommands(layout: LayoutActions): Command[] {
       category: "display",
       action: () => useThemeStore.getState().setPreference("system"),
     },
+    {
+      id: "display-lock-screen",
+      label: "Toggle screen lock",
+      description: "Block touch input to prevent accidental interaction",
+      icon: Lock,
+      category: "display",
+      action: () => {
+        const locked = layout.toggleScreenLock();
+        if (locked) {
+          toast.info("Screen locked", { description: "Open command menu to unlock" });
+        } else {
+          toast.success("Screen unlocked");
+        }
+      },
+    },
 
     // Layout
     {
@@ -102,6 +129,7 @@ export function buildCommands(layout: LayoutActions): Command[] {
     {
       id: "map-go-to-location",
       label: "Search for a location",
+      description: "Fly to an address or place",
       icon: MapPin,
       category: "map",
       action: () => {},
@@ -285,6 +313,16 @@ export function buildCommands(layout: LayoutActions): Command[] {
       action: () => useSelectionStore.getState().toggleFollow(),
     },
 
+    // Sharing
+    {
+      id: "sharing-copy-link",
+      label: "Copy share link",
+      description: "Link with current layout, layers and filters",
+      icon: Link2,
+      category: "sharing",
+      action: () => layout.shareView(),
+    },
+
     // World
     {
       id: "world-reset",
@@ -295,10 +333,41 @@ export function buildCommands(layout: LayoutActions): Command[] {
       holdToConfirm: true,
       action: () => {
         resetWorld()
-          .then(() => toast("All world data cleared"))
+          .then(() => toast.success("All world data cleared"))
           .catch(() => toast.error("World reset failed, check connection"));
       },
     },
   ];
+
+  const pending = useMissionKitStore.getState().pendingLayout;
+  if (pending) {
+    for (const preset of PRESETS) {
+      commands.push({
+        id: `save-shared-view-${preset.id}`,
+        label: `Save to ${preset.name}`,
+        icon: Save,
+        category: "save-shared-view",
+        action: () => {
+          const p = useMissionKitStore.getState().pendingLayout;
+          if (!p) return;
+          useMissionKitStore
+            .getState()
+            .save(preset.id, preset.name, p.tree)
+            .then(() => {
+              layout.saveCustomTree(preset.id, p.tree);
+              layout.presetSelect(preset.id);
+              if (preset.id !== p.presetId) {
+                layout.clearCustomTree(p.presetId);
+              }
+              useMissionKitStore.getState().clearPendingLayout();
+              toast.dismiss("shared-layout");
+              toast.success(`Layout saved to ${preset.name}`);
+            })
+            .catch(() => toast.error("Failed to save layout"));
+        },
+      });
+    }
+  }
+
   return commands;
 }

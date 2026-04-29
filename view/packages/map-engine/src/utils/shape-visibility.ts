@@ -2,6 +2,8 @@ import type { Affiliation, EntityData, EntityFilter } from "../types";
 
 export type ShapeVisibilityContext = {
   coverageShapeIds: Set<string>;
+  assemblyOutlineIds: Set<string>;
+  expandedAssemblyOutlineIds: Set<string>;
   filter: EntityFilter;
   selectedId: string | null;
   selectedTrackShapeIds: Set<string>;
@@ -17,6 +19,7 @@ export function isShapeVisible(
   ctx: ShapeVisibilityContext,
 ): boolean {
   if (ctx.coverageShapeIds.has(shapeId)) return false;
+  if (ctx.assemblyOutlineIds.has(shapeId)) return ctx.expandedAssemblyOutlineIds.has(shapeId);
   if (!ctx.filter.tracks[affiliation]) return false;
   if (shapeId === ctx.selectedId) return true;
 

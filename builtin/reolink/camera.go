@@ -170,10 +170,6 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 		Id:      entity.Id,
 		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 		Camera:  camComp,
-		Geo: &pb.GeoSpatialComponent{
-			Latitude:  cfg.Latitude,
-			Longitude: cfg.Longitude,
-		},
 		Symbol: &pb.SymbolComponent{
 			MilStd2525C: "SFGPE-----",
 		},
@@ -207,7 +203,8 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 
 		elev := initEl
 		if err := controller.Push(ctx, &pb.Entity{
-			Id: focalPointID,
+			Id:      focalPointID,
+			Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 			Pose: &pb.PoseComponent{
 				Parent: entity.Id,
 				Offset: &pb.PoseComponent_Polar{

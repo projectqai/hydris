@@ -21,7 +21,9 @@ export function MiddleTruncateText({ text, tailLength = 10, className }: MiddleT
       <Text numberOfLines={1} className={cn("shrink", className)}>
         {head}
       </Text>
-      <Text className={className}>{tail}</Text>
+      <Text numberOfLines={1} className={cn("shrink-0", className)}>
+        {tail}
+      </Text>
     </View>
   );
 }

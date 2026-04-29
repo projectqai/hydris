@@ -23,6 +23,7 @@ export type SensorWidgetData = {
   connectionState: ConnectionState;
   signalStrength?: SignalStrength;
   isLocked?: boolean;
+  isSilent?: boolean;
   isInitializing?: boolean;
   timestamp?: string;
 };

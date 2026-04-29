@@ -1,6 +1,7 @@
 import { InfoRow } from "@hydris/ui/info-row";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { usePanelContext } from "@hydris/ui/panels";
+import { MetricUnit } from "@projectqai/proto/metrics";
 import type { Entity } from "@projectqai/proto/world";
 import * as Clipboard from "expo-clipboard";
 import {
@@ -22,10 +23,10 @@ import {
 import { useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { runOnJS, useAnimatedReaction } from "react-native-reanimated";
-import { toast } from "sonner-native";
 import { useShallow } from "zustand/react/shallow";
 
 import { formatAltitude, formatTime } from "../../../../lib/api/use-track-utils";
+import { toast } from "../../../../lib/sonner";
 import { useCameraPaneContext } from "../../camera-pane-context";
 import { usePIPContext } from "../../pip-context";
 import { useEntityStore } from "../../store/entity-store";
@@ -40,11 +41,18 @@ import {
   formatVerticalRate,
   hasAngularVelocity,
 } from "../../utils/format-kinematics";
-import { getSharedTimestamp } from "../../utils/format-metrics";
-import { MetricsSection } from "../configuration-modal/metrics-section";
+import {
+  formatMetricValue,
+  getMetricLabel,
+  getMetricValue,
+  getMetricVisual,
+  groupMetricsByCategory,
+} from "../../utils/format-metrics";
 import { resolveStreamUrl } from "../video-stream/resolve-stream-url";
 import { VideoStream } from "../video-stream/video-stream";
 import { EntityLinkRow } from "./entity-link-row";
+
+const EMPTY_METRICS: never[] = [];
 
 type OverviewTabProps = {
   entity: Entity;
@@ -52,7 +60,7 @@ type OverviewTabProps = {
 
 function formatCoordinate(value: number, type: "lat" | "lon") {
   const direction = type === "lat" ? (value >= 0 ? "N" : "S") : value >= 0 ? "E" : "W";
-  return `${Math.abs(value).toFixed(6)}° ${direction}`;
+  return `${Math.abs(value).toFixed(4)}° ${direction}`;
 }
 
 type PositionEditorProps = {
@@ -181,10 +189,12 @@ function PositionEditor({ entity }: PositionEditorProps) {
   }
   */
 
+  const coordString = `${formatCoordinate(entity.geo.latitude, "lat")}, ${formatCoordinate(entity.geo.longitude, "lon")}`;
+
   const copyAllCoords = async () => {
-    const coords = `${entity.geo!.latitude}, ${entity.geo!.longitude}, ${entity.geo!.altitude}`;
+    const coords = `${entity.geo!.latitude.toFixed(6)}, ${entity.geo!.longitude.toFixed(6)}${entity.geo!.altitude != null ? `, ${Math.round(entity.geo!.altitude)}` : ""}`;
     await Clipboard.setStringAsync(coords);
-    toast("Copied to clipboard");
+    toast.success("Copied to clipboard");
   };
 
   return (
@@ -203,17 +213,8 @@ function PositionEditor({ entity }: PositionEditorProps) {
           <Copy size={12} color={t.iconMuted} strokeWidth={2} />
         </Pressable>
       </View>
-      <InfoRow
-        icon={MapPin}
-        label="Latitude"
-        value={formatCoordinate(entity.geo.latitude, "lat")}
-      />
-      <InfoRow
-        icon={MapPin}
-        label="Longitude"
-        value={formatCoordinate(entity.geo.longitude, "lon")}
-      />
-      <InfoRow icon={Mountain} label="Altitude" value={formatAltitude(entity.geo.altitude)} />
+      <InfoRow icon={MapPin} label="Coordinates" value={coordString} mono />
+      <InfoRow icon={Mountain} label="Altitude" value={formatAltitude(entity.geo.altitude)} mono />
       {/* Edit position functionality disabled can't edit track positions
       <Pressable
         onPress={startEditing}
@@ -277,21 +278,28 @@ function KinematicsSection({ entity }: { entity: Entity }) {
         <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
           Velocity
         </Text>
-        <InfoRow icon={Zap} label="Ground Speed" value={formatSpeed(groundSpeed)} />
+        <InfoRow icon={Zap} label="Ground Speed" value={formatSpeed(groundSpeed)} mono />
         {verticalRate !== undefined && (
           <InfoRow
             icon={verticalRate >= 0 ? ArrowUp : ArrowDown}
             label="Vertical Rate"
             value={formatVerticalRate(verticalRate)}
+            mono
           />
         )}
         <InfoRow
           icon={Compass}
           label="Course"
           value={formatCourse(courseFromBearing ?? courseFromVelocity)}
+          mono
         />
         {courseFromBearing !== undefined && courseFromVelocity !== undefined && (
-          <InfoRow icon={Gauge} label="Track (velocity)" value={formatCourse(courseFromVelocity)} />
+          <InfoRow
+            icon={Gauge}
+            label="Track (velocity)"
+            value={formatCourse(courseFromVelocity)}
+            mono
+          />
         )}
       </View>
 
@@ -300,9 +308,9 @@ function KinematicsSection({ entity }: { entity: Entity }) {
           <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
             Velocity ENU
           </Text>
-          <InfoRow label="East" value={`${velocityEnu.east?.toFixed(2) ?? "—"} m/s`} />
-          <InfoRow label="North" value={`${velocityEnu.north?.toFixed(2) ?? "—"} m/s`} />
-          <InfoRow label="Up" value={`${velocityEnu.up?.toFixed(2) ?? "—"} m/s`} />
+          <InfoRow label="East" value={`${velocityEnu.east?.toFixed(2) ?? "—"} m/s`} mono />
+          <InfoRow label="North" value={`${velocityEnu.north?.toFixed(2) ?? "—"} m/s`} mono />
+          <InfoRow label="Up" value={`${velocityEnu.up?.toFixed(2) ?? "—"} m/s`} mono />
         </View>
       )}
 
@@ -315,10 +323,11 @@ function KinematicsSection({ entity }: { entity: Entity }) {
             icon={TrendingUp}
             label="Magnitude"
             value={formatAcceleration(accelerationEnu)}
+            mono
           />
-          <InfoRow label="East" value={`${accelerationEnu.east?.toFixed(2) ?? "—"} m/s²`} />
-          <InfoRow label="North" value={`${accelerationEnu.north?.toFixed(2) ?? "—"} m/s²`} />
-          <InfoRow label="Up" value={`${accelerationEnu.up?.toFixed(2) ?? "—"} m/s²`} />
+          <InfoRow label="East" value={`${accelerationEnu.east?.toFixed(2) ?? "—"} m/s²`} mono />
+          <InfoRow label="North" value={`${accelerationEnu.north?.toFixed(2) ?? "—"} m/s²`} mono />
+          <InfoRow label="Up" value={`${accelerationEnu.up?.toFixed(2) ?? "—"} m/s²`} mono />
         </View>
       )}
 
@@ -331,9 +340,10 @@ function KinematicsSection({ entity }: { entity: Entity }) {
             icon={RotateCw}
             label="Roll"
             value={formatAngularRate(angularVelocity.rollRate)}
+            mono
           />
-          <InfoRow label="Pitch" value={formatAngularRate(angularVelocity.pitchRate)} />
-          <InfoRow label="Yaw" value={formatAngularRate(angularVelocity.yawRate)} />
+          <InfoRow label="Pitch" value={formatAngularRate(angularVelocity.pitchRate)} mono />
+          <InfoRow label="Yaw" value={formatAngularRate(angularVelocity.yawRate)} mono />
         </View>
       )}
     </>
@@ -346,7 +356,9 @@ export function OverviewTab({ entity }: OverviewTabProps) {
   const cameraPaneContext = useCameraPaneContext();
   const { rightPanelCollapsed } = usePanelContext();
   const [isPanelExpanded, setIsPanelExpanded] = useState(true);
-  const metrics = entity.metric?.metrics ?? [];
+  const liveMetrics = useEntityStore(
+    (s) => s.entities.get(entity.id)?.metric?.metrics ?? EMPTY_METRICS,
+  );
   const sensorDetections = useEntityStore(
     useShallow((s) => {
       const result: Entity[] = [];
@@ -420,14 +432,44 @@ export function OverviewTab({ entity }: OverviewTabProps) {
           </View>
         )}
 
-        {metrics.length > 0 && (
-          <View className="border-foreground/10 border-t">
-            <MetricsSection
-              entity={entity}
-              sharedTimestamp={getSharedTimestamp(metrics, { strict: false })}
-            />
-          </View>
-        )}
+        {liveMetrics.length > 0 &&
+          groupMetricsByCategory(liveMetrics).map((group) => (
+            <View key={group.category} className="border-foreground/10 border-t px-3 pt-3 pb-2">
+              <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
+                {group.label}
+              </Text>
+              {group.metrics.map((metric, i) => {
+                if (getMetricVisual(metric) === "gauge") {
+                  let value = getMetricValue(metric);
+                  if (metric.unit === MetricUnit.MetricUnitRatio) value *= 100;
+                  const pct = Math.max(0, Math.min(100, value));
+                  return (
+                    <View key={metric.id ?? i}>
+                      <InfoRow
+                        label={getMetricLabel(metric)}
+                        value={formatMetricValue(metric)}
+                        mono
+                      />
+                      <View className="bg-foreground/20 h-1 overflow-hidden rounded-full">
+                        <View
+                          className="bg-foreground/70 h-1 rounded-full"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </View>
+                    </View>
+                  );
+                }
+                return (
+                  <InfoRow
+                    key={metric.id ?? i}
+                    label={getMetricLabel(metric)}
+                    value={formatMetricValue(metric)}
+                    mono
+                  />
+                );
+              })}
+            </View>
+          ))}
 
         {entity.camera && entity.camera.streams.length > 0 && (
           <View className="border-foreground/10 border-t px-3 pt-3 pb-2">

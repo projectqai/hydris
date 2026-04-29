@@ -13,14 +13,12 @@ type serviceConfig struct {
 }
 
 type cameraConfig struct {
-	Username  string
-	Password  string
-	FOV       float64
-	RangeMin  float64
-	RangeMax  float64
-	Heading   float64
-	Latitude  float64
-	Longitude float64
+	Username string
+	Password string
+	FOV      float64
+	RangeMin float64
+	RangeMax float64
+	Heading  float64
 }
 
 func serviceSchema() *structpb.Struct {
@@ -109,22 +107,6 @@ func cameraSchema() *structpb.Struct {
 				"maximum":     360,
 				"ui:order":    5,
 			},
-			"latitude": map[string]any{
-				"type":        "number",
-				"title":       "Latitude",
-				"description": "Camera latitude",
-				"minimum":     -90,
-				"maximum":     90,
-				"ui:order":    6,
-			},
-			"longitude": map[string]any{
-				"type":        "number",
-				"title":       "Longitude",
-				"description": "Camera longitude",
-				"minimum":     -180,
-				"maximum":     180,
-				"ui:order":    7,
-			},
 		},
 	})
 	return s
@@ -177,12 +159,6 @@ func parseCameraConfig(entity *pb.Entity, defaults serviceConfig) cameraConfig {
 	}
 	if v, ok := f["heading"]; ok {
 		cfg.Heading = v.GetNumberValue()
-	}
-	if v, ok := f["latitude"]; ok {
-		cfg.Latitude = v.GetNumberValue()
-	}
-	if v, ok := f["longitude"]; ok {
-		cfg.Longitude = v.GetNumberValue()
 	}
 	return cfg
 }

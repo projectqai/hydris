@@ -165,6 +165,10 @@ func darwinBLEWatch(serviceUUIDs []string, cb func([]BLEDevice)) (stop func()) {
 		cb(devices)
 	})
 	handle := cHalBleWatch(goCb)
+	if handle == 0 {
+		slog.Error("failed to start BLE scanning — adapter not available")
+		return func() {}
+	}
 	return func() { cHalStopWatch(handle) }
 }
 

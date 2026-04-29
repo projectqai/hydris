@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/projectqai/hydris/builtin"
@@ -100,6 +101,8 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		if enableBLE {
 			logger.Info("bluetooth discovery enabled")
 			stop := hal.WatchBLE(nil, func(devices []hal.BLEDevice) {
+				bleScanTicks.Add(1)
+				bleDevices.Store(uint64(len(devices)))
 				pushBLEEntities(ctx, logger, worldClient, devices)
 			})
 			defer stop()
@@ -123,7 +126,11 @@ func sanitizeID(s string) string {
 	return s
 }
 
-var serialKnown = make(map[string]struct{})
+var (
+	serialKnown  = make(map[string]struct{})
+	bleScanTicks atomic.Uint64
+	bleDevices   atomic.Uint64
+)
 
 func pushSerialEntities(ctx context.Context, logger *slog.Logger,
 	client worldpb.WorldServiceClient, ports []hal.SerialPort,
@@ -233,23 +240,38 @@ func pollSensors(ctx context.Context, logger *slog.Logger, client worldpb.WorldS
 }
 
 func pushSensorMetrics(ctx context.Context, logger *slog.Logger, client worldpb.WorldServiceClient) {
-	readings := hal.ReadSensors()
-	if len(readings) == 0 {
-		return
-	}
-
 	now := timestamppb.Now()
-	metrics := make([]*worldpb.Metric, len(readings))
-	for i, r := range readings {
-		metrics[i] = &worldpb.Metric{
+
+	var metrics []*worldpb.Metric
+	for _, r := range hal.ReadSensors() {
+		metrics = append(metrics, &worldpb.Metric{
 			Id:         proto.Uint32(r.ID),
 			Label:      proto.String(r.Label),
 			Kind:       worldpb.MetricKind(r.Kind).Enum(),
 			Unit:       worldpb.MetricUnit(r.Unit),
 			MeasuredAt: now,
 			Val:        &worldpb.Metric_Double{Double: r.Value},
-		}
+		})
 	}
+
+	metrics = append(metrics,
+		&worldpb.Metric{
+			Id:         proto.Uint32(100),
+			Label:      proto.String("BLE scan ticks"),
+			Kind:       worldpb.MetricKind_MetricKindCount.Enum(),
+			Unit:       worldpb.MetricUnit_MetricUnitCount,
+			MeasuredAt: now,
+			Val:        &worldpb.Metric_Uint64{Uint64: bleScanTicks.Load()},
+		},
+		&worldpb.Metric{
+			Id:         proto.Uint32(101),
+			Label:      proto.String("BLE devices"),
+			Kind:       worldpb.MetricKind_MetricKindCount.Enum(),
+			Unit:       worldpb.MetricUnit_MetricUnitCount,
+			MeasuredAt: now,
+			Val:        &worldpb.Metric_Uint64{Uint64: bleDevices.Load()},
+		},
+	)
 
 	if _, err := client.Push(ctx, &worldpb.EntityChangeRequest{
 		Changes: []*worldpb.Entity{{

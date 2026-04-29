@@ -17,11 +17,13 @@ export function CommandGroupView({
   query,
   commands,
   onClose,
+  initialCommandId,
 }: {
   groupId: string;
   query: string;
   commands: Command[];
   onClose: () => void;
+  initialCommandId?: string;
 }) {
   const t = useThemeColors();
   const groupCommands = commands.filter((c) => c.category === groupId);
@@ -46,11 +48,16 @@ export function CommandGroupView({
     onClose();
   };
 
+  const suggestedIndex = initialCommandId
+    ? items.findIndex((item) => item.command.id === initialCommandId)
+    : undefined;
+
   const { highlightedIndex, listRef, setHighlightedEl, handleScroll } = useListNav({
     items,
     onActivate: handleActivate,
     resetKey: `${groupId}:${query}`,
     stateKey: `command-group:${groupId}`,
+    initialIndex: suggestedIndex !== undefined && suggestedIndex >= 0 ? suggestedIndex : undefined,
   });
 
   return (

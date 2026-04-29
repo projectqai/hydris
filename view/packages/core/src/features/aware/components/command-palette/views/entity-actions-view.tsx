@@ -7,9 +7,9 @@ import * as ExpoClipboard from "expo-clipboard";
 import type { LucideIcon } from "lucide-react-native";
 import { ChevronRight, Copy, MapPin, Settings } from "lucide-react-native";
 import { Pressable, Text, View } from "react-native";
-import { toast } from "sonner-native";
 
 import { getEntityName } from "../../../../../lib/api/use-track-utils";
+import { toast } from "../../../../../lib/sonner";
 import { copyShareableLink, getShareableEntityUrl } from "../../../../../lib/use-url-params";
 import { useEntityStore } from "../../../store/entity-store";
 import { useMapEngine } from "../../../store/map-engine-store";
@@ -46,7 +46,7 @@ export function EntityActionsView({
       icon: Copy,
       action: () => {
         ExpoClipboard.setStringAsync(entity.id);
-        toast("Copied ID");
+        toast.success("Copied ID");
       },
     });
 
@@ -56,7 +56,7 @@ export function EntityActionsView({
       icon: Copy,
       action: () => {
         ExpoClipboard.setStringAsync(getEntityName(entity));
-        toast("Copied name");
+        toast.success("Copied name");
       },
     });
 

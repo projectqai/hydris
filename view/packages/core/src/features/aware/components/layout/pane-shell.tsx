@@ -39,6 +39,7 @@ import {
   Z,
 } from "../../constants";
 import { useEntityStore } from "../../store/entity-store";
+import { CameraPanOverlay } from "../video-stream/camera-pan-overlay";
 import { toEmbedUrl } from "../video-stream/embed-providers";
 import { IframeStream } from "../video-stream/iframe-stream";
 import { resolveStreamUrl } from "../video-stream/resolve-stream-url";
@@ -80,7 +81,9 @@ function CameraPane({ entityId }: { entityId: string }) {
 
   return (
     <View className="flex-1 bg-black">
-      <VideoStream url={resolved.url} protocol={resolved.protocol} />
+      <CameraPanOverlay camera={entity}>
+        <VideoStream url={resolved.url} protocol={resolved.protocol} />
+      </CameraPanOverlay>
     </View>
   );
 }

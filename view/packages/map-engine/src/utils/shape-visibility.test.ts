@@ -11,6 +11,8 @@ const ALL_TRACKS_ON: EntityFilter = {
 function makeCtx(overrides?: Partial<ShapeVisibilityContext>): ShapeVisibilityContext {
   return {
     coverageShapeIds: new Set(),
+    assemblyOutlineIds: new Set(),
+    expandedAssemblyOutlineIds: new Set(),
     filter: ALL_TRACKS_ON,
     selectedId: null,
     selectedTrackShapeIds: new Set(),

@@ -22,7 +22,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 
 import { COMPONENT_REGISTRY, PERSIST_DEBOUNCE_MS, PRESETS, STORAGE_KEY } from "../constants";
-import { layoutSnapshotRef } from "./layout-snapshot";
+import { useMissionKitStore } from "../store/mission-kit-store";
+import { layoutResetRef, layoutSnapshotRef } from "./layout-snapshot";
 
 const BASE_COMPONENT_IDS = new Set(Object.keys(COMPONENT_REGISTRY));
 
@@ -46,6 +47,8 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
   const customTreesRef = useRef<Record<string, LayoutNode>>({});
   const layoutTreeRef = useRef(layoutTree);
   layoutTreeRef.current = layoutTree;
+  const activePresetIdRef = useRef(activePresetId);
+  activePresetIdRef.current = activePresetId;
   const structureKeyRef = useRef(getStructureKey(PRESETS[0]!.root));
   const pendingTreeRef = useRef<LayoutNode | null>(null);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -56,6 +59,7 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
   const applyPendingTree = useCallback(() => {
     const tree = pendingTreeRef.current;
     if (!tree) return;
+
     if (externalPendingRef.current) {
       skipPersistRef.current = true;
       externalPendingRef.current = false;
@@ -164,27 +168,33 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
   }, []);
 
   const activePreset = PRESETS.find((p) => p.id === activePresetId);
-  const isLayoutModified = useMemo(
-    () => activePreset && getStructureKey(layoutTree) !== getStructureKey(activePreset.root),
-    [layoutTree, activePreset],
-  );
+  const isLayoutModified = useMemo(() => {
+    if (!activePreset) return false;
+    const missionKit = useMissionKitStore.getState().layouts[activePresetId];
+    const baseline = missionKit?.tree ?? activePreset.root;
+    return getStructureKey(layoutTree) !== getStructureKey(baseline);
+  }, [layoutTree, activePreset, activePresetId]);
 
   const handleResetToPreset = useCallback(() => {
     if (!activePreset) return;
     delete customTreesRef.current[activePresetId];
-    const newTree = cloneTree(activePreset.root);
+    const missionKit = useMissionKitStore.getState().layouts[activePresetId];
+    const base = missionKit ? validateLayoutNode(missionKit.tree, validIds) : null;
+    const newTree = cloneTree(base ?? activePreset.root);
     structureKeyRef.current = getStructureKey(newTree);
     setLayoutTree(newTree);
-  }, [activePreset, activePresetId]);
+  }, [activePreset, activePresetId, validIds]);
 
   const applyExternalLayout = useCallback(
     (presetId: string, tree?: LayoutNode) => {
       const preset = PRESETS.find((p) => p.id === presetId);
+
       if (!preset) return;
       skipPersistRef.current = true;
       setActivePresetId(presetId);
       const newTree = tree ? cloneTree(tree) : cloneTree(preset.root);
       const newKey = getStructureKey(newTree);
+
       if (structureKeyRef.current !== newKey) {
         externalPendingRef.current = true;
         pendingTreeRef.current = newTree;
@@ -200,6 +210,21 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
     [applyPendingTree],
   );
 
+  const saveCustomTree = useCallback(
+    (presetId: string, tree: LayoutNode) => {
+      customTreesRef.current[presetId] = tree;
+      AsyncStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ activePresetId, customTrees: customTreesRef.current }),
+      );
+    },
+    [activePresetId],
+  );
+
+  const clearCustomTree = useCallback((presetId: string) => {
+    delete customTreesRef.current[presetId];
+  }, []);
+
   const clearSwapSource = useCallback(() => setSwapSourceId(null), []);
 
   const totalPanes = useMemo(() => countPanes(layoutTree), [layoutTree]);
@@ -211,6 +236,7 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
       skipPersistRef.current = false;
       return;
     }
+
     if (persistTimerRef.current) clearTimeout(persistTimerRef.current);
     customTreesRef.current[activePresetId] = layoutTree;
     persistTimerRef.current = setTimeout(() => {
@@ -228,7 +254,9 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
     // Skip restore if a layout deep link is pending — useDeepLink will set state
     if (process.env.EXPO_OS === "web" && typeof window !== "undefined") {
       const url = new URL(window.location.href);
-      if (url.searchParams.has("layout")) return;
+      if (url.searchParams.has("layout")) {
+        return;
+      }
     }
 
     AsyncStorage.getItem(STORAGE_KEY)
@@ -260,6 +288,55 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
       .catch(() => {});
   }, []);
 
+  const missionKitAppliedRef = useRef(false);
+
+  useEffect(() => {
+    if (process.env.EXPO_OS === "web" && typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("layout")) return;
+    }
+
+    const apply = (layouts: Record<string, { tree: LayoutNode }>) => {
+      if (missionKitAppliedRef.current || Object.keys(layouts).length === 0) return;
+      missionKitAppliedRef.current = true;
+
+      let updated = false;
+      for (const [presetId, layout] of Object.entries(layouts)) {
+        if (!PRESETS.some((p) => p.id === presetId)) continue;
+        const validated = validateLayoutNode(layout.tree, validIds);
+        if (validated) {
+          customTreesRef.current[presetId] = validated;
+          updated = true;
+        }
+      }
+
+      if (updated) {
+        const tree = customTreesRef.current[activePresetIdRef.current];
+        if (tree) {
+          skipPersistRef.current = true;
+          setLayoutTree(tree);
+          structureKeyRef.current = getStructureKey(tree);
+        }
+      }
+    };
+
+    apply(useMissionKitStore.getState().layouts);
+    const unsub = useMissionKitStore.subscribe((state) => apply(state.layouts));
+    return unsub;
+  }, []);
+
+  layoutResetRef.current = () => {
+    customTreesRef.current = {};
+    missionKitAppliedRef.current = false;
+    skipPersistRef.current = true;
+    const defaultPreset = PRESETS[0]!;
+    setActivePresetId(defaultPreset.id);
+    activePresetIdRef.current = defaultPreset.id;
+    const defaultTree = cloneTree(defaultPreset.root);
+    setLayoutTree(defaultTree);
+    structureKeyRef.current = getStructureKey(defaultTree);
+  };
+
   layoutSnapshotRef.current = {
     activePresetId,
     tree: layoutTree,
@@ -284,5 +361,7 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
     handleRatioChange,
     clearSwapSource,
     applyExternalLayout,
+    saveCustomTree,
+    clearCustomTree,
   };
 }

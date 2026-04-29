@@ -138,11 +138,15 @@ func init() {
 	ECCMD.AddCommand(editCmd)
 	ECCMD.AddCommand(rmCmd)
 	ECCMD.AddCommand(confCmd)
+	var resetMissionID string
 	resetCmd := &cobra.Command{
 		Use:   "reset",
 		Short: "hard reset: atomically clear all entities, persistence, and HTTP connections",
-		RunE:  runReset,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runReset(cmd, args, resetMissionID)
+		},
 	}
+	resetCmd.Flags().StringVar(&resetMissionID, "mission", "", "artifact entity ID to keep as the active mission")
 
 	ECCMD.AddCommand(clearCmd)
 	ECCMD.AddCommand(dtCmd)
@@ -953,12 +957,20 @@ func runClear(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runReset(cmd *cobra.Command, args []string) error {
+func runReset(cmd *cobra.Command, args []string, missionID string) error {
 	client := pb.NewWorldServiceClient(conn)
-	_, err := client.HardReset(context.Background(), &pb.HardResetRequest{})
+	req := &pb.HardResetRequest{}
+	if missionID != "" {
+		req.MissionId = &missionID
+	}
+	_, err := client.HardReset(context.Background(), req)
 	if err != nil {
 		return fmt.Errorf("hard reset failed: %w", err)
 	}
-	fmt.Println("Hard reset complete")
+	if missionID != "" {
+		fmt.Printf("Hard reset complete (mission: %s)\n", missionID)
+	} else {
+		fmt.Println("Hard reset complete")
+	}
 	return nil
 }

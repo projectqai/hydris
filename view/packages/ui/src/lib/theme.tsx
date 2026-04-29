@@ -118,6 +118,9 @@ type ThemeColorValues = {
   customizeAccent: string;
   customizeAccentSubtle: string;
   customizeSwapBorder: string;
+  placementAccent: string;
+  placementAccentSubtle: string;
+  topBarPlacementBg: string;
   controlShadow: {
     color: string;
     offset: number;
@@ -187,6 +190,9 @@ const THEME_COLORS: Record<"dark" | "light", ThemeColorValues> = {
     customizeAccent: "rgb(245, 158, 11)",
     customizeAccentSubtle: "rgba(245, 158, 11, 0.25)",
     customizeSwapBorder: "rgb(245, 158, 11)",
+    placementAccent: "rgb(16, 185, 129)",
+    placementAccentSubtle: "rgba(16, 185, 129, 0.25)",
+    topBarPlacementBg: "rgb(8, 32, 26)",
     controlShadow: { color: "#000", offset: 1, opacity: 0.3, radius: 3 },
     gradients: DARK_GRADIENTS,
   },
@@ -244,6 +250,9 @@ const THEME_COLORS: Record<"dark" | "light", ThemeColorValues> = {
     customizeAccent: "rgb(245, 158, 11)",
     customizeAccentSubtle: "rgba(245, 158, 11, 0.25)",
     customizeSwapBorder: "rgb(245, 158, 11)",
+    placementAccent: "rgb(5, 150, 105)",
+    placementAccentSubtle: "rgba(5, 150, 105, 0.25)",
+    topBarPlacementBg: "rgb(200, 232, 222)",
     controlShadow: { color: "#000", offset: 1, opacity: 0.15, radius: 4 },
     gradients: LIGHT_GRADIENTS,
   },

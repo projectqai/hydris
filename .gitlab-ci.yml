@@ -1,16 +1,13 @@
 stages:
+  - image
   - build
   - package
 
 variables:
-  GO_VERSION: "1.26.2"
-  PROTOC_VERSION: "28.3"
+  RUNNER_IMAGE: ${CI_REGISTRY_IMAGE}/runner:latest
   GOPATH: ${CI_PROJECT_DIR}/.cache/go
   GOMODCACHE: ${CI_PROJECT_DIR}/.cache/go/pkg/mod
   BUN_INSTALL: ${CI_PROJECT_DIR}/.cache/bun
-  CARGO_HOME: ${CI_PROJECT_DIR}/.cache/cargo
-  ANDROID_SDK_ROOT: ${CI_PROJECT_DIR}/.cache/android-sdk
-  ANDROID_HOME: ${CI_PROJECT_DIR}/.cache/android-sdk
 
 .go-cache:
   cache:
@@ -30,45 +27,41 @@ variables:
         - .cache/bun/
       policy: pull-push
 
-.cargo-cache:
-  cache:
-    - key: cargo-${CI_PROJECT_ID}
-      paths:
-        - .cache/cargo/
-      policy: pull-push
-
-.android-cache:
-  cache:
-    - key: android-sdk-${CI_PROJECT_ID}
-      paths:
-        - .cache/android-sdk/
-      policy: pull-push
-
 .base-setup: &base-setup
-  - apt-get update && apt-get install -y wget unzip curl sudo git rsync make xz-utils zip ca-certificates build-essential libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev pkg-config mingw-w64 openjdk-17-jdk
-  - wget -q https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz
-  - sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz
   - export PATH=$PATH:/usr/local/go/bin:${GOPATH}/bin
-  - wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip
-  - sudo unzip -o protoc-${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
-  - sudo chmod +x /usr/local/bin/protoc
   - make install-tools
-  - |
-    if ! which node >/dev/null 2>&1; then
-      curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-      sudo apt-get install -y nodejs
-    fi
   - |
     if [ ! -f "${BUN_INSTALL}/bin/bun" ]; then
       curl -fsSL https://bun.sh/install | bash
     fi
   - export PATH=$PATH:${BUN_INSTALL}/bin
 
+runner-image:
+  stage: image
+  tags:
+    - saas-linux-2xlarge-amd64
+  image: docker:24
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build --network=host -t $RUNNER_IMAGE -f .gitlab/runner.Dockerfile .
+    - docker push $RUNNER_IMAGE
+  rules:
+    - changes:
+        - .gitlab/runner.Dockerfile
+    - if: $BUILD_RUNNER_IMAGE
+
 vet:
   stage: build
   tags:
     - saas-linux-2xlarge-amd64
-  image: ubuntu:22.04
+  image: ${RUNNER_IMAGE}
   extends:
     - .go-cache
   before_script:
@@ -85,7 +78,7 @@ deeptest:
   stage: build
   tags:
     - saas-linux-2xlarge-amd64
-  image: ubuntu:22.04
+  image: ${RUNNER_IMAGE}
   extends:
     - .go-cache
   before_script:
@@ -100,7 +93,7 @@ cli:
   stage: build
   tags:
     - saas-linux-2xlarge-amd64
-  image: ubuntu:22.04
+  image: ${RUNNER_IMAGE}
   extends:
     - .go-cache
     - .bun-cache
@@ -121,19 +114,12 @@ desktop:
   stage: build
   tags:
     - saas-linux-2xlarge-amd64
-  image: ubuntu:22.04
+  image: ${RUNNER_IMAGE}
   extends:
     - .go-cache
     - .bun-cache
-    - .cargo-cache
   before_script:
     - *base-setup
-    - |
-      if ! which rustc >/dev/null 2>&1 || [ ! -d "${CARGO_HOME}" ]; then
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-      fi
-    - export PATH=$PATH:${CARGO_HOME}/bin
-    - which rcodesign || cargo install apple-codesign
   script:
     - make frontend
     - make desktop
@@ -149,29 +135,14 @@ android:
   stage: build
   tags:
     - saas-linux-2xlarge-amd64
-  image: ubuntu:22.04
+  image: ${RUNNER_IMAGE}
   extends:
     - .go-cache
     - .bun-cache
-    - .android-cache
   variables:
     GRADLE_OPTS: '-Dorg.gradle.jvmargs=-Xmx4g'
   before_script:
     - *base-setup
-    - |
-      if [ ! -f "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
-        mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
-        wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
-        unzip -q cmdline-tools.zip -d $ANDROID_SDK_ROOT/cmdline-tools
-        mv $ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools $ANDROID_SDK_ROOT/cmdline-tools/latest
-      fi
-    - export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools
-    - |
-      if [ ! -d "$ANDROID_SDK_ROOT/ndk/26.1.10909125" ]; then
-        yes | sdkmanager --licenses || true
-        sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
-      fi
-    - export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125
   script:
     - make frontend
     - make android

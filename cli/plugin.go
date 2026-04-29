@@ -13,8 +13,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/evanw/esbuild/pkg/api"
+	"github.com/fsnotify/fsnotify"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
@@ -128,7 +130,10 @@ var pluginBuildCmd = &cobra.Command{
 
 // --- plugin run ---
 
-var pluginRunServer string
+var (
+	pluginRunServer string
+	pluginRunWatch  bool
+)
 
 var pluginRunCmd = &cobra.Command{
 	Use:   "run <file.ts|file.js>",
@@ -138,6 +143,9 @@ var pluginRunCmd = &cobra.Command{
 		input, err := filepath.Abs(args[0])
 		if err != nil {
 			return err
+		}
+		if pluginRunWatch {
+			return watchAndRun(cmd.Context(), input, pluginRunServer)
 		}
 		return runPluginDev(cmd.Context(), input, pluginRunServer)
 	},
@@ -227,10 +235,82 @@ func runPluginDev(ctx context.Context, input, server string) error {
 	return fmt.Errorf("disconnected")
 }
 
+func watchAndRun(ctx context.Context, input, server string) error {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("fsnotify: %w", err)
+	}
+	defer watcher.Close() //nolint:errcheck
+
+	dir := filepath.Dir(input)
+	if err := watcher.Add(dir); err != nil {
+		return fmt.Errorf("watch %s: %w", dir, err)
+	}
+
+	var (
+		runCtx    context.Context
+		runCancel context.CancelFunc
+		runDone   chan struct{}
+	)
+
+	start := func() {
+		runCtx, runCancel = context.WithCancel(ctx)
+		runDone = make(chan struct{})
+		go func() {
+			defer close(runDone)
+			if err := runPluginDev(runCtx, input, server); err != nil && runCtx.Err() == nil {
+				slog.Error("plugin exited", "error", err)
+			}
+		}()
+	}
+
+	stop := func() {
+		if runCancel != nil {
+			runCancel()
+			<-runDone
+			runCancel = nil
+		}
+	}
+
+	start()
+
+	var debounce *time.Timer
+	for {
+		select {
+		case ev, ok := <-watcher.Events:
+			if !ok {
+				stop()
+				return nil
+			}
+			if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
+				continue
+			}
+			if debounce != nil {
+				debounce.Stop()
+			}
+			debounce = time.AfterFunc(200*time.Millisecond, func() {
+				slog.Info("change detected, rebuilding", "file", ev.Name)
+				stop()
+				start()
+			})
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				stop()
+				return nil
+			}
+			slog.Error("watcher error", "error", err)
+		case <-ctx.Done():
+			stop()
+			return ctx.Err()
+		}
+	}
+}
+
 func init() {
 	pluginBuildCmd.Flags().StringVarP(&pluginBuildTag, "tag", "t", "", "image tag (default: <name>:<version> from package.json)")
 
 	pluginRunCmd.Flags().StringVar(&pluginRunServer, "server", "localhost:50051", "engine address")
+	pluginRunCmd.Flags().BoolVar(&pluginRunWatch, "watch", false, "watch source directory, rebuild and re-upload on changes")
 
 	pluginCmd.AddCommand(pluginBuildCmd)
 	pluginCmd.AddCommand(pluginRunCmd)

@@ -106,7 +106,6 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
 
     const symbol = new ms.Symbol(sidc, { size: actualSize });
     const { width, height } = symbol.getSize();
-    const anchor = symbol.getAnchor();
 
     if (currentX + width + PADDING > ATLAS_SIZE) {
       currentX = 0;
@@ -125,8 +124,8 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
         dataUrl: svgToDataUri(symbol.asSVG()),
         width,
         height,
-        anchorX: anchor.x,
-        anchorY: anchor.y,
+        anchorX: width / 2,
+        anchorY: height / 2,
       });
 
       return key;
@@ -139,8 +138,8 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
       y: currentY,
       width,
       height,
-      anchorX: anchor.x,
-      anchorY: anchor.y,
+      anchorX: width / 2,
+      anchorY: height / 2,
     };
 
     mapping.set(key, entry);
@@ -175,7 +174,6 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
 
       const symbol = new ms.Symbol(sidc, { size: actualSize });
       const { width, height } = symbol.getSize();
-      const anchor = symbol.getAnchor();
 
       if (currentX + width + PADDING > ATLAS_SIZE) {
         currentX = 0;
@@ -192,8 +190,8 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
           dataUrl: svgToDataUri(symbol.asSVG()),
           width,
           height,
-          anchorX: anchor.x,
-          anchorY: anchor.y,
+          anchorX: width / 2,
+          anchorY: height / 2,
         });
 
         continue;
@@ -206,8 +204,8 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
         y: currentY,
         width,
         height,
-        anchorX: anchor.x,
-        anchorY: anchor.y,
+        anchorX: width / 2,
+        anchorY: height / 2,
       };
 
       mapping.set(key, entry);

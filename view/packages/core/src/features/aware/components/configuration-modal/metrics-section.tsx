@@ -6,7 +6,17 @@ import type { Metric } from "@projectqai/proto/metrics";
 import { MetricUnit } from "@projectqai/proto/metrics";
 import type { Entity } from "@projectqai/proto/world";
 import type { LucideIcon } from "lucide-react-native";
-import { BarChart3, Box, Cloud, Move3d, ShieldAlert, Wifi, Wind, Zap } from "lucide-react-native";
+import {
+  BarChart3,
+  Box,
+  Cloud,
+  HeartPulse,
+  Move3d,
+  ShieldAlert,
+  Wifi,
+  Wind,
+  Zap,
+} from "lucide-react-native";
 import { Text, View } from "react-native";
 
 import { useEntityStore } from "../../store/entity-store";
@@ -28,6 +38,7 @@ const CATEGORY_ICONS: Record<MetricCategory, LucideIcon> = {
   network: Wifi,
   airQuality: Wind,
   cbrn: ShieldAlert,
+  vital: HeartPulse,
   general: Box,
 };
 
@@ -45,13 +56,7 @@ export function MetricsSection({
   if (metrics.length === 0) {
     return (
       <View className="items-center justify-center gap-2 px-4 py-8">
-        <BarChart3
-          size={24}
-          strokeWidth={1.5}
-          color={t.iconMuted}
-          accessibilityElementsHidden
-          importantForAccessibility="no"
-        />
+        <BarChart3 size={24} strokeWidth={1.5} color={t.iconMuted} />
         <Text className="text-muted-foreground font-sans text-sm">No metrics available</Text>
       </View>
     );
@@ -117,13 +122,7 @@ function SectionHeader({
         !first && "border-foreground/10 border-t",
       )}
     >
-      <Icon
-        size={12}
-        strokeWidth={2}
-        color={t.iconSubtle}
-        accessibilityElementsHidden
-        importantForAccessibility="no"
-      />
+      <Icon size={12} strokeWidth={2} color={t.iconSubtle} />
       <Text className="text-foreground/75 text-11 font-mono tracking-widest uppercase">
         {label}
       </Text>

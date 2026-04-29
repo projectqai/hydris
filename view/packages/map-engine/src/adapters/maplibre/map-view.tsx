@@ -33,6 +33,7 @@ import { shapeToFeatures } from "../../utils/shape-to-geojson";
 import { isShapeVisible, type ShapeVisibilityContext } from "../../utils/shape-visibility";
 
 const SECTOR_MIN_ZOOM = 12;
+const OVERLAP_ZOOM_TOLERANCE = 2;
 
 // Copied from maplibre's ScaleControl so ring gaps match the scale bar exactly
 function getDecimalRoundNum(d: number): number {
@@ -68,7 +69,17 @@ type DeckGLOverlayProps = {
 
 function DeckGLOverlay({ layers, pickingRadius, onClick, onHover }: DeckGLOverlayProps) {
   const overlay = useControl(
-    () => new MapboxOverlay({ layers, pickingRadius, onClick, onHover, useDevicePixels: 2 }),
+    () =>
+      new MapboxOverlay({
+        layers,
+        pickingRadius,
+        onClick,
+        onHover,
+        useDevicePixels: 2,
+        // luma.gl auto-enables WebGL debug mode when NODE_ENV !== "production",
+        // which wraps every GL call and tanks pan/zoom perf. Force it off.
+        deviceProps: { debug: false },
+      }),
   );
   overlay.setProps({ layers, pickingRadius, onClick, onHover });
   return null;
@@ -217,6 +228,10 @@ export function MapView({
   const dragTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLayerClickTimeRef = useRef(0);
   const isAnimatingRef = useRef(false);
+  const [overlapOffsets, setOverlapOffsets] = useState<Map<string, [number, number]> | null>(null);
+  const [expandedAssemblies, setExpandedAssemblies] = useState<Set<string> | null>(null);
+  const overlapActivationZoomRef = useRef<number | null>(null);
+  const assemblyMinZoomRef = useRef<number | null>(null);
 
   useEffect(() => {
     document.fonts.load("16px Inter").then(() => setFontLoaded(true));
@@ -330,6 +345,15 @@ export function MapView({
 
   const handleEntityClick = async (id: string) => {
     lastLayerClickTimeRef.current = Date.now();
+    if (expandedAssemblies && expandedAssemblies.size > 0) {
+      const parentId = entityMap.get(id)?.assemblyParentId;
+      const isInsideAssembly =
+        expandedAssemblies.has(id) || (parentId != null && expandedAssemblies.has(parentId));
+      if (!isInsideAssembly) {
+        setExpandedAssemblies(null);
+        assemblyMinZoomRef.current = null;
+      }
+    }
     await onEntityClickRef.current?.(id);
   };
 
@@ -341,11 +365,60 @@ export function MapView({
   ) => {
     lastLayerClickTimeRef.current = Date.now();
     isAnimatingRef.current = true;
+    if (expandedAssemblies) {
+      setExpandedAssemblies(null);
+      assemblyMinZoomRef.current = null;
+    }
     mapRef.current?.flyTo({
       center: [lng, lat],
       zoom: Math.min(expansionZoom + 1, 20),
       speed: 1.2,
     });
+  };
+
+  const handleAssemblyExpand = (rootId: string) => {
+    const root = entityMap.get(rootId);
+    if (!root) return;
+
+    let minLat = root.position.lat;
+    let maxLat = root.position.lat;
+    let minLng = root.position.lng;
+    let maxLng = root.position.lng;
+    for (const e of entityMap.values()) {
+      if (e.assemblyParentId === rootId) {
+        minLat = Math.min(minLat, e.position.lat);
+        maxLat = Math.max(maxLat, e.position.lat);
+        minLng = Math.min(minLng, e.position.lng);
+        maxLng = Math.max(maxLng, e.position.lng);
+      }
+    }
+
+    // Only auto-zoom when children are geographically spread (~11m+).
+    // Colocated children (e.g. sensors on a person) use pixel-offset spread instead.
+    const isSpread = maxLat - minLat > 0.0001 || maxLng - minLng > 0.0001;
+
+    if (isSpread) {
+      const map = mapRef.current;
+      if (map) {
+        const cam = map.cameraForBounds(
+          [
+            [minLng, minLat],
+            [maxLng, maxLat],
+          ],
+          { padding: 120 },
+        );
+        if (cam?.zoom != null) {
+          assemblyMinZoomRef.current = Math.floor(cam.zoom) - 2;
+          if (cam.zoom > viewState.zoom) {
+            lastLayerClickTimeRef.current = Date.now();
+            isAnimatingRef.current = true;
+            map.flyTo({ center: cam.center, zoom: cam.zoom, duration: 800 });
+          }
+        }
+      }
+    }
+
+    setExpandedAssemblies(new Set([rootId]));
   };
 
   const {
@@ -362,8 +435,19 @@ export function MapView({
     detectionsVisible,
     zoom: viewState.zoom,
     pickable: !rangeRingsActive,
+    overlapOffsets,
+    expandedAssemblies,
     onEntityClick: handleEntityClick,
     onClusterClick: handleClusterClick,
+    onOverlapSpread: (offsets) => {
+      overlapActivationZoomRef.current = Math.floor(viewState.zoom);
+      setOverlapOffsets(offsets);
+    },
+    onAssemblyExpand: handleAssemblyExpand,
+    onAssemblyCollapse: () => {
+      setExpandedAssemblies(null);
+      assemblyMinZoomRef.current = null;
+    },
   });
 
   const coverageShapeIds = new Set<string>();
@@ -401,6 +485,19 @@ export function MapView({
   if (selectedEntity?.trackPredictionId)
     selectedTrackShapeIds.add(selectedEntity.trackPredictionId);
 
+  const assemblyOutlineIds = new Set<string>();
+  const expandedAssemblyOutlineIds = new Set<string>();
+  for (const entity of entityMap.values()) {
+    if (entity.assemblyOutlineIds) {
+      for (const id of entity.assemblyOutlineIds) {
+        assemblyOutlineIds.add(id);
+        if (expandedAssemblies?.has(entity.id)) {
+          expandedAssemblyOutlineIds.add(id);
+        }
+      }
+    }
+  }
+
   // @TODO: enable when detection entities reliably have pose.parent
   // const parentEntity = selectedEntity?.parentEntityId
   //   ? entityMap.get(selectedEntity.parentEntityId)
@@ -416,6 +513,8 @@ export function MapView({
 
   const shapeCtx: ShapeVisibilityContext = {
     coverageShapeIds,
+    assemblyOutlineIds,
+    expandedAssemblyOutlineIds,
     filter,
     selectedId,
     selectedTrackShapeIds,
@@ -503,6 +602,10 @@ export function MapView({
       return;
     }
     if (!info.picked) {
+      if (overlapOffsets) setOverlapOffsets(null);
+      if (expandedAssemblies) setExpandedAssemblies(null);
+      overlapActivationZoomRef.current = null;
+      assemblyMinZoomRef.current = null;
       onEntityClickRef.current?.(null);
     }
   };
@@ -529,6 +632,21 @@ export function MapView({
 
     if (newIntegerZoom !== lastIntegerZoomRef.current) {
       lastIntegerZoomRef.current = newIntegerZoom;
+
+      if (!isAnimatingRef.current) {
+        const overlapZoom = overlapActivationZoomRef.current;
+        if (overlapZoom !== null && newIntegerZoom < overlapZoom - OVERLAP_ZOOM_TOLERANCE) {
+          if (overlapOffsets) setOverlapOffsets(null);
+          overlapActivationZoomRef.current = null;
+        }
+
+        const asmZoom = assemblyMinZoomRef.current;
+        if (asmZoom !== null && newIntegerZoom < asmZoom) {
+          if (expandedAssemblies) setExpandedAssemblies(null);
+          assemblyMinZoomRef.current = null;
+        }
+      }
+
       setViewState({
         longitude: evt.viewState.longitude,
         latitude: evt.viewState.latitude,

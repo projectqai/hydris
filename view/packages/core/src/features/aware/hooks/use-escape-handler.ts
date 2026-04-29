@@ -10,6 +10,8 @@ export function useEscapeHandler({
   clearSwapSource,
   isCustomizing,
   exitCustomize,
+  isPlacing,
+  exitPlacement,
   pickerOpen,
   closePicker,
 }: {
@@ -17,6 +19,8 @@ export function useEscapeHandler({
   clearSwapSource: () => void;
   isCustomizing: boolean;
   exitCustomize: () => void;
+  isPlacing: boolean;
+  exitPlacement: () => void;
   pickerOpen?: boolean;
   closePicker?: () => void;
 }) {
@@ -32,6 +36,10 @@ export function useEscapeHandler({
     () => {
       if (pickerOpen && closePicker) {
         closePicker();
+        return true;
+      }
+      if (isPlacing) {
+        exitPlacement();
         return true;
       }
       if (swapSourceId) {

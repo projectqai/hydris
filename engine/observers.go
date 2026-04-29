@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"sort"
 
 	pb "github.com/projectqai/proto/go"
 
@@ -36,16 +35,11 @@ func (s *WorldServer) WatchEntities(ctx context.Context, req *connect.Request[pb
 	}
 	s.l.RUnlock()
 
-	sort.Slice(snapshot, func(i, j int) bool {
-		var ti, tj int64
-		if snapshot[i].Lifetime != nil && snapshot[i].Lifetime.From != nil {
-			ti = snapshot[i].Lifetime.From.AsTime().UnixNano()
-		}
-		if snapshot[j].Lifetime != nil && snapshot[j].Lifetime.From != nil {
-			tj = snapshot[j].Lifetime.From.AsTime().UnixNano()
-		}
-		return ti < tj
-	})
+	if len(req.Msg.Sort) > 0 {
+		sortEntities(snapshot, req.Msg.Sort)
+	} else {
+		sortEntities(snapshot, defaultWatchSort)
+	}
 
 	for _, e := range snapshot {
 		if err := stream.Send(&pb.EntityChangeEvent{

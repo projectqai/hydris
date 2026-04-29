@@ -1,4 +1,4 @@
-const { withMainActivity, AndroidConfig } = require("@expo/config-plugins");
+const { withMainActivity, AndroidConfig } = require("expo/config-plugins");
 
 const IMPORTS = [
   "ai.projectq.hydris.HydrisManager",

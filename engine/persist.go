@@ -27,7 +27,7 @@ func (s *WorldServer) LoadDefaults(b []byte) error {
 		return nil
 	}
 
-	entities, err := parseEntities(b)
+	entities, err := ParseEntities(b)
 	if err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func (s *WorldServer) LoadFromFile(path string) error {
 		return nil
 	}
 
-	entities, err := parseEntities(inputBytes)
+	entities, err := ParseEntities(inputBytes)
 	if err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func (s *WorldServer) LoadFromFile(path string) error {
 	return nil
 }
 
-func parseEntities(b []byte) ([]*pb.Entity, error) {
+func ParseEntities(b []byte) ([]*pb.Entity, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(b))
 	var entities []*pb.Entity
 
@@ -195,6 +195,10 @@ func (s *WorldServer) FlushToFile() error {
 		}
 		if e.Artifact != nil {
 			stub.Artifact = e.Artifact
+			hasSomething = true
+		}
+		if e.Geo != nil && es.isInfinite(11) {
+			stub.Geo = e.Geo
 			hasSomething = true
 		}
 

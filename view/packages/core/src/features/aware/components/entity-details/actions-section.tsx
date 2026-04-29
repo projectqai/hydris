@@ -3,10 +3,10 @@ import { ControlButton } from "@hydris/ui/controls";
 import type { Entity } from "@projectqai/proto/world";
 import { Zap } from "lucide-react-native";
 import { View } from "react-native";
-import { toast } from "sonner-native";
 import { useShallow } from "zustand/react/shallow";
 
 import { useRunTask } from "../../../../lib/api/use-run-task";
+import { toast } from "../../../../lib/sonner";
 import { useEntityStore } from "../../store/entity-store";
 import { useSelectionStore } from "../../store/selection-store";
 
@@ -32,7 +32,7 @@ function TaskableButton({ taskable }: { taskable: Entity }) {
       await runTask(taskable.id);
     } catch (err) {
       if (err instanceof ConnectError && err.code === Code.AlreadyExists) {
-        toast("Task already running");
+        toast.warning("Task already running");
         return;
       }
       toast.error(err instanceof Error ? err.message : "Task failed");

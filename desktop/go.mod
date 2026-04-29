@@ -100,7 +100,7 @@ require (
 	github.com/pion/transport/v4 v4.0.1 // indirect
 	github.com/pion/turn/v4 v4.1.4 // indirect
 	github.com/pion/webrtc/v4 v4.2.9 // indirect
-	github.com/projectqai/proto/go v0.0.0-20260413141839-ec089d868eba // indirect
+	github.com/projectqai/proto/go v0.0.0-20260429120609-6631b7e8f440 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.67.4 // indirect

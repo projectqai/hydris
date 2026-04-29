@@ -16,11 +16,10 @@
     "@hydris/eslint-config": "workspace:*",
     "@hydris/typescript-config": "workspace:*",
     "eslint": "catalog:",
-    "expo-module-scripts": "^5.0.8",
+    "expo-module-scripts": "~55.0.2",
     "typescript": "catalog:"
   },
   "peerDependencies": {
-    "@expo/config-plugins": "*",
     "expo": "*",
     "expo-modules-core": "*",
     "react": "*",
