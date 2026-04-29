@@ -284,6 +284,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           pattern: hydris-*
+          path: bin
           merge-multiple: true
 
       - name: Create GitHub Release
@@ -309,6 +310,6 @@ jobs:
             ```
           files: |
             bin/hydris-*
-            app-release.apk
+            bin/app-release.apk
           draft: false
           prerelease: false
