@@ -2,6 +2,7 @@
 package rt
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -129,21 +130,53 @@ func (r *Runtime) Stop() {
 // Returns a descriptive fallback when the rejection value is undefined/null.
 func formatRejection(vm *goja.Runtime, val goja.Value) string {
 	if val == nil || goja.IsUndefined(val) || goja.IsNull(val) {
+		stack := captureCallStack(vm)
+		if stack != "" {
+			return "(no error details)\n" + stack
+		}
 		return "(no error details)"
 	}
 	obj := val.ToObject(vm)
 	if obj != nil {
+		// Prefer .stack which includes the error message and location.
+		if st := obj.Get("stack"); st != nil && !goja.IsUndefined(st) {
+			if s := st.String(); s != "" {
+				return s
+			}
+		}
 		if msg := obj.Get("message"); msg != nil && !goja.IsUndefined(msg) {
 			s := msg.String()
 			if s != "" {
+				stack := captureCallStack(vm)
+				if stack != "" {
+					return s + "\n" + stack
+				}
 				return s
 			}
 		}
 	}
 	if s := val.String(); s != "" {
+		stack := captureCallStack(vm)
+		if stack != "" {
+			return s + "\n" + stack
+		}
 		return s
 	}
 	return "(no error details)"
+}
+
+func captureCallStack(vm *goja.Runtime) string {
+	frames := vm.CaptureCallStack(10, nil)
+	if len(frames) == 0 {
+		return ""
+	}
+	var b bytes.Buffer
+	for _, frame := range frames {
+		b.WriteString("    at ")
+		frame.Write(&b)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // slogPrinter routes JS console output through slog so it ends up in the

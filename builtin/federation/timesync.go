@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/projectqai/hydris/pkg/timesync"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -23,29 +24,33 @@ const (
 
 // estimateClockOffset performs an NTP-style clock offset estimation against
 // a remote WorldService peer. It takes multiple samples and returns the
-// offset from the sample with the lowest round-trip time (most accurate).
-// The result is rounded to offsetResolution (5ms) to reduce jitter across
-// different federation paths.
+// offset and RTT from the sample with the lowest round-trip time (most
+// accurate). The offset is rounded to offsetResolution to reduce jitter
+// across different federation paths.
 //
 // offset = remote_clock - local_clock
 //
-// Returns zero if the remote does not support TimeSync (old nodes).
-func estimateClockOffset(ctx context.Context, client pb.WorldServiceClient) time.Duration {
+// Returns zero for both values if the remote does not support TimeSync.
+func estimateClockOffset(ctx context.Context, client pb.WorldServiceClient) (offset time.Duration, rtt time.Duration) {
 	var bestOffset time.Duration
 	var bestRTT time.Duration
+	var prevT4 time.Time
 
 	for i := 0; i < timeSyncSamples; i++ {
 		rpcCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		t1 := time.Now()
-		resp, err := client.TimeSync(rpcCtx, &pb.TimeSyncRequest{
-			T1: timestamppb.New(t1),
-		})
+		req := &pb.TimeSyncRequest{T1: timestamppb.New(t1)}
+		if !prevT4.IsZero() {
+			req.T4 = timestamppb.New(prevT4)
+		}
+		resp, err := client.TimeSync(rpcCtx, req)
 		t4 := time.Now()
+		prevT4 = t4
 		cancel()
 
 		if err != nil {
 			if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
-				return 0
+				return 0, 0
 			}
 			continue
 		}
@@ -53,16 +58,15 @@ func estimateClockOffset(ctx context.Context, client pb.WorldServiceClient) time
 		t2 := resp.T2.AsTime()
 		t3 := resp.T3.AsTime()
 
-		rtt := (t4.Sub(t1)) - (t3.Sub(t2))
-		offset := (t2.Sub(t1) + t3.Sub(t4)) / 2
+		sampleOffset, sampleRTT := timesync.NTPSample(t1, t2, t3, t4)
 
-		if i == 0 || rtt < bestRTT {
-			bestRTT = rtt
-			bestOffset = offset
+		if i == 0 || sampleRTT < bestRTT {
+			bestRTT = sampleRTT
+			bestOffset = sampleOffset
 		}
 	}
 
-	return bestOffset.Round(offsetResolution)
+	return bestOffset.Round(offsetResolution), bestRTT
 }
 
 func shiftTS(ts *timestamppb.Timestamp, d time.Duration) *timestamppb.Timestamp {
@@ -79,9 +83,6 @@ func shiftLifetime(lt *pb.Lifetime, d time.Duration) {
 	lt.From = shiftTS(lt.From, d)
 	lt.Fresh = shiftTS(lt.Fresh, d)
 	lt.Until = shiftTS(lt.Until, d)
-	for _, sub := range lt.Components {
-		shiftLifetime(sub, d)
-	}
 }
 
 // shiftEntityTimestamps adjusts every known timestamp field on an Entity by
@@ -98,7 +99,7 @@ func shiftEntityTimestamps(e *pb.Entity, d time.Duration) {
 		e.Lease.Expires = shiftTS(e.Lease.Expires, d)
 	}
 	if e.Detection != nil {
-		e.Detection.LastMeasured = shiftTS(e.Detection.LastMeasured, d)
+		e.Detection.LastMeasured = shiftTS(e.Detection.LastMeasured, d) //nolint:staticcheck
 	}
 	if e.Mission != nil {
 		e.Mission.Eta = shiftTS(e.Mission.Eta, d)

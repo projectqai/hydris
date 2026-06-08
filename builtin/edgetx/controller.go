@@ -26,7 +26,7 @@ func init() {
 func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	go watchDevicesAndPublish(ctx, logger)
 
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:    "edgetx.service",
 		Label: proto.String("EdgeTX"),
 		Controller: &pb.Controller{
@@ -60,7 +60,7 @@ func runInstance(ctx context.Context, logger *slog.Logger, entity *pb.Entity) er
 
 	parentDeviceEntityID := entity.Device.Composition[0]
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("edgetx")
 	if err != nil {
 		return fmt.Errorf("grpc connect: %w", err)
 	}

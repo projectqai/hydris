@@ -4,7 +4,7 @@ import { Leaf } from "lucide-react-native";
 import type { MetricCategoryWidgetConfig } from "./metric-category-widget";
 import { MetricCategoryWidget } from "./metric-category-widget";
 
-const CONFIG: MetricCategoryWidgetConfig = {
+export const ENVIRONMENT_CONFIG: MetricCategoryWidgetConfig = {
   title: "Environment",
   icon: Leaf,
   categories: ["environmental", "airQuality"],
@@ -19,5 +19,5 @@ const CONFIG: MetricCategoryWidgetConfig = {
 };
 
 export function EnvironmentWidget() {
-  return <MetricCategoryWidget config={CONFIG} />;
+  return <MetricCategoryWidget config={ENVIRONMENT_CONFIG} />;
 }

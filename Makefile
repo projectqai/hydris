@@ -63,7 +63,8 @@ hal_dylib:
 # Produces a universal binary (arm64 + x86_64).
 desktop_shim:
 	clang -framework Cocoa -framework WebKit -arch arm64 -arch x86_64 \
-		-O2 -o desktop/shim/hydris-webview-webkit desktop/shim/main.m
+		-O2 -mmacosx-version-min=11.3 \
+		-o desktop/shim/hydris-webview-webkit desktop/shim/main.m
 
 # Compile the CEF-based macOS webview (run once on a Mac).
 # Requires: cmake, clang++. Downloads CEF automatically.
@@ -131,7 +132,9 @@ android: android_aar
 	cp hal/android/build/intermediates/compile_library_classes_jar/release/bundleLibCompileToJarRelease/classes.jar view/packages/hydris-engine/android/libs/hal-classes.jar
 	cd view && bun i
 	cd view && bun run build:android
-	@echo adb install -r view/apps/foss/android/app/build/outputs/apk/release/app-release.apk
+	mkdir -p bin
+	cp view/apps/foss/android/app/build/outputs/apk/release/app-release.apk bin/hydris-android-arm64-$(VERSION).apk
+	@echo adb install -r bin/hydris-android-arm64-$(VERSION).apk
 
 android_go:
 	cd android && go mod tidy && go install golang.org/x/mobile/cmd/gomobile && gomobile init && gomobile bind -target=android/arm64 -androidapi 24 -ldflags "-checklinkname=0 $(LDFLAGS)" -o hydris-go.aar

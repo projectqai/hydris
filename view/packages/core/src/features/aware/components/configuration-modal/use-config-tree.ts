@@ -25,7 +25,9 @@ export type CategoryGroup = {
 
 export type ConfigSelection = { type: "device"; entityId: string } | null;
 
-function buildDeviceNode(entity: Entity): DeviceNode {
+const ORPHANED_CATEGORY = "Orphaned Configs";
+
+function buildDeviceNode(entity: Entity, orphaned = false): DeviceNode {
   return {
     entityId: entity.id,
     label: entity.configurable?.label ?? getEntityName(entity),
@@ -34,8 +36,10 @@ function buildDeviceNode(entity: Entity): DeviceNode {
     children: [],
     isConfigurable:
       !!entity.configurable?.schema && Object.keys(entity.configurable.schema).length > 0,
-    configState: getConfigState(entity),
-    canAddChildren: (entity.configurable?.supportedDeviceClasses.length ?? 0) > 0,
+    configState: orphaned ? null : getConfigState(entity),
+    canAddChildren: orphaned
+      ? false
+      : (entity.configurable?.supportedDeviceClasses.length ?? 0) > 0,
   };
 }
 
@@ -47,11 +51,14 @@ function sortNodes(nodes: DeviceNode[]) {
 function buildTree(entities: Map<string, Entity>): CategoryGroup[] {
   const nodeMap = new Map<string, DeviceNode>();
   const entityMap = new Map<string, Entity>();
+  const orphanedNodes: DeviceNode[] = [];
 
   for (const entity of entities.values()) {
     if (entity.device) {
       nodeMap.set(entity.id, buildDeviceNode(entity));
       entityMap.set(entity.id, entity);
+    } else if (entity.configurable && entity.config) {
+      orphanedNodes.push(buildDeviceNode(entity, true));
     }
   }
 
@@ -68,6 +75,7 @@ function buildTree(entities: Map<string, Entity>): CategoryGroup[] {
   }
 
   sortNodes(roots);
+  sortNodes(orphanedNodes);
 
   const byCategory = new Map<string, DeviceNode[]>();
   for (const root of roots) {
@@ -86,6 +94,10 @@ function buildTree(entities: Map<string, Entity>): CategoryGroup[] {
     if (b.category === "Other") return -1;
     return a.category.localeCompare(b.category);
   });
+
+  if (orphanedNodes.length > 0) {
+    categories.push({ category: ORPHANED_CATEGORY, roots: orphanedNodes });
+  }
 
   return categories;
 }

@@ -78,7 +78,7 @@ func TestCameraTransformer_GeneratesCoverage(t *testing.T) {
 		},
 	}
 
-	upsert, remove := ct.Resolve(head, "cam1")
+	upsert, remove := ct.Resolve(head, "cam1", nil)
 	if len(remove) != 0 {
 		t.Errorf("expected 0 removes, got %d", len(remove))
 	}
@@ -106,7 +106,7 @@ func TestCameraTransformer_PopulatesSensorCoverage(t *testing.T) {
 		},
 	}
 
-	ct.Resolve(head, "cam1")
+	ct.Resolve(head, "cam1", nil)
 
 	if head["cam1"].Sensor == nil {
 		t.Fatal("expected SensorComponent on camera entity")
@@ -132,7 +132,7 @@ func TestCameraTransformer_SkipsWithoutFovOrRange(t *testing.T) {
 			},
 		},
 	}
-	upsert, _ := ct.Resolve(head, "cam1")
+	upsert, _ := ct.Resolve(head, "cam1", nil)
 	if len(upsert) != 0 {
 		t.Errorf("expected 0 upserts without range_max, got %d", len(upsert))
 	}
@@ -142,7 +142,7 @@ func TestCameraTransformer_SkipsWithoutFovOrRange(t *testing.T) {
 		Streams:  []*pb.MediaStream{{Label: "main"}},
 		RangeMax: fptr(500),
 	}
-	upsert, _ = ct.Resolve(head, "cam1")
+	upsert, _ = ct.Resolve(head, "cam1", nil)
 	if len(upsert) != 0 {
 		t.Errorf("expected 0 upserts without fov, got %d", len(upsert))
 	}
@@ -161,13 +161,13 @@ func TestCameraTransformer_CleansUpOnExpiry(t *testing.T) {
 		},
 	}
 
-	upsert, _ := ct.Resolve(head, "cam1")
+	upsert, _ := ct.Resolve(head, "cam1", nil)
 	for _, e := range upsert {
 		head[e.Id] = e
 	}
 
 	delete(head, "cam1")
-	_, remove := ct.Resolve(head, "cam1")
+	_, remove := ct.Resolve(head, "cam1", nil)
 	if len(remove) != 1 {
 		t.Fatalf("expected 1 remove, got %d", len(remove))
 	}
@@ -185,7 +185,7 @@ func TestCameraTransformer_IgnoresNoCameraComponent(t *testing.T) {
 		},
 	}
 
-	upsert, remove := ct.Resolve(head, "track1")
+	upsert, remove := ct.Resolve(head, "track1", nil)
 	if len(upsert) != 0 || len(remove) != 0 {
 		t.Error("should not generate anything for entities without CameraComponent")
 	}

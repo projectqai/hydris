@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/projectqai/hydris/engine/meta"
 	pb "github.com/projectqai/proto/go"
 )
 
@@ -33,10 +34,10 @@ func (ct *CameraTransformer) Validate(head map[string]*pb.Entity, incoming *pb.E
 	return nil
 }
 
-func (ct *CameraTransformer) Resolve(head map[string]*pb.Entity, changedID string) (upsert []*pb.Entity, remove []string) {
+func (ct *CameraTransformer) Resolve(head map[string]*pb.Entity, changedID string, components map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	// If the changed entity is a focal point, re-resolve the owning camera.
 	if camID, ok := ct.focalPointToCamera[changedID]; ok {
-		return ct.Resolve(head, camID)
+		return ct.Resolve(head, camID, components)
 	}
 
 	entity := head[changedID]

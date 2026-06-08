@@ -29,6 +29,8 @@ export interface MapViewRef {
     trackHistoryVisible: boolean,
   ) => void;
   pushRangeRing: (centerJson: string | null, active: boolean) => void;
+  pushHiddenLayers: (idsJson: string) => void;
+  pushLayerOpacity: (json: string) => void;
 }
 
 type FlyToTarget = {
@@ -59,6 +61,13 @@ type MapViewProps = {
   onReady?: () => Promise<void>;
   onEntityClick?: (id: string | null) => Promise<void>;
   onMapClick?: (lat: number, lng: number) => Promise<void>;
+  onRadialRequest?: (
+    entityId: string | null,
+    screenX: number,
+    screenY: number,
+    lat: number,
+    lng: number,
+  ) => Promise<void>;
   onTrackingLost?: () => Promise<void>;
   onViewChange?: (lat: number, lng: number, zoom: number) => Promise<void>;
   dom?: DOMProps;
@@ -82,6 +91,7 @@ export default function MapView({
   onReady,
   onEntityClick,
   onMapClick,
+  onRadialRequest,
   onTrackingLost,
   onViewChange,
 }: MapViewProps) {
@@ -122,6 +132,8 @@ export default function MapView({
   const [pushedTrackHistoryVisible, setPushedTrackHistoryVisible] = useState(trackHistoryVisible);
   const [pushedRangeRingCenter, setPushedRangeRingCenter] = useState<GeoPosition | null>(null);
   const [pushedRangeRingsActive, setPushedRangeRingsActive] = useState(false);
+  const [pushedHiddenLayerIds, setPushedHiddenLayerIds] = useState<Set<string>>(new Set());
+  const [pushedLayerOpacity, setPushedLayerOpacity] = useState<Record<string, number>>({});
 
   const pendingGeoRef = useRef(false);
   const pendingIdsRef = useRef(new Set<string>());
@@ -269,6 +281,13 @@ export default function MapView({
           setPushedRangeRingCenter(centerJson ? JSON.parse(centerJson) : null);
           setPushedRangeRingsActive(active);
         },
+        pushHiddenLayers: (idsJson: string) => {
+          const ids: string[] = JSON.parse(idsJson);
+          setPushedHiddenLayerIds(new Set(ids));
+        },
+        pushLayerOpacity: (json: string) => {
+          setPushedLayerOpacity(JSON.parse(json));
+        },
       }) as DOMImperativeFactory,
     [],
   );
@@ -345,8 +364,13 @@ export default function MapView({
         trackHistoryVisible={pushedTrackHistoryVisible}
         rangeRingCenter={pushedRangeRingCenter}
         rangeRingsActive={pushedRangeRingsActive}
+        hiddenMapLayerIds={pushedHiddenLayerIds}
+        mapLayerOpacityOverrides={pushedLayerOpacity}
         onEntityClick={async (id) => await onEntityClick?.(id)}
         onMapClick={async (lat, lng) => await onMapClick?.(lat, lng)}
+        onRadialRequest={async (entityId, screenX, screenY, lat, lng) =>
+          await onRadialRequest?.(entityId, screenX, screenY, lat, lng)
+        }
         onReady={async () => await onReady?.()}
         onTrackingLost={async () => await onTrackingLost?.()}
         onViewChange={async (lat, lng, zoom) => await onViewChange?.(lat, lng, zoom)}

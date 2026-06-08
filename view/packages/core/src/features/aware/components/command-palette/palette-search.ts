@@ -72,7 +72,7 @@ export function searchCommands(
   const q = query.trim();
   if (!q) return { results: [], total: 0 };
 
-  const haystack = commands.map((c) => c.label);
+  const haystack = commands.map((c) => (c.description ? `${c.label} ${c.description}` : c.label));
   return search(haystack, commands, q, max);
 }
 

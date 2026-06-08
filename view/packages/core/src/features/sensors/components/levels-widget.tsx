@@ -27,6 +27,7 @@ function LevelRow({ level, maxBars }: { level: LevelValue | null; maxBars: numbe
   const barHeight = Math.round(BASE.barHeight * element);
   const barGap = Math.round(BASE.barGap * element);
   const empty = !level;
+  const bars = level?.max ?? maxBars;
 
   return (
     <View style={{ paddingBottom: BASE.rowGap * element }} className={cn(empty && "opacity-30")}>
@@ -45,11 +46,11 @@ function LevelRow({ level, maxBars }: { level: LevelValue | null; maxBars: numbe
           style={{ fontSize: BASE.valueText * body }}
         >
           {empty ? "-" : level.value}
-          <Text className="text-foreground/70">/{maxBars}</Text>
+          <Text className="text-foreground/70">/{bars}</Text>
         </Text>
       </View>
       <View style={{ height: barHeight, marginTop: barGap, gap: barGap }} className="flex-row">
-        {Array.from({ length: maxBars }).map((_, i) => (
+        {Array.from({ length: bars }).map((_, i) => (
           <View
             key={i}
             className={cn(

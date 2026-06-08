@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projectqai/hydris/engine/meta"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -915,8 +916,8 @@ func TestPartialComponentExpiry_Unobserved(t *testing.T) {
 
 	// Manually set Device to expire in the past, Geo permanent.
 	es := world.head[entity.Id]
-	es.lifetimes[int32(pb.EntityComponent_EntityComponentDevice)] = componentMeta{fresh: past, until: past}
-	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = componentMeta{fresh: past}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentDevice)] = meta.Component{Fresh: past, Until: past}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = meta.Component{Fresh: past}
 
 	filter := &pb.EntityFilter{Component: []uint32{uint32(pb.EntityComponent_EntityComponentDevice)}}
 	c := NewConsumer(world, nil, filter)
@@ -991,8 +992,8 @@ func TestPartialComponentExpiry_ReappearAfterPush(t *testing.T) {
 
 	// Device expires in the past, Geo permanent.
 	es := world.head[entity.Id]
-	es.lifetimes[int32(pb.EntityComponent_EntityComponentDevice)] = componentMeta{fresh: past, until: past}
-	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = componentMeta{fresh: past}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentDevice)] = meta.Component{Fresh: past, Until: past}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = meta.Component{Fresh: past}
 
 	filter := &pb.EntityFilter{Component: []uint32{uint32(pb.EntityComponent_EntityComponentDevice)}}
 	c := NewConsumer(world, nil, filter)

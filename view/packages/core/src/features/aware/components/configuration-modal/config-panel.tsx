@@ -7,12 +7,13 @@ import { SegmentedControl } from "@hydris/ui/segmented-control";
 import type { DeviceClassOption, Entity } from "@projectqai/proto/world";
 import { ConfigurableState } from "@projectqai/proto/world";
 import { AlertTriangle, MapPin, Plus, Server, Timer, Trash2, X } from "lucide-react-native";
-import { useEffect, useRef, useState } from "react";
-import { Alert, Platform, ScrollView, Text, View } from "react-native";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { ScrollView, Text, View } from "react-native";
 
 import { useEntityMutation } from "../../../../lib/api/use-entity-mutation";
 import { getEntityName } from "../../../../lib/api/use-track-utils";
 import { toast } from "../../../../lib/sonner";
+import { useEntityDelete } from "../../hooks/use-entity-delete";
 import { usePlacement } from "../../placement-context";
 import { useEntityStore } from "../../store/entity-store";
 import { getEntityIcon } from "../../utils/entity-helpers";
@@ -91,9 +92,10 @@ function ConfigurableSection({ entity }: { entity: Entity }) {
   const configValue = liveEntity?.config?.value ?? configurable.value;
   const awaitingHandshake = sentVersion != null;
   const isCooldownActive = configurable.value?.cooldown === true;
+  const isOrphaned = !liveEntity?.device;
 
   const handleSubmit = async (value: JsonObject) => {
-    if (!liveEntity) return;
+    if (!liveEntity || isOrphaned) return;
     try {
       const { version } = await pushDeviceConfig(liveEntity, value);
       sentVersionRef.current = version;
@@ -133,6 +135,7 @@ function ConfigurableSection({ entity }: { entity: Entity }) {
           onRemove={handleRemove}
           isPending={isPending || awaitingHandshake}
           isConfigured={!!liveEntity?.config}
+          disabled={isOrphaned}
           extraActions={
             isCooldownActive ? (
               <ControlButton
@@ -142,7 +145,7 @@ function ConfigurableSection({ entity }: { entity: Entity }) {
                 icon={Timer}
                 label={cooldownLabel ? `Abort cooldown (${cooldownLabel})` : "Abort cooldown"}
                 hoverVariant="destructive"
-                disabled={isPending || awaitingHandshake}
+                disabled={isPending || awaitingHandshake || isOrphaned}
                 loading={isPending || awaitingHandshake}
                 size="lg"
                 fullWidth
@@ -162,18 +165,6 @@ function ConfigurableSection({ entity }: { entity: Entity }) {
       )}
     </View>
   );
-}
-
-function confirmDelete(name: string): Promise<boolean> {
-  if (Platform.OS === "web") {
-    return Promise.resolve(window.confirm(`Remove "${name}"? This cannot be undone.`));
-  }
-  return new Promise((resolve) => {
-    Alert.alert("Delete device", `Remove "${name}"? This cannot be undone.`, [
-      { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
-      { text: "Delete", style: "destructive", onPress: () => resolve(true) },
-    ]);
-  });
 }
 
 function EntityHeader({
@@ -290,7 +281,7 @@ function AddDeviceView({
     const opt = options.find((o) => o.class === selected) ?? options[0]!;
     try {
       const newId = await createDevice(parentId, opt.class);
-      toast(`Created ${opt.label || opt.class}`);
+      toast.success(`Created ${opt.label || opt.class}`);
       onCreated(newId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create device");
@@ -315,6 +306,10 @@ function AddDeviceView({
       ) : (
         <Text className="font-sans-medium text-foreground text-sm">{selectedLabel}</Text>
       )}
+
+      {selectedOpt.description ? (
+        <Text className="text-muted-foreground font-sans text-xs">{selectedOpt.description}</Text>
+      ) : null}
 
       <ControlButton
         onPress={handleCreate}
@@ -341,10 +336,10 @@ export function ConfigPanel({
   const t = useThemeColors();
   const entityId = selection?.entityId ?? null;
   const entity = useEntityStore((s) => (entityId ? s.entities.get(entityId) : undefined));
-  const { deleteDevice } = useEntityMutation();
   const { enterPlacement, canPlace } = usePlacement();
   const [isAddMode, setIsAddMode] = useState(false);
   const [panelTab, setPanelTab] = useState<"config" | "metrics" | "status">("config");
+  const { request: requestDelete, dialog: deleteDialog } = useEntityDelete();
 
   // exit add mode when selection changes
   const prevEntityId = useRef(entityId);
@@ -356,20 +351,7 @@ export function ConfigPanel({
   }, [entityId]);
 
   const isChildDevice = !!entity?.device?.parent;
-
-  const handleDeletePress = isChildDevice
-    ? async () => {
-        const name = getEntityName(entity);
-        const confirmed = await confirmDelete(name);
-        if (!confirmed) return;
-        try {
-          await deleteDevice(entity.id);
-          toast(`Deleted ${name}`);
-        } catch (err) {
-          toast.error(err instanceof Error ? err.message : "Failed to delete device");
-        }
-      }
-    : undefined;
+  const handleDeletePress = isChildDevice && entity ? () => requestDelete(entity) : undefined;
 
   if (!selection) {
     return (
@@ -429,59 +411,63 @@ export function ConfigPanel({
     }
   };
 
-  const renderContent = () => {
-    if (showAddMode) {
-      return (
-        <AddDeviceView
-          parentName={entityName}
-          parentId={entity.id}
-          options={deviceClasses}
-          onCreated={handleCreated}
-        />
-      );
-    }
-
-    if (tabs.length === 0) {
-      return (
-        <View className="items-center justify-center gap-2 px-4 py-8">
-          <Text className="text-muted-foreground font-sans text-sm">
-            Select a configurable from the sidebar
-          </Text>
-        </View>
-      );
-    }
-
-    if (tabs.length === 1) {
-      return (
-        <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-          {renderTabContent()}
-        </ScrollView>
-      );
-    }
-
-    return (
-      <View className="flex-1">
-        <SegmentedControl tabs={tabs} activeTab={activeTab} onTabChange={setPanelTab} />
-        <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-          {renderTabContent()}
-        </ScrollView>
-      </View>
-    );
-  };
-
-  return (
-    <View className="flex-1">
+  const header = (
+    <View key="header">
       <EntityHeader
         entity={entity}
         title={hasSchema ? cfgLabel : undefined}
         isAddMode={isAddMode}
         onAddPress={deviceClasses.length > 0 ? handleAddPress : undefined}
         onDeletePress={handleDeletePress}
-        onPositionPress={entity.symbol && canPlace ? () => enterPlacement(entity) : undefined}
+        onPositionPress={
+          !entity.track && entity.symbol && !entity.pose && canPlace
+            ? () => enterPlacement(entity)
+            : undefined
+        }
         metricsTimestamp={metricsTimestamp}
       />
       <View className="bg-surface-overlay/6 h-px" />
-      {renderContent()}
+    </View>
+  );
+
+  let scrollChildren: ReactNode[];
+
+  if (showAddMode) {
+    scrollChildren = [
+      header,
+      <AddDeviceView
+        key="body"
+        parentName={entityName}
+        parentId={entity.id}
+        options={deviceClasses}
+        onCreated={handleCreated}
+      />,
+    ];
+  } else if (tabs.length === 0) {
+    scrollChildren = [
+      header,
+      <View key="body" className="items-center justify-center gap-2 px-4 py-8">
+        <Text className="text-muted-foreground font-sans text-sm">
+          Select a configurable from the sidebar
+        </Text>
+      </View>,
+    ];
+  } else if (tabs.length === 1) {
+    scrollChildren = [header, <View key="body">{renderTabContent()}</View>];
+  } else {
+    scrollChildren = [
+      header,
+      <SegmentedControl key="tabs" tabs={tabs} activeTab={activeTab} onTabChange={setPanelTab} />,
+      <View key="body">{renderTabContent()}</View>,
+    ];
+  }
+
+  return (
+    <View className="flex-1">
+      <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
+        {scrollChildren}
+      </ScrollView>
+      {deleteDialog}
     </View>
   );
 }

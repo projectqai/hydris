@@ -3,6 +3,8 @@ package media
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -10,7 +12,9 @@ import (
 	"net"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,8 +27,10 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 	"github.com/google/uuid"
 	"github.com/pion/ice/v4"
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/projectqai/hydris/pkg/executil"
 )
 
@@ -32,24 +38,36 @@ const gracePeriod = 10 * time.Second
 
 // BridgeManager is the registry of active bridges keyed by "entityId/cameraIndex".
 type BridgeManager struct {
-	mu      sync.Mutex
-	bridges map[string]*Bridge
-	api     *webrtc.API // shared WebRTC API with UDP mux (nil = default)
+	mu       sync.Mutex
+	bridges  map[string]*Bridge
+	settings *webrtc.SettingEngine
+	OnEpoch  func(key string, epoch time.Time)
 }
 
 func NewBridgeManager() *BridgeManager {
 	return &BridgeManager{bridges: make(map[string]*Bridge)}
 }
 
-// SetupWebRTCMux configures a shared WebRTC API that multiplexes all ICE UDP
-// traffic through the given listener. This allows WebRTC to work with a single
-// open port in the firewall.
+// SetupWebRTCMux configures a shared SettingEngine that multiplexes all ICE
+// UDP traffic through the given listener.
 func (bm *BridgeManager) SetupWebRTCMux(conn net.PacketConn) {
 	udpMux := ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: conn})
-	var s webrtc.SettingEngine
+	s := &webrtc.SettingEngine{}
 	s.SetICEUDPMux(udpMux)
-	bm.api = webrtc.NewAPI(webrtc.WithSettingEngine(s))
+	bm.settings = s
 	slog.Info("webrtc: UDP mux enabled", "addr", conn.LocalAddr().String())
+}
+
+func (bm *BridgeManager) buildAPI() (*webrtc.API, error) {
+	me := &webrtc.MediaEngine{}
+	if err := me.RegisterDefaultCodecs(); err != nil {
+		return nil, err
+	}
+	opts := []func(*webrtc.API){webrtc.WithMediaEngine(me)}
+	if bm.settings != nil {
+		opts = append(opts, webrtc.WithSettingEngine(*bm.settings))
+	}
+	return webrtc.NewAPI(opts...), nil
 }
 
 // GetOrCreate returns an existing bridge or creates a new one.
@@ -73,7 +91,7 @@ func (bm *BridgeManager) GetOrCreate(key, sourceURL string) (*Bridge, error) {
 	var b *Bridge
 	var err error
 	if after, ok := strings.CutPrefix(sourceURL, "v4l2://"); ok {
-		b, err = newLocalBridge(after, onEmpty, bm.api)
+		b, err = newLocalBridge(after, onEmpty, bm)
 	} else {
 		u, err2 := url.Parse(sourceURL)
 		if err2 != nil {
@@ -81,13 +99,18 @@ func (bm *BridgeManager) GetOrCreate(key, sourceURL string) (*Bridge, error) {
 		}
 		switch u.Scheme {
 		case "rtsp", "rtsps":
-			b, err = newRTSPBridge(sourceURL, onEmpty, bm.api)
+			b, err = newRTSPBridge(sourceURL, onEmpty, bm)
 		default:
 			return nil, fmt.Errorf("unsupported source scheme: %s", u.Scheme)
 		}
 	}
 	if err != nil {
 		return nil, err
+	}
+
+	if bm.OnEpoch != nil {
+		cb := bm.OnEpoch
+		b.onEpoch = func(epoch time.Time) { cb(key, epoch) }
 	}
 
 	bm.bridges[key] = b
@@ -101,14 +124,27 @@ type Bridge struct {
 	mu sync.Mutex
 
 	rtspClient *gortsplib.Client  // non-nil for RTSP sources
+	videoMedia *description.Media // non-nil for RTSP sources, used for upstream RTCP
 	cancel     context.CancelFunc // non-nil for local sources (ffmpeg)
-	videoTrack *webrtc.TrackLocalStaticRTP
+	videoTrack *webrtc.TrackLocalStaticSample
 	codec      string      // e.g. "video/H264", "video/H265"
 	api        *webrtc.API // shared API with UDP mux (nil = default)
 
 	// sps/pps are captured from the H264 bitstream for RTSP SDP.
 	sps []byte
 	pps []byte
+
+	// sourceSPS/sourcePPS hold parameter sets from the RTSP DESCRIBE,
+	// injected into the WHEP answer SDP so browsers can init H264
+	// before in-band parameter sets arrive.
+	sourceSPS []byte
+	sourcePPS []byte
+
+	epoch       time.Time
+	firstRTPTS  uint32
+	epochSet    bool
+	epochSRDone bool
+	onEpoch     func(time.Time)
 
 	peers      map[string]*Peer
 	rtpTaps    map[string]func(*rtp.Packet) // additional RTP consumers (e.g., RTSP relay)
@@ -158,8 +194,84 @@ func (b *Bridge) Codec() string {
 	return b.codec
 }
 
-// newRTSPBridge creates a bridge from an RTSP source.
-func newRTSPBridge(rtspURL string, onEmpty func(), api *webrtc.API) (*Bridge, error) {
+func (b *Bridge) requestKeyframe() {
+	b.mu.Lock()
+	c, m := b.rtspClient, b.videoMedia
+	b.mu.Unlock()
+	if c == nil || m == nil {
+		return
+	}
+	_ = c.WritePacketRTCP(m, &rtcp.PictureLossIndication{})
+}
+
+var h264FmtpPattern = regexp.MustCompile(`(?m)^a=fmtp:(\d+) ([^\r\n]+)`)
+var h264RtpmapPattern = regexp.MustCompile(`(?mi)^a=rtpmap:(\d+) H264/`)
+
+func injectH264Params(sdp string, sps, pps []byte) string {
+	if len(sps) == 0 || len(pps) == 0 {
+		return sdp
+	}
+	h264PTs := make(map[string]bool)
+	for _, m := range h264RtpmapPattern.FindAllStringSubmatch(sdp, -1) {
+		h264PTs[m[1]] = true
+	}
+	if len(h264PTs) == 0 {
+		return sdp
+	}
+
+	sprop := base64.StdEncoding.EncodeToString(sps) + "," +
+		base64.StdEncoding.EncodeToString(pps)
+	var pli string
+	if len(sps) >= 4 {
+		pli = strings.ToLower(hex.EncodeToString(sps[1:4]))
+	}
+
+	return h264FmtpPattern.ReplaceAllStringFunc(sdp, func(line string) string {
+		m := h264FmtpPattern.FindStringSubmatch(line)
+		if m == nil || !h264PTs[m[1]] {
+			return line
+		}
+		params := parseFmtp(m[2])
+		params["sprop-parameter-sets"] = sprop
+		if pli != "" {
+			params["profile-level-id"] = pli
+		}
+		if _, ok := params["level-asymmetry-allowed"]; !ok {
+			params["level-asymmetry-allowed"] = "1"
+		}
+		if _, ok := params["packetization-mode"]; !ok {
+			params["packetization-mode"] = "1"
+		}
+		keys := make([]string, 0, len(params))
+		for k := range params {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(params))
+		for _, k := range keys {
+			parts = append(parts, k+"="+params[k])
+		}
+		return "a=fmtp:" + m[1] + " " + strings.Join(parts, ";")
+	})
+}
+
+func parseFmtp(s string) map[string]string {
+	out := make(map[string]string)
+	for _, p := range strings.Split(s, ";") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		k, v, ok := strings.Cut(p, "=")
+		if !ok {
+			continue
+		}
+		out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	return out
+}
+
+func newRTSPBridge(rtspURL string, onEmpty func(), bm *BridgeManager) (*Bridge, error) {
 	u, err := base.ParseURL(rtspURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse RTSP URL: %w", err)
@@ -213,7 +325,13 @@ func newRTSPBridge(rtspURL string, onEmpty func(), api *webrtc.API) (*Bridge, er
 		return nil, fmt.Errorf("no supported video codec (H264/H265) in RTSP stream, found: %v", found)
 	}
 
-	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
+	api, err := bm.buildAPI()
+	if err != nil {
+		c.Close()
+		return nil, fmt.Errorf("build webrtc API: %w", err)
+	}
+
+	videoTrack, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{MimeType: mimeType, ClockRate: 90000},
 		"video", "hydris-cam",
 	)
@@ -228,18 +346,116 @@ func newRTSPBridge(rtspURL string, onEmpty func(), api *webrtc.API) (*Bridge, er
 		return nil, fmt.Errorf("RTSP SETUP: %w", err)
 	}
 
+	var srcSPS, srcPPS []byte
+	if h, ok := videoFormat.(*format.H264); ok {
+		srcSPS = append([]byte(nil), h.SPS...)
+		srcPPS = append([]byte(nil), h.PPS...)
+	}
+
 	b := &Bridge{
 		rtspClient: c,
+		videoMedia: videoMedia,
 		videoTrack: videoTrack,
 		codec:      mimeType,
 		api:        api,
+		sourceSPS:  srcSPS,
+		sourcePPS:  srcPPS,
 		peers:      make(map[string]*Peer),
 		onEmpty:    onEmpty,
 	}
 
+	rtpDec := &rtph264.Decoder{}
+	if err := rtpDec.Init(); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("rtph264 decoder init: %w", err)
+	}
+
+	var lastTS uint32
 	c.OnPacketRTP(videoMedia, videoFormat, func(pkt *rtp.Packet) {
-		if err := videoTrack.WriteRTP(pkt); err != nil && !errors.Is(err, io.ErrClosedPipe) {
-			slog.Debug("whep: write RTP", "error", err)
+		if !b.epochSet {
+			epoch := time.Now()
+			b.mu.Lock()
+			b.epoch = epoch
+			b.firstRTPTS = pkt.Timestamp
+			b.mu.Unlock()
+			b.epochSet = true
+			if b.onEpoch != nil {
+				b.onEpoch(epoch)
+			}
+		}
+
+		// Refine epoch from RTCP Sender Report once available.
+		if !b.epochSRDone {
+			if ntp, ok := c.PacketNTP(videoMedia, pkt); ok {
+				elapsed := time.Duration(pkt.Timestamp-b.firstRTPTS) * time.Second / 90000
+				epoch := ntp.Add(-elapsed)
+				b.mu.Lock()
+				b.epoch = epoch
+				b.mu.Unlock()
+				b.epochSRDone = true
+				if b.onEpoch != nil {
+					b.onEpoch(epoch)
+				}
+			}
+		}
+
+		nalus, err := rtpDec.Decode(pkt)
+		if err != nil {
+			if !errors.Is(err, rtph264.ErrMorePacketsNeeded) &&
+				!errors.Is(err, rtph264.ErrNonStartingPacketAndNoPrevious) {
+				rtpDec = &rtph264.Decoder{}
+				_ = rtpDec.Init()
+			}
+			b.fanOutRTP(pkt)
+			return
+		}
+
+		hasIDR := false
+		for _, n := range nalus {
+			if len(n) > 0 && (n[0]&0x1f) == 5 {
+				hasIDR = true
+				break
+			}
+		}
+
+		var au []byte
+		if hasIDR {
+			if len(b.sourceSPS) > 0 {
+				au = append(au, 0x00, 0x00, 0x00, 0x01)
+				au = append(au, b.sourceSPS...)
+			}
+			if len(b.sourcePPS) > 0 {
+				au = append(au, 0x00, 0x00, 0x00, 0x01)
+				au = append(au, b.sourcePPS...)
+			}
+		}
+		for _, n := range nalus {
+			if len(n) == 0 {
+				continue
+			}
+			t := n[0] & 0x1f
+			if hasIDR && (t == 7 || t == 8) && len(b.sourceSPS) > 0 {
+				continue
+			}
+			au = append(au, 0x00, 0x00, 0x00, 0x01)
+			au = append(au, n...)
+		}
+
+		var duration time.Duration
+		if lastTS != 0 && pkt.Timestamp != lastTS {
+			delta := pkt.Timestamp - lastTS
+			duration = time.Duration(delta) * time.Second / 90000
+			if duration <= 0 || duration > time.Second {
+				duration = 33 * time.Millisecond
+			}
+		} else {
+			duration = 33 * time.Millisecond
+		}
+		lastTS = pkt.Timestamp
+
+		if err := videoTrack.WriteSample(media.Sample{Data: au, Duration: duration}); err != nil &&
+			!errors.Is(err, io.ErrClosedPipe) {
+			slog.Debug("whep: write sample", "error", err)
 		}
 		b.fanOutRTP(pkt)
 	})
@@ -264,13 +480,18 @@ func newRTSPBridge(rtspURL string, onEmpty func(), api *webrtc.API) (*Bridge, er
 // newLocalBridge creates a bridge by spawning ffmpeg to encode H264 from
 // a local device (V4L2). The H264 output is parsed and written directly
 // to the shared WebRTC track — no RTSP in the middle.
-func newLocalBridge(devicePath string, onEmpty func(), api *webrtc.API) (*Bridge, error) {
-	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
+func newLocalBridge(devicePath string, onEmpty func(), bm *BridgeManager) (*Bridge, error) {
+	videoTrack, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000},
 		"video", "hydris-cam",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create local track: %w", err)
+	}
+
+	api, err := bm.buildAPI()
+	if err != nil {
+		return nil, fmt.Errorf("build webrtc API: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -308,7 +529,6 @@ func (b *Bridge) fanOutRTP(pkt *rtp.Packet) {
 // RTP packets directly to the shared WebRTC track and any additional taps.
 func runFFmpegBridge(ctx context.Context, devicePath string, b *Bridge) error {
 	track := b.videoTrack
-	fanOut := b.fanOutRTP
 	ffmpegPath, err := findFFmpeg()
 	if err != nil {
 		return fmt.Errorf("ffmpeg not found: %w", err)
@@ -329,38 +549,23 @@ func runFFmpegBridge(ctx context.Context, devicePath string, b *Bridge) error {
 	}
 	slog.Info("whep: ffmpeg H264 started", "pid", cmd.Process.Pid, "args", args)
 
-	// RTP encoder for H264.
-	encoder := &rtph264.Encoder{PayloadType: 96, PacketizationMode: 1}
-	if err := encoder.Init(); err != nil {
-		_ = cmd.Process.Kill()
-		return fmt.Errorf("init H264 RTP encoder: %w", err)
-	}
-
-	// Read Annex B from ffmpeg stdout, parse NALUs, encode as RTP,
-	// write to shared track.
 	var buf []byte
 	var pendingAU [][]byte
 	hadVCL := false
-	// Use frame-counter PTS at assumed 25fps (90000/25 = 3600 ticks/frame).
-	// Wall-clock jitter from Read() calls causes client jitter buffers to grow.
-	var frameCount uint32
-	const ptsIncrement = 3600 // 90000 Hz / 25 fps
+	const frameDuration = 40 * time.Millisecond
 
 	flush := func() {
 		if len(pendingAU) == 0 {
 			return
 		}
-		pkts, err := encoder.Encode(pendingAU)
-		if err == nil {
-			pts := frameCount * ptsIncrement
-			frameCount++
-			for _, pkt := range pkts {
-				pkt.Timestamp = pts
-				if err := track.WriteRTP(pkt); err != nil && !errors.Is(err, io.ErrClosedPipe) {
-					slog.Debug("whep: write RTP", "error", err)
-				}
-				fanOut(pkt)
-			}
+		var au []byte
+		for _, n := range pendingAU {
+			au = append(au, 0x00, 0x00, 0x00, 0x01)
+			au = append(au, n...)
+		}
+		if err := track.WriteSample(media.Sample{Data: au, Duration: frameDuration}); err != nil &&
+			!errors.Is(err, io.ErrClosedPipe) {
+			slog.Debug("whep: write sample", "error", err)
 		}
 		pendingAU = nil
 		hadVCL = false
@@ -610,15 +815,7 @@ func (b *Bridge) AddPeer(offerSDP string) (string, error) {
 		return "", fmt.Errorf("browser does not support %s (camera codec), try configuring the camera to H264", b.codec)
 	}
 
-	var (
-		pc  *webrtc.PeerConnection
-		err error
-	)
-	if b.api != nil {
-		pc, err = b.api.NewPeerConnection(webrtc.Configuration{})
-	} else {
-		pc, err = webrtc.NewPeerConnection(webrtc.Configuration{})
-	}
+	pc, err := b.api.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		return "", fmt.Errorf("create peer connection: %w", err)
 	}
@@ -630,10 +827,16 @@ func (b *Bridge) AddPeer(offerSDP string) (string, error) {
 	}
 
 	go func() {
-		buf := make([]byte, 1500)
 		for {
-			if _, _, err := rtpSender.Read(buf); err != nil {
+			pkts, _, err := rtpSender.ReadRTCP()
+			if err != nil {
 				return
+			}
+			for _, p := range pkts {
+				switch p.(type) {
+				case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
+					b.requestKeyframe()
+				}
 			}
 		}
 	}()
@@ -672,6 +875,9 @@ func (b *Bridge) AddPeer(offerSDP string) (string, error) {
 
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		slog.Debug("whep: peer connection state", "peer", peerID, "state", state.String())
+		if state == webrtc.PeerConnectionStateConnected {
+			b.requestKeyframe()
+		}
 		if state == webrtc.PeerConnectionStateDisconnected ||
 			state == webrtc.PeerConnectionStateFailed ||
 			state == webrtc.PeerConnectionStateClosed {
@@ -680,7 +886,12 @@ func (b *Bridge) AddPeer(offerSDP string) (string, error) {
 	})
 
 	slog.Debug("whep: peer added", "peer", peerID)
-	return pc.LocalDescription().SDP, nil
+
+	answerSDP := pc.LocalDescription().SDP
+	if b.codec == webrtc.MimeTypeH264 {
+		answerSDP = injectH264Params(answerSDP, b.sourceSPS, b.sourcePPS)
+	}
+	return answerSDP, nil
 }
 
 func (b *Bridge) removePeer(peerID string) {

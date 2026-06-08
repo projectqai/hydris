@@ -328,6 +328,7 @@ func esbuildBundle(entry string) ([]byte, error) {
 		Format:      api.FormatESModule,
 		Target:      api.ES2017,
 		Write:       false,
+		Sourcemap:   api.SourceMapInline,
 		Supported: map[string]bool{
 			"top-level-await": true,
 		},

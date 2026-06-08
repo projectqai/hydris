@@ -59,7 +59,7 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 		ip = entity.Device.Ip.GetHost()
 	}
 	if ip == "" && entity.Device != nil && len(entity.Device.Composition) > 0 {
-		grpcConn, err := builtin.BuiltinClientConn()
+		grpcConn, err := builtin.BuiltinClientConn("reolink")
 		if err != nil {
 			return fmt.Errorf("grpc connect: %w", err)
 		}
@@ -111,7 +111,7 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 			dev = &pb.DeviceComponent{}
 		}
 		dev.UniqueHardwareId = proto.String(hwID)
-		_ = controller.Push(ctx, &pb.Entity{
+		_ = controller.Push(ctx, controllerName, &pb.Entity{
 			Id:     entity.Id,
 			Device: dev,
 		})
@@ -170,15 +170,19 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 		Id:      entity.Id,
 		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 		Camera:  camComp,
-		Symbol: &pb.SymbolComponent{
-			MilStd2525C: "SFGPE-----",
+		Classification: &pb.ClassificationComponent{
+			Taxonomy: []*pb.ClassificationTaxonomy{{
+				Kind: &pb.ClassificationTaxonomy_Equipment{Equipment: &pb.EquipmentTaxonomy{
+					Sensor: &pb.EquipmentTaxonomySensor{Kind: &pb.EquipmentTaxonomySensor_ElectroOptical{ElectroOptical: &pb.EquipmentTaxonomySensorElectroOptical{}}},
+				}},
+			}},
 		},
 	}
 	if model != "" {
 		label := manufacturer + " " + model
 		headEntity.Label = proto.String(label)
 	}
-	if err := controller.Push(ctx, headEntity); err != nil {
+	if err := controller.Push(ctx, controllerName, headEntity); err != nil {
 		return fmt.Errorf("push head entity: %w", err)
 	}
 
@@ -202,9 +206,9 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 		}
 
 		elev := initEl
-		if err := controller.Push(ctx, &pb.Entity{
+		if err := controller.Push(ctx, controllerName, &pb.Entity{
 			Id:      focalPointID,
-			Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
+			Routing: entity.Routing,
 			Pose: &pb.PoseComponent{
 				Parent: entity.Id,
 				Offset: &pb.PoseComponent_Polar{
@@ -214,9 +218,6 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 						Range:     proto.Float64(initRange),
 					},
 				},
-			},
-			Symbol: &pb.SymbolComponent{
-				MilStd2525C: "SF--------",
 			},
 		}); err != nil {
 			return fmt.Errorf("push focal point entity: %w", err)
@@ -232,7 +233,7 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 // and drives the physical camera toward it using the Reolink API with
 // closed-loop feedback, one axis at a time.
 func watchTargetPose(ctx context.Context, logger *slog.Logger, ip string, cfg cameraConfig, entityID, parentID string, spec *cameraSpec) error {
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("reolink")
 	if err != nil {
 		return fmt.Errorf("grpc connect: %w", err)
 	}

@@ -19,6 +19,7 @@ func setupFetch(loop *eventloop.EventLoop, vm *goja.Runtime) {
 	setupHeaders(vm)
 	setupURL(vm)
 	setupRequest(vm)
+	setupResponse(vm)
 
 	vm.Set("fetch", func(call goja.FunctionCall) goja.Value {
 		// Support both fetch(url, opts) and fetch(Request).
@@ -266,6 +267,52 @@ func exportBytes(vm *goja.Runtime, val goja.Value) []byte {
 		}
 	}
 	return []byte(val.String())
+}
+
+// --- Response class ---
+
+// setupResponse provides the Response constructor so plugins can do
+// new Response(body, init?) like in the Fetch/Service Worker spec.
+func setupResponse(vm *goja.Runtime) {
+	vm.Set("Response", func(call goja.ConstructorCall) *goja.Object {
+		body := ""
+		if len(call.Arguments) > 0 && !goja.IsUndefined(call.Argument(0)) && !goja.IsNull(call.Argument(0)) {
+			body = call.Argument(0).String()
+		}
+
+		status := 200
+		statusText := "OK"
+		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Argument(1)) {
+			opts := call.Argument(1).ToObject(vm)
+			if v := opts.Get("status"); v != nil && !goja.IsUndefined(v) {
+				status = int(v.ToInteger())
+			}
+			if v := opts.Get("statusText"); v != nil && !goja.IsUndefined(v) {
+				statusText = v.String()
+			}
+		}
+
+		call.This.Set("_body", body)
+		call.This.Set("ok", status >= 200 && status < 300)
+		call.This.Set("status", status)
+		call.This.Set("statusText", statusText)
+		call.This.Set("text", func() goja.Value {
+			p, resolve, _ := vm.NewPromise()
+			_ = resolve(vm.ToValue(body))
+			return vm.ToValue(p)
+		})
+		call.This.Set("json", func() goja.Value {
+			p, resolve, reject := vm.NewPromise()
+			var v interface{}
+			if err := json.Unmarshal([]byte(body), &v); err != nil {
+				_ = reject(vm.NewGoError(err))
+			} else {
+				_ = resolve(vm.ToValue(v))
+			}
+			return vm.ToValue(p)
+		})
+		return nil
+	})
 }
 
 // --- URL class ---

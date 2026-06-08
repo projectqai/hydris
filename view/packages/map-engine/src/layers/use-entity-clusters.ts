@@ -296,7 +296,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
         if (overflowData) {
           const size = ICON_SIZE * Math.sqrt(overflowData.height / overflowData.width);
           const position: [number, number] = entity
-            ? [entity.position.lng, entity.position.lat]
+            ? [entity.position!.lng, entity.position!.lat]
             : [cluster.lng, cluster.lat];
           const renderEntity: EntityData = entity ?? {
             id: entityId,
@@ -316,7 +316,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
           if (entity?.label) {
             labelData.push({
               id: entity.id,
-              position: [entity.position.lng, entity.position.lat],
+              position: [entity.position!.lng, entity.position!.lat],
               label: entity.label,
               offsetY: overflowData.height,
             });
@@ -324,7 +324,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
         } else if (mapping && mapping.width > 0 && mapping.height > 0) {
           const size = ICON_SIZE * Math.sqrt(mapping.height / mapping.width);
           const position: [number, number] = entity
-            ? [entity.position.lng, entity.position.lat]
+            ? [entity.position!.lng, entity.position!.lat]
             : [cluster.lng, cluster.lat];
           const renderEntity: EntityData = entity ?? {
             id: entityId,
@@ -343,7 +343,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
           if (entity?.label) {
             labelData.push({
               id: entity.id,
-              position: [entity.position.lng, entity.position.lat],
+              position: [entity.position!.lng, entity.position!.lat],
               label: entity.label,
               offsetY: mapping.height,
             });
@@ -382,7 +382,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
             const size = ICON_SIZE * Math.sqrt(dims.height / dims.width);
             renderEntities.push({
               entity: child,
-              position: [child.position.lng, child.position.lat],
+              position: [child.position!.lng, child.position!.lat],
               iconKey,
               size,
               overflow: overflowData,
@@ -391,7 +391,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
             if (child.label) {
               labelData.push({
                 id: child.id,
-                position: [child.position.lng, child.position.lat],
+                position: [child.position!.lng, child.position!.lat],
                 label: child.label,
                 offsetY: dims.height,
               });
@@ -637,7 +637,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
   const allClusters = [...symbolClusters, ...overflowClusters, ...affiliationClusters];
   if (selectedId && !selectionData && allClusters.length > 0 && entityMap.has(selectedId)) {
     const entity = entityMap.get(selectedId)!;
-    if (entity.symbol && !entity.shape) {
+    if (entity.symbol && !entity.shape && entity.position) {
       let nearestCluster: ClusterRenderData | null = null;
       let nearestDist = Infinity;
       for (const c of allClusters) {
@@ -708,7 +708,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
         if (!renderedEntityIds.has(selectedId)) {
           renderEntities.push({
             entity,
-            position: [entity.position.lng, entity.position.lat],
+            position: [entity.position!.lng, entity.position!.lat],
             iconKey,
             size: ICON_SIZE * Math.sqrt(dims.height / dims.width),
             overflow,

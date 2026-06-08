@@ -21,10 +21,12 @@ import {
 } from "../../store/map-engine-store";
 import { useMapStore, useMapStoreHydrated } from "../../store/map-store";
 import { useOverlayStore } from "../../store/overlay-store";
+import { useRadialMenuStore } from "../../store/radial-menu-store";
 import { useRangeRingStore } from "../../store/range-ring-store";
 import { useSelectionStore } from "../../store/selection-store";
 import { buildDelta, buildDeltaChunked } from "../../utils/transform-entities";
 import { PlacementOverlay } from "../placement-overlay";
+import { RadialMenuController } from "../radial-menu/radial-menu-controller";
 import { MapControls } from "./map-controls";
 
 const BRIDGE_CHUNK_SIZE = 5000;
@@ -34,6 +36,8 @@ const VIEW_PERSIST_DEBOUNCE_MS = 250;
 
 export function MapPane() {
   const localRef = useRef<MapViewRef>(null);
+  const paneViewRef = useRef<View | null>(null);
+  const paneOffsetRef = useRef({ x: 0, y: 0 });
   const savedView = useMapStore((state) => state.savedView);
   const localViewRef = useRef(savedView ?? { lat: 0, lng: 0, zoom: 2 });
   const viewPersistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -48,6 +52,8 @@ export function MapPane() {
   const tracks = useOverlayStore((state) => state.tracks);
   const sensors = useOverlayStore((state) => state.sensors);
   const visualization = useOverlayStore((state) => state.visualization);
+  const hiddenLayers = useOverlayStore((state) => state.hiddenLayers);
+  const layerOpacity = useOverlayStore((state) => state.layerOpacity);
   const rangeRingCenter = useRangeRingStore((s) => s.center);
   const rangeRingsActive = useRangeRingStore((s) => s.isPlacing);
   const primaryRef = useMapEngineStore((s) => s.primaryRef);
@@ -209,6 +215,42 @@ export function MapPane() {
     };
   }, [rangeRingCenter, rangeRingsActive]);
 
+  const hiddenLayersJson = JSON.stringify(Object.keys(hiddenLayers));
+  useEffect(() => {
+    let cancelled = false;
+    const push = () => {
+      if (cancelled) return;
+      const ref = localRef.current;
+      if (!ref || typeof ref.pushHiddenLayers !== "function") {
+        setTimeout(push, 100);
+        return;
+      }
+      ref.pushHiddenLayers(hiddenLayersJson);
+    };
+    push();
+    return () => {
+      cancelled = true;
+    };
+  }, [hiddenLayersJson]);
+
+  const layerOpacityJson = JSON.stringify(layerOpacity);
+  useEffect(() => {
+    let cancelled = false;
+    const push = () => {
+      if (cancelled) return;
+      const ref = localRef.current;
+      if (!ref || typeof ref.pushLayerOpacity !== "function") {
+        setTimeout(push, 100);
+        return;
+      }
+      ref.pushLayerOpacity(layerOpacityJson);
+    };
+    push();
+    return () => {
+      cancelled = true;
+    };
+  }, [layerOpacityJson]);
+
   useEffect(() => {
     if (!selectedEntityId) return;
     const gone = lastChange.fullClear
@@ -239,7 +281,15 @@ export function MapPane() {
 
   return (
     <View style={{ flex: 1 }}>
-      <View className="bg-background flex-1">
+      <View
+        ref={paneViewRef}
+        className="bg-background flex-1"
+        onLayout={() => {
+          paneViewRef.current?.measureInWindow((x, y) => {
+            paneOffsetRef.current = { x, y };
+          });
+        }}
+      >
         <MapView
           dom={{ style: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 } }}
           ref={localRef}
@@ -257,6 +307,17 @@ export function MapPane() {
           trackHistoryVisible={visualization.trackHistory}
           onEntityClick={handleEntityClick}
           onMapClick={handleMapClick}
+          onRadialRequest={async (entityId, screenX, screenY, lat, lng) => {
+            if (!isPrimary) return;
+            if (entityId) {
+              const selection = useSelectionStore.getState();
+              if (selection.selectedEntityId !== entityId) selection.select(entityId);
+            }
+            const offset = paneOffsetRef.current;
+            useRadialMenuStore
+              .getState()
+              .openFor(entityId, screenX + offset.x, screenY + offset.y, lat, lng);
+          }}
           onTrackingLost={async () => useSelectionStore.setState({ isFollowing: false })}
           onViewChange={async (lat, lng, zoom) => {
             localViewRef.current = { lat, lng, zoom };
@@ -278,6 +339,7 @@ export function MapPane() {
         <MapAttribution />
       </View>
       {isPlacing && isPrimary && <PlacementOverlay />}
+      {isPrimary && <RadialMenuController />}
     </View>
   );
 }

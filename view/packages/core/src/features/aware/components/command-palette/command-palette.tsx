@@ -12,8 +12,8 @@ import { clearSavedHighlights } from "@hydris/ui/command-palette/use-list-nav";
 import { useKeyboardShortcut } from "@hydris/ui/keyboard";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
-import { ArrowLeft, ChevronRight, Search, X } from "lucide-react-native";
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { ArrowLeft, ChevronRight, PanelLeft, Search, X } from "lucide-react-native";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   Platform,
   Pressable,
@@ -32,15 +32,21 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
+import { toast } from "../../../../lib/sonner";
+import { useFilePicker } from "../../../../lib/use-file-picker";
+import { useMissionHealthStore } from "../../../mission-pack/mission-health-store";
+import { useMissionPack } from "../../../mission-pack/use-mission-pack";
 import { Z } from "../../constants";
 import { useVersionLabel } from "../../store/version-store";
 import { buildCommands, type LayoutActions } from "./command-registry";
 import { CATEGORIES, getTrailSegments, type TrailSegment } from "./palette-helpers";
 import { CommandGroupView } from "./views/command-group-view";
-import { ConfigView } from "./views/config-view";
+import { ConfigView, WIDE_BREAKPOINT } from "./views/config-view";
+import { DiagnosticExportView } from "./views/diagnostic-export-view";
 import { DimensionView } from "./views/dimension-view";
 import { EntityActionsView } from "./views/entity-actions-view";
 import { LocationSearchView } from "./views/location-search-view";
+import { MissionHealthView } from "./views/mission-health-view";
 import { RootView } from "./views/root-view";
 
 function getSearchPlaceholder(mode: PaletteMode): string | null {
@@ -55,6 +61,9 @@ function getSearchPlaceholder(mode: PaletteMode): string | null {
       return "Search by id or name...";
     case "command-group":
       return `Search ${mode.groupLabel.toLowerCase()}...`;
+    case "mission-health":
+    case "diagnostic-export":
+      return null;
     default:
       return null;
   }
@@ -63,13 +72,16 @@ function getSearchPlaceholder(mode: PaletteMode): string | null {
 function TrailBar({
   segments,
   dispatch,
+  leading,
 }: {
   segments: TrailSegment[];
   dispatch: React.Dispatch<PaletteAction>;
+  leading?: React.ReactNode;
 }) {
   const t = useThemeColors();
   return (
     <View className="h-11 flex-row items-center gap-0.5 px-4 py-2" accessibilityLabel="Breadcrumb">
+      {leading}
       {segments.map((seg, i) => {
         const isLast = i === segments.length - 1;
         return (
@@ -148,7 +160,16 @@ export function CommandPalette({
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
 
   const isCompact = windowWidth < 640;
+  const isWide = windowWidth >= WIDE_BREAKPOINT;
   const isConfigMode = mode.kind === "config";
+  const configEntityId = mode.kind === "config" ? mode.entityId : undefined;
+
+  const [treeOpen, setTreeOpen] = useState(
+    () => isWide || !(initialMode?.kind === "config" ? initialMode.entityId : undefined),
+  );
+  useEffect(() => {
+    if (isConfigMode) setTreeOpen(isWide || !configEntityId);
+  }, [isConfigMode, configEntityId, isWide]);
 
   let normalMaxWidth = 560;
   if (isCompact) normalMaxWidth = windowWidth - 16;
@@ -181,7 +202,46 @@ export function CommandPalette({
     };
   });
 
-  const commands = useMemo(() => buildCommands(layoutActions), [layoutActions]);
+  const missionPack = useMissionPack();
+  const pickFile = useFilePicker();
+
+  // Push mission-health onto the stack whenever an import completes while the
+  // palette is open. Mount-time snapshot of importedAt prevents an initial
+  // push when the palette opens straight into mission-health (aware-screen
+  // owns that case).
+  const latestImportedAt = useMissionHealthStore((s) =>
+    Number(s.mission?.importedAt?.seconds ?? 0),
+  );
+  const lastSeenImportRef = useRef(latestImportedAt);
+  useEffect(() => {
+    if (latestImportedAt > lastSeenImportRef.current) {
+      lastSeenImportRef.current = latestImportedAt;
+      dispatch({ type: "push", mode: { kind: "mission-health" } });
+    }
+  }, [latestImportedAt]);
+
+  const missionPackActions = useMemo(
+    () => ({
+      importFromPicker: async () => {
+        try {
+          const file = await pickFile({
+            accept: ".zip,application/zip",
+          });
+          if (file) await missionPack.importPack(file);
+        } catch (err) {
+          console.error("[mission-pack] file picker failed", err);
+          toast.error("Could not open files");
+        }
+      },
+      exportPack: missionPack.exportPack,
+    }),
+    [missionPack, pickFile],
+  );
+
+  const commands = useMemo(
+    () => buildCommands(layoutActions, missionPackActions),
+    [layoutActions, missionPackActions],
+  );
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
@@ -421,7 +481,23 @@ export function CommandPalette({
           </>
         ) : (
           <>
-            <TrailBar segments={trailSegments} dispatch={dispatch} />
+            <TrailBar
+              segments={trailSegments}
+              dispatch={dispatch}
+              leading={
+                isConfigMode ? (
+                  <Pressable
+                    onPress={() => setTreeOpen((v) => !v)}
+                    accessibilityLabel={treeOpen ? "Hide device list" : "Show device list"}
+                    tabIndex={-1}
+                    hitSlop={8}
+                    className="bg-surface-overlay/10 hover:bg-glass-hover mr-1.5 rounded p-0.5"
+                  >
+                    <PanelLeft size={18} strokeWidth={2} color={t.foreground} />
+                  </Pressable>
+                ) : undefined
+              }
+            />
             <View className="bg-surface-overlay/6 h-px" />
           </>
         )}
@@ -459,7 +535,16 @@ export function CommandPalette({
               initialCommandId={mode.initialCommandId}
             />
           )}
-          {mode.kind === "config" && <ConfigView entityId={mode.entityId} query={state.query} />}
+          {mode.kind === "config" && (
+            <ConfigView
+              entityId={mode.entityId}
+              query={state.query}
+              treeOpen={treeOpen}
+              onTreeOpenChange={setTreeOpen}
+            />
+          )}
+          {mode.kind === "mission-health" && <MissionHealthView onClose={handleClose} />}
+          {mode.kind === "diagnostic-export" && <DiagnosticExportView onClose={handleClose} />}
         </View>
 
         {showFooter && (

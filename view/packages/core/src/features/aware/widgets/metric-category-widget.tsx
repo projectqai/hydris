@@ -1,13 +1,17 @@
 import { EmptyState } from "@hydris/ui/empty-state";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
+import { headerIconSize, useMeasuredScale, type WidgetScale } from "@hydris/ui/lib/widget-scale";
 import type { Metric } from "@projectqai/proto/metrics";
 import { AlertLevel, type MetricKind, MetricUnit } from "@projectqai/proto/metrics";
 import { LinearGradient } from "expo-linear-gradient";
-import type { LucideIcon } from "lucide-react-native";
-import { useState } from "react";
+import { ChevronLeft, ChevronRight, type LucideIcon } from "lucide-react-native";
+import { type ReactNode, useMemo, useState } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
+import { Directions, Gesture, GestureDetector } from "react-native-gesture-handler";
 
+import { PinButton } from "../components/layout/pane-pin-button";
+import { usePaneEntity } from "../pane-entity-context";
 import { selectEntity, useEntityStore } from "../store/entity-store";
 import { useSelectionStore } from "../store/selection-store";
 import {
@@ -17,7 +21,9 @@ import {
   getMetricValue,
   getSharedTimestamp,
   getUnitSymbol,
+  hasDisplayFloor,
   type MetricCategory,
+  scaleForDisplay,
 } from "../utils/format-metrics";
 
 type HealthLevel = "good" | "moderate" | "poor";
@@ -27,12 +33,12 @@ export type MetricCategoryWidgetConfig = {
   title: string;
   icon: LucideIcon;
   categories: MetricCategory[];
+  // Hero selection. heroIds wins if any metric matches; falls back to heroPriority by kind.
+  heroIds?: ReadonlySet<number>;
   heroPriority?: MetricKind[];
   gaugeRanges?: Partial<Record<MetricKind, GaugeRange>>;
   supportingPerPage?: number;
 };
-
-const REFERENCE_SIZE = 300;
 
 const BASE = {
   padding: 12,
@@ -49,20 +55,6 @@ const BASE = {
   gaugeHeight: 5,
   gaugeIndicator: 16,
 } as const;
-
-type WidgetScale = { hero: number; body: number; element: number; padding: number };
-
-function computeScale(width: number, height: number): WidgetScale {
-  const minDim = Math.min(width, height);
-  if (minDim <= 0) return { hero: 1, body: 1, element: 1, padding: 1 };
-  const base = minDim / REFERENCE_SIZE;
-  return {
-    hero: Math.max(0.7, Math.min(1.1, base)),
-    body: Math.max(0.7, Math.min(1.0, base * 0.85)),
-    element: Math.max(0.7, Math.min(1.05, base * 0.9)),
-    padding: Math.max(0.8, Math.min(1.0, base * 0.8)),
-  };
-}
 
 function alertToHealth(metric: Metric): HealthLevel | null {
   if (metric.alerting == null || metric.alerting === AlertLevel.AlertLevelNone) return null;
@@ -104,20 +96,19 @@ type MetricDisplay = {
   kind: MetricKind | undefined;
 };
 
-function formatValue(value: number): string {
+function formatValue(value: number, maxDecimals = 1): string {
   return Number.isInteger(value)
     ? value.toLocaleString()
-    : value.toLocaleString(undefined, { maximumFractionDigits: 1 });
+    : value.toLocaleString(undefined, { maximumFractionDigits: maxDecimals });
 }
 
 function toDisplay(metric: Metric): MetricDisplay {
-  let value = getMetricValue(metric);
-  const raw = value;
-  if (metric.unit === MetricUnit.MetricUnitRatio) value *= 100;
+  const raw = getMetricValue(metric);
+  const { value, unit } = scaleForDisplay(raw, metric.unit);
   return {
     label: getMetricLabel(metric),
-    formattedValue: formatValue(value),
-    unit: getUnitSymbol(metric.unit),
+    formattedValue: formatValue(value, hasDisplayFloor(unit) ? 2 : 1),
+    unit: getUnitSymbol(unit),
     health: alertToHealth(metric),
     rawValue: metric.unit === MetricUnit.MetricUnitRatio ? value : raw,
     kind: metric.kind ?? undefined,
@@ -126,16 +117,22 @@ function toDisplay(metric: Metric): MetricDisplay {
 
 function pickHero(
   metrics: Metric[],
+  heroIds: ReadonlySet<number> | undefined,
   heroPriority: MetricKind[] | undefined,
 ): { hero: Metric; supporting: Metric[] } {
+  const takeAt = (idx: number) => {
+    const hero = metrics[idx]!;
+    const supporting = [...metrics.slice(0, idx), ...metrics.slice(idx + 1)];
+    return { hero, supporting };
+  };
+  if (heroIds) {
+    const idx = metrics.findIndex((m) => m.id != null && heroIds.has(m.id));
+    if (idx !== -1) return takeAt(idx);
+  }
   if (heroPriority) {
     for (const kind of heroPriority) {
       const idx = metrics.findIndex((m) => m.kind === kind);
-      if (idx !== -1) {
-        const hero = metrics[idx]!;
-        const supporting = [...metrics.slice(0, idx), ...metrics.slice(idx + 1)];
-        return { hero, supporting };
-      }
+      if (idx !== -1) return takeAt(idx);
     }
   }
   return { hero: metrics[0]!, supporting: metrics.slice(1) };
@@ -215,23 +212,118 @@ function HealthGauge({
   );
 }
 
-export function MetricCategoryWidget({ config }: { config: MetricCategoryWidgetConfig }) {
+type MetricCategoryWidgetProps = {
+  config: MetricCategoryWidgetConfig;
+  // Override the selected entity. When set, the widget renders metrics from
+  // this entity instead of the globally-selected one.
+  entityId?: string;
+  // When false, the entity-label header row is suppressed (the surrounding
+  // container is expected to provide its own framing, e.g. SensorWidgetShell).
+  showHeader?: boolean;
+};
+
+// An unbound widget renders the empty state, so the pin lives here too.
+function EmptyWithPin({
+  pinned,
+  onPin,
+  size,
+  padding,
+  onLayout,
+  children,
+}: {
+  pinned: boolean;
+  onPin?: () => void;
+  size: number;
+  padding: number;
+  onLayout?: (e: { nativeEvent: { layout: { width: number; height: number } } }) => void;
+  children: ReactNode;
+}) {
+  if (!onPin) return <>{children}</>;
+  return (
+    <View onLayout={onLayout} style={{ flex: 1, padding }}>
+      <View className="flex-row justify-end">
+        <PinButton pinned={pinned} onPress={onPin} size={size} />
+      </View>
+      <View className="flex-1">{children}</View>
+    </View>
+  );
+}
+
+function PageArrow({
+  direction,
+  onPress,
+  size,
+}: {
+  direction: "prev" | "next";
+  onPress: () => void;
+  size: number;
+}) {
+  const t = useThemeColors();
+  const Icon = direction === "prev" ? ChevronLeft : ChevronRight;
+  return (
+    <Pressable
+      onPress={onPress}
+      aria-label={direction === "prev" ? "Previous page" : "Next page"}
+      hitSlop={
+        direction === "prev"
+          ? { top: 8, bottom: 8, left: 16, right: 12 }
+          : { top: 8, bottom: 8, left: 12, right: 16 }
+      }
+      className="hover:bg-glass-hover active:bg-surface-overlay/12 rounded p-3"
+    >
+      <Icon aria-hidden size={size} strokeWidth={2} color={t.iconMuted} />
+    </Pressable>
+  );
+}
+
+export function MetricCategoryWidget({
+  config,
+  entityId,
+  showHeader = true,
+}: MetricCategoryWidgetProps) {
   const t = useThemeColors();
   const selectedId = useSelectionStore((s) => s.selectedEntityId);
-  const entity = useEntityStore(selectEntity(selectedId));
+  const { entityId: paneEntityId, onPin } = usePaneEntity();
+  const effectiveId = entityId ?? paneEntityId ?? selectedId;
+  const entity = useEntityStore(selectEntity(effectiveId));
   const [page, setPage] = useState(0);
-  const [scale, setScale] = useState<WidgetScale>(() => computeScale(300, 300));
+  const { scale, onLayout } = useMeasuredScale();
+  const swipe = useMemo(
+    () =>
+      Gesture.Race(
+        Gesture.Fling()
+          .direction(Directions.LEFT)
+          .runOnJS(true)
+          .onEnd(() => setPage((p) => p + 1)),
+        Gesture.Fling()
+          .direction(Directions.RIGHT)
+          .runOnJS(true)
+          .onEnd(() => setPage((p) => p - 1)),
+      ),
+    [],
+  );
 
   const categorySet = new Set(config.categories);
   const supportingPerPage = config.supportingPerPage ?? Infinity;
+  const padding = Math.round(BASE.padding * scale.padding);
+  const headerFontSize = Math.max(12, Math.round(BASE.headerText * scale.body));
+  const pinSize = headerIconSize(scale);
 
   if (!entity?.metric?.metrics?.length) {
     return (
-      <EmptyState
-        icon={config.icon}
-        title={config.title}
-        subtitle={selectedId ? "No metrics available" : "Select an entity"}
-      />
+      <EmptyWithPin
+        pinned={!!paneEntityId}
+        onPin={showHeader ? onPin : undefined}
+        size={pinSize}
+        padding={padding}
+        onLayout={onLayout}
+      >
+        <EmptyState
+          icon={config.icon}
+          title={config.title}
+          subtitle={effectiveId ? "No metrics available" : "Select an entity"}
+        />
+      </EmptyWithPin>
     );
   }
 
@@ -241,20 +333,29 @@ export function MetricCategoryWidget({ config }: { config: MetricCategoryWidgetC
 
   if (filtered.length === 0) {
     return (
-      <EmptyState
-        icon={config.icon}
-        title={config.title}
-        subtitle={`No ${config.title.toLowerCase()} metrics`}
-      />
+      <EmptyWithPin
+        pinned={!!paneEntityId}
+        onPin={showHeader ? onPin : undefined}
+        size={pinSize}
+        padding={padding}
+        onLayout={onLayout}
+      >
+        <EmptyState
+          icon={config.icon}
+          title={config.title}
+          subtitle={`No ${config.title.toLowerCase()} metrics`}
+        />
+      </EmptyWithPin>
     );
   }
 
-  const { hero: heroMetric, supporting } = pickHero(filtered, config.heroPriority);
+  const { hero: heroMetric, supporting } = pickHero(filtered, config.heroIds, config.heroPriority);
   const hero = toDisplay(heroMetric);
   const allSupporting = supporting.map(toDisplay);
 
   const totalPages = Math.max(1, Math.ceil(allSupporting.length / supportingPerPage));
-  const currentPage = allSupporting.length > 0 ? page % totalPages : 0;
+  const currentPage =
+    allSupporting.length > 0 ? ((page % totalPages) + totalPages) % totalPages : 0;
   const pageItems =
     supportingPerPage === Infinity
       ? allSupporting
@@ -263,11 +364,9 @@ export function MetricCategoryWidget({ config }: { config: MetricCategoryWidgetC
   const timestamp = getSharedTimestamp(filtered, { strict: false });
   const paginated = totalPages > 1;
 
-  const padding = Math.round(BASE.padding * scale.padding);
   const heroFontSize = Math.round(BASE.heroText * scale.hero);
   const unitFontSize = Math.round(BASE.unitText * scale.body);
   const labelFontSize = Math.round(BASE.labelText * scale.body);
-  const headerFontSize = Math.max(12, Math.round(BASE.headerText * scale.body));
   const metaFontSize = Math.max(10, Math.round(BASE.metaText * scale.body));
   const supportingLabelSize = Math.max(11, Math.round(BASE.supportingLabel * scale.body));
   const supportingValueSize = Math.max(11, Math.round(BASE.supportingValue * scale.body));
@@ -276,43 +375,39 @@ export function MetricCategoryWidget({ config }: { config: MetricCategoryWidgetC
   const rowPadding = Math.round(BASE.rowPadding * scale.padding);
   const healthDotSize = Math.round(5 * scale.element);
 
-  const Wrapper = paginated ? Pressable : View;
-  const wrapperProps = paginated
-    ? {
-        onPress: () => setPage((p) => p + 1),
-        accessibilityHint: `Page ${currentPage + 1} of ${totalPages}, tap to see more`,
-      }
-    : {};
-
-  return (
-    <Wrapper
-      {...wrapperProps}
-      className="bg-background flex-1 overflow-hidden select-none"
+  const body = (
+    <View
+      className={cn("flex-1 overflow-hidden select-none", showHeader ? "bg-background" : "")}
       style={{ padding }}
-      onLayout={(e: { nativeEvent: { layout: { width: number; height: number } } }) => {
-        const { width, height } = e.nativeEvent.layout;
-        setScale(computeScale(width, height));
-      }}
+      onLayout={onLayout}
       accessibilityRole="summary"
       accessibilityLabel={`${hero.label}: ${hero.formattedValue} ${hero.unit}`}
     >
-      <View className="flex-row items-center justify-between" style={{ marginBottom: sectionGap }}>
-        <Text
-          className="font-sans-semibold text-foreground/80 min-w-0 shrink"
-          style={{ fontSize: headerFontSize }}
-          numberOfLines={1}
+      {showHeader && (
+        <View
+          className="flex-row items-center justify-between"
+          style={{ marginBottom: sectionGap }}
         >
-          {entity.label ?? entity.id}
-        </Text>
-        {timestamp && (
           <Text
-            className="font-sans-semibold text-foreground/70 ml-3 shrink-0 tabular-nums"
-            style={{ fontSize: metaFontSize }}
+            className="font-sans-semibold text-foreground/80 min-w-0 shrink"
+            style={{ fontSize: headerFontSize }}
+            numberOfLines={1}
           >
-            {formatRelativeTime(timestamp)}
+            {entity.label ?? entity.id}
           </Text>
-        )}
-      </View>
+          <View className="ml-3 shrink-0 flex-row items-center" style={{ gap: 8 * scale.body }}>
+            {timestamp && (
+              <Text
+                className="font-sans-semibold text-foreground/70 tabular-nums"
+                style={{ fontSize: metaFontSize }}
+              >
+                {formatRelativeTime(timestamp)}
+              </Text>
+            )}
+            {onPin && <PinButton pinned={!!paneEntityId} onPress={onPin} size={pinSize} />}
+          </View>
+        </View>
+      )}
 
       <View className="flex-1 justify-center" style={{ gap: sectionGap * 2.5 }}>
         <View className="items-center">
@@ -404,13 +499,19 @@ export function MetricCategoryWidget({ config }: { config: MetricCategoryWidgetC
       </View>
 
       {paginated && (
-        <Text
-          className="font-sans-medium text-foreground/60 text-center tabular-nums"
-          style={{ fontSize: supportingLabelSize, marginTop: sectionGap }}
-        >
-          {currentPage + 1} / {totalPages}
-        </Text>
+        <View className="flex-row items-center justify-between" style={{ marginTop: sectionGap }}>
+          <PageArrow direction="prev" size={pinSize} onPress={() => setPage((p) => p - 1)} />
+          <Text
+            className="font-sans-medium text-foreground/60 text-center tabular-nums"
+            style={{ fontSize: supportingLabelSize }}
+          >
+            {currentPage + 1} / {totalPages}
+          </Text>
+          <PageArrow direction="next" size={pinSize} onPress={() => setPage((p) => p + 1)} />
+        </View>
       )}
-    </Wrapper>
+    </View>
   );
+
+  return paginated ? <GestureDetector gesture={swipe}>{body}</GestureDetector> : body;
 }

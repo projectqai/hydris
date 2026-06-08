@@ -7,8 +7,10 @@ import {
   LayoutEditingContext,
   SplitRatioContext,
 } from "@hydris/ui/layout/contexts";
+import { getPaneEntityId } from "@hydris/ui/layout/tree-utils";
 import type { NodePath, PaneContent, PaneId } from "@hydris/ui/layout/types";
 import { useThemeColors } from "@hydris/ui/lib/theme";
+import { headerIconSize, useMeasuredScale } from "@hydris/ui/lib/widget-scale";
 import {
   AlertTriangle,
   ArrowLeftRight,
@@ -30,26 +32,32 @@ import Animated, {
 
 import { getEntityName } from "../../../../lib/api/use-track-utils";
 import { SensorPane } from "../../../sensors/components/sensor-pane";
-import {
-  COLLAPSE_FADE_START,
-  COMPONENT_LABELS,
-  COMPONENT_REGISTRY,
-  SIZE_COLLAPSE_FADE,
-  SIZE_COLLAPSED,
-  Z,
-} from "../../constants";
+import { COLLAPSE_FADE_START, SIZE_COLLAPSE_FADE, SIZE_COLLAPSED, Z } from "../../constants";
+import { COMPONENT_LABELS, COMPONENT_REGISTRY } from "../../layouts";
+import { PaneEntityProvider, usePaneEntity } from "../../pane-entity-context";
 import { useEntityStore } from "../../store/entity-store";
 import { CameraPanOverlay } from "../video-stream/camera-pan-overlay";
 import { toEmbedUrl } from "../video-stream/embed-providers";
 import { IframeStream } from "../video-stream/iframe-stream";
 import { resolveStreamUrl } from "../video-stream/resolve-stream-url";
 import { VideoStream } from "../video-stream/video-stream";
+import { paneEntityMeta } from "./pane-entity";
+import { PinButton } from "./pane-pin-button";
 
 function getPaneLabel(content: PaneContent, extLabels?: Record<string, string>): string {
   if (content.type === "camera") return "Camera";
   if (content.type === "sensor") return "Sensor";
   if (content.type === "iframe") return "Embed";
-  if (content.type === "empty") return "Empty";
+  if (content.type === "empty") {
+    if (content.missingWidgetId) {
+      return (
+        extLabels?.[content.missingWidgetId] ??
+        COMPONENT_LABELS[content.missingWidgetId] ??
+        content.missingWidgetId
+      );
+    }
+    return "Empty";
+  }
   if (content.type === "component") {
     return (
       extLabels?.[content.componentId] ??
@@ -60,30 +68,58 @@ function getPaneLabel(content: PaneContent, extLabels?: Record<string, string>):
   return "Pane";
 }
 
+function UnknownWidget({ id }: { id: string }) {
+  return (
+    <EmptyState
+      icon={AlertTriangle}
+      title="Unknown widget"
+      subtitle={`"${id}" is not a registered widget`}
+    />
+  );
+}
+
 function CameraPane({ entityId }: { entityId: string }) {
   const t = useThemeColors();
+  const { onPin } = usePaneEntity();
   const entity = useEntityStore((s) => s.entities.get(entityId));
   const name = entity ? getEntityName(entity) : entityId;
   const stream = entity?.camera?.streams?.[0];
   const resolved = stream ? resolveStreamUrl(stream, entityId, 0) : null;
+  const { scale, onLayout } = useMeasuredScale();
+
+  const pin = onPin ? (
+    <View style={{ position: "absolute", top: 8, right: 8, zIndex: 5 }}>
+      <View className="items-center justify-center rounded bg-black/35 p-1">
+        <PinButton pinned onPress={onPin} size={headerIconSize(scale)} color="white" />
+      </View>
+    </View>
+  ) : null;
 
   if (!resolved) {
     return (
       <View
+        onLayout={onLayout}
         className="flex-1 items-center justify-center"
         style={{ backgroundColor: t.background }}
       >
         <Text className="text-on-surface/70 font-sans text-sm">{name}</Text>
         <Text className="text-on-surface/70 mt-1 font-sans text-xs">No feed available</Text>
+        {pin}
       </View>
     );
   }
 
   return (
-    <View className="flex-1 bg-black">
+    <View onLayout={onLayout} className="flex-1 bg-black">
       <CameraPanOverlay camera={entity}>
-        <VideoStream url={resolved.url} protocol={resolved.protocol} />
+        <VideoStream
+          url={resolved.url}
+          protocol={resolved.protocol}
+          objectFit="contain"
+          cameraEntityId={entityId}
+        />
       </CameraPanOverlay>
+      {pin}
     </View>
   );
 }
@@ -136,12 +172,15 @@ export function PaneShell({
     onSwapTarget,
     pickerState,
     openPicker,
+    openEntityPicker,
   } = useContext(LayoutEditingContext)!;
   const splitCtx = useContext(SplitRatioContext);
   const registryCtx = useContext(ComponentRegistryContext);
 
   const paneLabel = getPaneLabel(content, registryCtx?.labels);
   const pickerOpen = pickerState !== null && pickerState.path.join() === path.join();
+  const entityMeta = paneEntityMeta(content);
+  const boundEntityId = getPaneEntityId(content);
 
   const paneWidth = useSharedValue(0);
   const paneHeight = useSharedValue(0);
@@ -210,7 +249,8 @@ export function PaneShell({
   const handleExpand = useCallback(() => {
     let ctx: typeof splitCtx = splitCtx;
     while (ctx) {
-      const paneRatio = ctx.position === "first" ? ctx.ratio.value : 1 - ctx.ratio.value;
+      const ratioValue = ctx.ratio.value;
+      const paneRatio = ctx.position === "first" ? ratioValue : 1 - ratioValue;
       if (paneRatio < COLLAPSE_FADE_START) {
         ctx.ratio.value = withTiming(ctx.defaultRatio, { duration: 200 });
         onRatioChange(ctx.path, ctx.defaultRatio);
@@ -226,17 +266,13 @@ export function PaneShell({
     if (content.type === "sensor")
       return <SensorPane entityId={content.entityId} widgetId={content.widgetId} />;
     if (content.type === "iframe") return <IframePane url={content.url} />;
-    if (content.type === "empty") return null;
+    if (content.type === "empty") {
+      if (content.missingWidgetId) return <UnknownWidget id={content.missingWidgetId} />;
+      return null;
+    }
     if (content.type === "component") {
       const Content = registry[content.componentId];
-      if (!Content)
-        return (
-          <EmptyState
-            icon={AlertTriangle}
-            title="Unknown widget"
-            subtitle={`"${content.componentId}" is not a registered widget`}
-          />
-        );
+      if (!Content) return <UnknownWidget id={content.componentId} />;
       return <Content />;
     }
     return null;
@@ -292,7 +328,12 @@ export function PaneShell({
       </Animated.View>
 
       <Animated.View style={[{ flex: 1, backgroundColor: t.background }, contentOpacity]}>
-        <View className="flex-1">{renderContent()}</View>
+        <PaneEntityProvider
+          entityId={boundEntityId}
+          onPin={entityMeta ? () => openEntityPicker(path, content) : undefined}
+        >
+          <View className="flex-1">{renderContent()}</View>
+        </PaneEntityProvider>
       </Animated.View>
 
       <Animated.View

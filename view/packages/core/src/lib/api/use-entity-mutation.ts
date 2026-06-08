@@ -47,11 +47,11 @@ export function useEntityMutation() {
     try {
       const response = await worldClient.push({
         changes: [
-          {
-            ...entity,
+          create(EntitySchema, {
+            id: entity.id,
             geo: geoComponent,
             lifetime: create(LifetimeSchema, { from: timestampNow() }),
-          },
+          }),
         ],
       });
 
@@ -84,11 +84,11 @@ export function useEntityMutation() {
     try {
       const response = await worldClient.push({
         changes: [
-          {
-            ...entity,
+          create(EntitySchema, {
+            id: entity.id,
             config: configComponent,
             lifetime: create(LifetimeSchema, { from: timestampNow() }),
-          },
+          }),
         ],
       });
 

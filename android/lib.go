@@ -12,14 +12,14 @@ import (
 	"path/filepath"
 
 	"github.com/projectqai/hydris/builtin"
-	"github.com/projectqai/hydris/builtin/artifacts"
 	_ "github.com/projectqai/hydris/builtin/all"
+	"github.com/projectqai/hydris/builtin/artifacts"
 	"github.com/projectqai/hydris/engine"
-	pb "github.com/projectqai/proto/go"
 	"github.com/projectqai/hydris/hal"
 	"github.com/projectqai/hydris/pkg/media"
 	"github.com/projectqai/hydris/pkg/plugin"
 	"github.com/projectqai/hydris/view"
+	pb "github.com/projectqai/proto/go"
 	"github.com/rs/cors"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -116,7 +116,7 @@ func StartEngine() string {
 	if err != nil {
 		slog.Error("failed to create artifact store", "error", err)
 	} else {
-		grpcConn, err := builtin.BuiltinClientConn()
+		grpcConn, err := builtin.BuiltinClientConn("android")
 		if err != nil {
 			slog.Error("failed to create builtin client for artifacts", "error", err)
 		} else {
@@ -286,4 +286,3 @@ func SetHalPlatform(ble PlatformBLE, serial PlatformSerial, sensors PlatformSens
 func GetHalHandler() HalHandler {
 	return hal.GetHandler()
 }
-

@@ -5,6 +5,7 @@ import Animated, {
   cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
+  withSequence,
   withTiming,
 } from "react-native-reanimated";
 
@@ -13,6 +14,7 @@ import { useThemeColors } from "../lib/theme";
 
 const DEFAULT_DURATION_MS = 2000;
 const COUNTDOWN_INTERVAL_MS = 100;
+const PRESS_FEEDBACK_BASELINE = 0.18;
 
 export function HoldToConfirmPressable({
   onConfirm,
@@ -66,7 +68,13 @@ export function HoldToConfirmPressable({
     confirmedRef.current = false;
     startTime.current = Date.now();
     setRemaining(duration);
-    fillProgress.set(withTiming(1, { duration }));
+    // Pop to the baseline instantly (duration 0) so even a fast click registers, then fill
+    fillProgress.set(
+      withSequence(
+        withTiming(PRESS_FEEDBACK_BASELINE, { duration: 0 }),
+        withTiming(1, { duration }),
+      ),
+    );
   };
 
   const endFill = () => {

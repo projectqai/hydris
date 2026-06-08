@@ -1,5 +1,5 @@
 import type { Entity, GeoSpatialComponent } from "@projectqai/proto/world";
-import { SortField } from "@projectqai/proto/world";
+import { Priority, SortField } from "@projectqai/proto/world";
 import { create } from "zustand";
 
 import {
@@ -30,8 +30,10 @@ export const ENTITY_STREAM_FILTER = {
     { component: [11] }, // geo: tracks, assets, sensors
     { component: [16, 17] }, // detection + bearing
     { component: [50] }, // device: config tree
+    { component: [52] }, // configurable: orphaned configs (no device component)
     { component: [25] }, // shape: coverage, history, prediction
     { component: [23] }, // taskable: action buttons
+    { component: [63] }, // map_layer: plugin map overlays
   ],
 };
 
@@ -102,6 +104,15 @@ export const selectAssetCount = (state: EntityState) => state.assetCount;
 export const selectLastChange = (state: EntityState) => state.lastChange;
 export const selectDetectionEntityIds = (state: EntityState) => state.detectionEntityIds;
 export const selectSelfGeo = (state: EntityState) => state.selfGeo;
+
+export const selectDetectionsByDetector = (detectorEntityId: string) => (state: EntityState) => {
+  const result: Entity[] = [];
+  for (const id of state.detectionEntityIds) {
+    const entity = state.entities.get(id);
+    if (entity?.detection?.detectorEntityId === detectorEntityId) result.push(entity);
+  }
+  return result;
+};
 
 function entitySortComparator(sort: SortConfig) {
   const dir = sort.descending ? -1 : 1;
@@ -475,7 +486,16 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
           }
 
           classifyEvent(event, pendingUpdates, pendingDeletes);
-          scheduleFlush();
+          const priority = event.entity?.priority ?? Priority.PriorityUnspecified;
+          if (priority >= Priority.PriorityImmediate) {
+            if (flushTimeout) {
+              clearTimeout(flushTimeout);
+              flushTimeout = null;
+            }
+            flushUpdates();
+          } else {
+            scheduleFlush();
+          }
 
           if (++eventsSinceYield >= 200) {
             eventsSinceYield = 0;

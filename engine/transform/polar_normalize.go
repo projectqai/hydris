@@ -3,6 +3,7 @@ package transform
 import (
 	"math"
 
+	"github.com/projectqai/hydris/engine/meta"
 	pb "github.com/projectqai/proto/go"
 )
 
@@ -20,7 +21,7 @@ func (t *PolarNormalizeTransformer) Validate(_ map[string]*pb.Entity, _ *pb.Enti
 	return nil
 }
 
-func (t *PolarNormalizeTransformer) Resolve(head map[string]*pb.Entity, changedID string) (upsert []*pb.Entity, remove []string) {
+func (t *PolarNormalizeTransformer) Resolve(head map[string]*pb.Entity, changedID string, _ map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	entity := head[changedID]
 	if entity == nil || entity.Pose == nil {
 		return nil, nil

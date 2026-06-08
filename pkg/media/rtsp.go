@@ -27,15 +27,22 @@ import (
 	pb "github.com/projectqai/proto/go"
 )
 
+// GetStreamsFunc returns the camera streams for an entity, or nil if not found.
+type GetStreamsFunc func(entityID string) []*pb.MediaStream
+
+// GetSourceURLFunc returns the original source URL for a camera stream.
+type GetSourceURLFunc func(entityID string, streamIndex int) string
+
 // RTSPServer relays camera streams from entities as an RTSP server.
 // Clients connect to rtsp://host:port/media/rtsp/{entityId}/{cameraIndex}.
 // Supports both RTSP sources (direct relay) and HTTP MJPEG sources
 // (fetches MJPEG, packetizes as RTP/JPEG).
 type RTSPServer struct {
-	lookup          EntityLookup
+	getStreams      GetStreamsFunc
+	getSourceURL    GetSourceURLFunc
 	bridges         *BridgeManager
 	server          *gortsplib.Server
-	isRemoteAllowed func() bool // returns true if remote access is enabled
+	isRemoteAllowed func() bool
 
 	mu       sync.Mutex
 	streams  map[string]*rtspStreamState         // keyed by "entityId/cameraIndex"
@@ -53,9 +60,10 @@ type rtspStreamState struct {
 
 // NewRTSPServer creates an RTSP relay server.
 // isRemoteAllowed is called on each connection to check if non-loopback access is permitted.
-func NewRTSPServer(lookup EntityLookup, bridges *BridgeManager, isRemoteAllowed func() bool) *RTSPServer {
+func NewRTSPServer(getStreams GetStreamsFunc, getSourceURL GetSourceURLFunc, bridges *BridgeManager, isRemoteAllowed func() bool) *RTSPServer {
 	return &RTSPServer{
-		lookup:          lookup,
+		getStreams:      getStreams,
+		getSourceURL:    getSourceURL,
 		bridges:         bridges,
 		isRemoteAllowed: isRemoteAllowed,
 		streams:         make(map[string]*rtspStreamState),
@@ -160,32 +168,27 @@ func (rs *RTSPServer) getOrCreateStream(entityID string, cameraIndex int) (*rtsp
 	}
 	rs.mu.Unlock()
 
-	// Look up entity to get source URL and protocol.
-	entity := rs.lookup.GetHead(entityID)
-	if entity == nil || entity.Camera == nil {
-		return nil, fmt.Errorf("entity not found or has no camera")
-	}
-	if len(entity.Camera.Streams) == 0 {
-		return nil, fmt.Errorf("entity has no streams")
+	streams := rs.getStreams(entityID)
+	if len(streams) == 0 {
+		return nil, fmt.Errorf("entity not found or has no camera streams")
 	}
 
 	// If cameraIndex is 0 and not explicitly set, find the best stream
 	// (prefer RTSP, then MJPEG, then anything).
 	if cameraIndex == 0 {
-		for i, s := range entity.Camera.Streams {
+		for i, s := range streams {
 			if s.Protocol == pb.MediaStreamProtocol_MediaStreamProtocolRtsp {
 				cameraIndex = i
 				break
 			}
 		}
 	}
-	if cameraIndex < 0 || cameraIndex >= len(entity.Camera.Streams) {
+	if cameraIndex < 0 || cameraIndex >= len(streams) {
 		return nil, fmt.Errorf("camera index out of range")
 	}
-	stream := entity.Camera.Streams[cameraIndex]
+	stream := streams[cameraIndex]
 
-	// Use the original source URL (before the media transform rewrote it).
-	sourceURL := rs.lookup.GetSourceURL(entityID, cameraIndex)
+	sourceURL := rs.getSourceURL(entityID, cameraIndex)
 	if sourceURL == "" {
 		sourceURL = stream.Url
 	}

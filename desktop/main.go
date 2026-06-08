@@ -42,7 +42,7 @@ func main() {
 	defer cancel()
 
 	serverAddr, err := engine.StartEngine(ctx, engine.EngineConfig{
-		LogHandler: logging.Ring,
+		LogRing: logging.Ring,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "failed to start engine:", err)

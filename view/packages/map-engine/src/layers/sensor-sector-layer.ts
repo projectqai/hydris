@@ -19,7 +19,7 @@ export function createSensorSectorLayer({ data, visible }: SensorSectorLayerProp
     id: "sectors",
     data,
     visible: visible && data.length > 0,
-    getPosition: (d) => [d.entity.position.lng, d.entity.position.lat],
+    getPosition: (d) => [d.entity.position!.lng, d.entity.position!.lat],
     getIcon: (d) => ({ url: d.sectorDataUri, width: 230, height: 230, anchorY: 115 }),
     getSize: (d) => (d.entity.ellipseRadius ?? 250) * 2,
     sizeUnits: "meters",

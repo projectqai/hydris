@@ -51,14 +51,14 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		},
 	})
 
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:    "mediaserver.service",
 		Label: proto.String("Media Server"),
 		Controller: &pb.Controller{
 			Id: &controllerName,
 		},
 		Device: &pb.DeviceComponent{
-			Category: proto.String("Media"),
+			Category: proto.String("Network"),
 		},
 		Configurable: &pb.ConfigurableComponent{
 			Label:  proto.String("Media Server"),
@@ -71,7 +71,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		return fmt.Errorf("push service entity: %w", err)
 	}
 
-	return controller.Run(ctx, "mediaserver.service", func(ctx context.Context, entity *pb.Entity, ready func()) error {
+	return controller.Run(ctx, controllerName, "mediaserver.service", func(ctx context.Context, entity *pb.Entity, ready func()) error {
 		share := false
 		if entity.Config != nil && entity.Config.Value != nil {
 			if v, ok := entity.Config.Value.Fields["share_remote"]; ok {

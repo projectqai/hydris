@@ -4,7 +4,7 @@ import { HeartPulse } from "lucide-react-native";
 import type { MetricCategoryWidgetConfig } from "./metric-category-widget";
 import { MetricCategoryWidget } from "./metric-category-widget";
 
-const CONFIG: MetricCategoryWidgetConfig = {
+export const VITAL_CONFIG: MetricCategoryWidgetConfig = {
   title: "Vitals",
   icon: HeartPulse,
   categories: ["vital"],
@@ -21,5 +21,5 @@ const CONFIG: MetricCategoryWidgetConfig = {
 };
 
 export function VitalWidget() {
-  return <MetricCategoryWidget config={CONFIG} />;
+  return <MetricCategoryWidget config={VITAL_CONFIG} />;
 }

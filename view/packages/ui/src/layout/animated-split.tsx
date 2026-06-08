@@ -63,17 +63,14 @@ export function AnimatedSplit({
   }
 
   const measured = isH ? dims.width : dims.height;
+  containerSizeSV.value = measured;
+  crossAxisSizeSV.value = isH ? dims.height : dims.width;
 
   const collapsedRatio = useDerivedValue(() => {
     const cs = containerSizeSV.value;
     if (cs <= DIVIDER_SIZE) return COLLAPSED_PX / 1000;
     return Math.min(COLLAPSED_PX / (cs - DIVIDER_SIZE), 0.1);
   });
-
-  useEffect(() => {
-    containerSizeSV.value = measured;
-    crossAxisSizeSV.value = isH ? dims.height : dims.width;
-  }, [measured, dims]);
 
   useEffect(() => {
     ratio.value = withTiming(targetRatio, TIMING_CONFIG);

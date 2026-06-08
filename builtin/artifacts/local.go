@@ -33,6 +33,13 @@ func (s *LocalStore) Get(_ context.Context, id string) (io.ReadCloser, error) {
 	return f, nil
 }
 
+// Open returns the underlying file for the artifact. The returned *os.File
+// implements io.ReaderAt and exposes Stat() for size lookup, which is needed
+// by consumers like archive/zip that require random access.
+func (s *LocalStore) Open(_ context.Context, id string) (*os.File, error) {
+	return os.Open(s.path(id))
+}
+
 func (s *LocalStore) Put(_ context.Context, id string, r io.Reader) error {
 	if err := s.checkDiskSpace(); err != nil {
 		return err

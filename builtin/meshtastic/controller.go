@@ -104,7 +104,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 
 	controllerName := "meshtastic"
 
-	if err := controller.Push(ctx,
+	if err := controller.Push(ctx, controllerName,
 		&pb.Entity{
 			Id:    "meshtastic.service",
 			Label: proto.String("Meshtastic"),
@@ -118,7 +118,11 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 			Configurable: &pb.ConfigurableComponent{
 				Schema: serviceSchema,
 				SupportedDeviceClasses: []*pb.DeviceClassOption{
-					{Class: "defaults", Label: "Default Configuration"},
+					{
+						Class:       "defaults",
+						Label:       "Default Configuration",
+						Description: "Default configuration applied to any Meshtastic radio that gets auto-configured by hydris when plugged in.",
+					},
 				},
 			},
 			Interactivity: &pb.InteractivityComponent{
@@ -130,7 +134,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	}
 
 	// Watch the service entity's own config for autoconfig.
-	go controller.Run(ctx, "meshtastic.service", func(ctx context.Context, entity *pb.Entity, ready func()) error { //nolint:errcheck // fire-and-forget goroutine
+	go controller.Run(ctx, controllerName, "meshtastic.service", func(ctx context.Context, entity *pb.Entity, ready func()) error { //nolint:errcheck // fire-and-forget goroutine
 		ready()
 		return runAutoConfig(ctx, logger, entity)
 	})
@@ -139,8 +143,8 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		{Class: "defaults", Label: "Default Configuration", Schema: defaultSchema},
 	}
 
-	return controller.WatchChildren(ctx, "meshtastic.service", controllerName, classes, func(ctx context.Context, entityID string) error {
-		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+	return controller.WatchChildren(ctx, controllerName, "meshtastic.service", controllerName, classes, func(ctx context.Context, entityID string) error {
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			if entity.Device.GetClass() == "defaults" {
 				ready()
 				return runDefaultConfig(ctx, logger, entity)
@@ -249,7 +253,7 @@ func runInstance(parentCtx context.Context, logger *slog.Logger, entity *pb.Enti
 		)
 
 		// Look up the parent device entity to get the serial path.
-		grpcConn, err := builtin.BuiltinClientConn()
+		grpcConn, err := builtin.BuiltinClientConn("meshtastic")
 		if err != nil {
 			return fmt.Errorf("grpc connect: %w", err)
 		}
@@ -282,7 +286,7 @@ func runInstance(parentCtx context.Context, logger *slog.Logger, entity *pb.Enti
 		return fmt.Errorf("no matched device for entity %s", entity.Id)
 	}
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("meshtastic")
 	if err != nil {
 		return fmt.Errorf("grpc connect: %w", err)
 	}
@@ -477,7 +481,7 @@ func updateServiceState(ctx context.Context, logger *slog.Logger) {
 		state = pb.DeviceState_DeviceStateActive
 	}
 
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, "meshtastic", &pb.Entity{
 		Id: "meshtastic.service",
 		Controller: &pb.Controller{
 			Id: proto.String("meshtastic"),

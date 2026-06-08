@@ -1,13 +1,18 @@
 import { cn } from "@hydris/ui/lib/utils";
+import type { MetricUnit } from "@projectqai/proto/metrics";
 import { Platform, Text, View } from "react-native";
 
+import { getUnitSymbol } from "../../aware/utils/format-metrics";
 import type { MetricReading } from "../types";
 import { BASE, useWidgetScale } from "./scale-context";
 import { SensorWidgetShell } from "./sensor-widget-shell";
 
-export type MetricFormat = (value: number, unit: string) => { value: string; unit: string };
+export type MetricFormat = (value: number, unit: MetricUnit) => { value: string; unit: string };
 
-const defaultFormat: MetricFormat = (value, unit) => ({ value: value.toFixed(2), unit });
+const defaultFormat: MetricFormat = (value, unit) => ({
+  value: value.toFixed(2),
+  unit: getUnitSymbol(unit),
+});
 
 type Props = {
   entityId: string;

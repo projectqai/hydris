@@ -1,9 +1,11 @@
 import type { EntityPickerProps } from "@hydris/ui/layout/types";
-import { LinkStatus } from "@projectqai/proto/world";
+import type { Entity } from "@projectqai/proto/world";
 import { Activity } from "lucide-react-native";
 
-import { getEntityName } from "../../../lib/api/use-track-utils";
-import { EntityPickerList } from "../../aware/components/layout/entity-picker-list";
+import {
+  buildEntityItems,
+  EntityPickerList,
+} from "../../aware/components/layout/entity-picker-list";
 import { useEntityStore } from "../../aware/store/entity-store";
 import { getReadingShape, getSensorKind } from "../adapter";
 import { SENSOR_KIND_LABEL } from "../types";
@@ -17,22 +19,22 @@ export function SensorEntityPicker({ widgetId, onSelect }: EntityPickerProps) {
   const entities = useEntityStore((state) => state.entities);
   const expectedShape = WIDGET_SHAPE[widgetId];
 
-  const sensors = (() => {
-    const result: { id: string; name: string; isOnline: boolean; subtitle?: string }[] = [];
-    for (const entity of entities.values()) {
-      const kind = getSensorKind(entity);
-      if (!kind) continue;
-      if (expectedShape && getReadingShape(entity) !== expectedShape) continue;
+  const kindCache = new Map<Entity, ReturnType<typeof getSensorKind>>();
+  const kindOf = (entity: Entity) => {
+    if (!kindCache.has(entity)) kindCache.set(entity, getSensorKind(entity));
+    return kindCache.get(entity)!;
+  };
 
-      result.push({
-        id: entity.id,
-        name: getEntityName(entity),
-        isOnline: entity.link?.status === LinkStatus.LinkStatusConnected,
-        subtitle: SENSOR_KIND_LABEL[kind],
-      });
-    }
-    return result.sort((a, b) => a.name.localeCompare(b.name));
-  })();
+  const sensors = buildEntityItems(entities, {
+    match: (entity) => {
+      if (!kindOf(entity)) return false;
+      return !expectedShape || getReadingShape(entity) === expectedShape;
+    },
+    subtitle: (entity) => {
+      const kind = kindOf(entity);
+      return kind != null ? SENSOR_KIND_LABEL[kind] : undefined;
+    },
+  });
 
   return (
     <EntityPickerList

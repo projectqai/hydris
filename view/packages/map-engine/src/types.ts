@@ -43,9 +43,21 @@ export type ShapeProperties = {
 
 export type Affiliation = "blue" | "red" | "neutral" | "unknown" | "unclassified";
 
+export type MapLayer = {
+  kind: "tiles" | "image";
+  url: string;
+  opacity: number;
+  zIndex?: number;
+  // bbox only when kind === "image"
+  west?: number;
+  south?: number;
+  east?: number;
+  north?: number;
+};
+
 export type EntityData = {
   id: string;
-  position: GeoPosition;
+  position?: GeoPosition;
   symbol?: string;
   label?: string;
   affiliation?: Affiliation;
@@ -59,6 +71,7 @@ export type EntityData = {
   assemblyParentId?: string;
   assemblyOutlineIds?: string[];
   isDetection?: boolean;
+  mapLayer?: MapLayer;
 };
 
 export type BaseLayer = "dark" | "satellite" | "street";

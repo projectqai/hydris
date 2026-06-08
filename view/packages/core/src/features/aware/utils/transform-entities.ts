@@ -161,20 +161,47 @@ function transformEntity(entity: Entity): Omit<EntityData, "activeSectors"> | nu
 
   const shape = extractShape(entity);
   const hasPosition = hasGeo(entity);
+  const layerComponent = entity.mapLayer;
+  let mapLayer: EntityData["mapLayer"];
+  if (layerComponent?.source.case === "tiles") {
+    mapLayer = {
+      kind: "tiles",
+      url: layerComponent.source.value.url,
+      opacity: 1,
+      zIndex: layerComponent.zIndex || undefined,
+    };
+  } else if (layerComponent?.source.case === "image") {
+    const img = layerComponent.source.value;
+    mapLayer = {
+      kind: "image",
+      url: img.url,
+      opacity: 1,
+      zIndex: layerComponent.zIndex || undefined,
+      west: img.west,
+      south: img.south,
+      east: img.east,
+      north: img.north,
+    };
+  }
 
-  if (!hasPosition && !shape) return null;
+  if (!hasPosition && !shape && !mapLayer) return null;
 
-  let position: GeoPosition;
+  let position: GeoPosition | undefined;
   if (hasPosition) {
     position = {
       lat: entity.geo.latitude,
       lng: entity.geo.longitude,
       alt: entity.geo.altitude,
     };
-  } else {
-    const pos = shapeCentroid(shape!);
+  } else if (shape) {
+    const pos = shapeCentroid(shape);
     if (!pos) return null;
     position = pos;
+  } else if (mapLayer?.kind === "image") {
+    position = {
+      lat: (mapLayer.south! + mapLayer.north!) / 2,
+      lng: (mapLayer.west! + mapLayer.east!) / 2,
+    };
   }
 
   const coverageIds = entity.sensor?.coverage;
@@ -198,6 +225,7 @@ function transformEntity(entity: Entity): Omit<EntityData, "activeSectors"> | nu
     assemblyParentId: assemblyParentId || undefined,
     assemblyOutlineIds: assemblyOutlineIds?.length ? assemblyOutlineIds : undefined,
     isDetection: entity.detection != null ? true : undefined,
+    mapLayer,
   };
 }
 

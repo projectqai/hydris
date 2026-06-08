@@ -24,19 +24,13 @@ var (
 )
 
 func AddConnectionFlags(cmd *cobra.Command) {
-	cmd.PersistentFlags().StringVar(&serverURL, "server", "localhost:50051", "gRPC server address")
-	cmd.PersistentFlags().StringVar(&wgConfigPath, "wireguard", "", "path to WireGuard config to each the server")
+	cmd.PersistentFlags().StringVar(&serverURL, "server", "localhost:50051", "server address (host:port, ssh://user@host, http(s)://...)")
+	cmd.PersistentFlags().StringVar(&wgConfigPath, "wireguard", "", "path to WireGuard config to reach the server")
 }
 
 func connect(cmd *cobra.Command, args []string) error {
 	var err error
-
-	if wgConfigPath != "" {
-		conn, err = goclient.ConnectWithWireGuard(serverURL, wgConfigPath)
-	} else {
-		conn, err = goclient.Connect(serverURL)
-	}
-
+	conn, err = goclient.ConnectURL(serverURL, wgConfigPath)
 	if err != nil {
 		return fmt.Errorf("failed to connect to server: %w", err)
 	}

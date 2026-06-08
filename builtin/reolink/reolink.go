@@ -33,7 +33,7 @@ func init() {
 func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	serviceEntityID := controllerName + ".service"
 
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:    serviceEntityID,
 		Label: proto.String("Reolink Cameras"),
 		Controller: &pb.Controller{
@@ -46,7 +46,11 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		Configurable: &pb.ConfigurableComponent{
 			Schema: serviceSchema(),
 			SupportedDeviceClasses: []*pb.DeviceClassOption{
-				{Class: "camera", Label: "Reolink Camera"},
+				{
+					Class:       "camera",
+					Label:       "Reolink Camera",
+					Description: "A Reolink-branded IP camera reachable on the network. Hydris connects via the Reolink HTTP API for video, snapshots and PTZ control.",
+				},
 			},
 		},
 		Config: &pb.ConfigurationComponent{},
@@ -57,14 +61,11 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		return fmt.Errorf("push service entity: %w", err)
 	}
 
-	// Watch netscan for Reolink devices.
 	go watchNetscanForCameras(ctx, logger)
-
-	// Run WS-Discovery for direct ONVIF device probing.
-	go runWSDiscovery(ctx, logger)
+	go watchDiscoveredCameras(ctx, logger)
 
 	// Watch service config for credentials.
-	go controller.Run(ctx, serviceEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error { //nolint:errcheck // fire-and-forget goroutine
+	go controller.Run(ctx, controllerName, serviceEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error { //nolint:errcheck // fire-and-forget goroutine
 		cfg := parseServiceConfig(entity)
 		svcCfgMu.Lock()
 		svcCfg = cfg
@@ -87,15 +88,15 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		{Class: "camera", Label: "Reolink Camera", Schema: cameraSchema()},
 	}
 
-	return controller.WatchChildren(ctx, serviceEntityID, controllerName, classes, func(ctx context.Context, entityID string) error {
-		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+	return controller.WatchChildren(ctx, controllerName, serviceEntityID, controllerName, classes, func(ctx context.Context, entityID string) error {
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			return runCamera(ctx, logger, entity, ready, getServiceConfig())
 		})
 	})
 }
 
 func runAutoProbe(ctx context.Context, logger *slog.Logger) error {
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("reolink")
 	if err != nil {
 		return fmt.Errorf("auto-probe: grpc connect: %w", err)
 	}

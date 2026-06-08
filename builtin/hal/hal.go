@@ -48,7 +48,7 @@ func init() {
 }
 
 func Run(ctx context.Context, logger *slog.Logger, _ string) error {
-	if err := controller.Push(ctx, &worldpb.Entity{
+	if err := controller.Push(ctx, "hal", &worldpb.Entity{
 		Id:    "hal.service",
 		Label: proto.String("Hardware"),
 		Controller: &worldpb.Controller{
@@ -66,10 +66,10 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		return fmt.Errorf("push service entity: %w", err)
 	}
 
-	return controller.Run(ctx, "hal.service", func(ctx context.Context, entity *worldpb.Entity, ready func()) error {
+	return controller.Run(ctx, "hal", "hal.service", func(ctx context.Context, entity *worldpb.Entity, ready func()) error {
 		ready()
 
-		grpcConn, err := builtin.BuiltinClientConn()
+		grpcConn, err := builtin.BuiltinClientConn("hal")
 		if err != nil {
 			return fmt.Errorf("grpc connect: %w", err)
 		}

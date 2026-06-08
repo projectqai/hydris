@@ -1,6 +1,9 @@
 package transform
 
-import pb "github.com/projectqai/proto/go"
+import (
+	"github.com/projectqai/hydris/engine/meta"
+	pb "github.com/projectqai/proto/go"
+)
 
 type ChatTransformer struct {
 	nodeEntityID string
@@ -35,6 +38,6 @@ func (ct *ChatTransformer) Validate(head map[string]*pb.Entity, incoming *pb.Ent
 	return nil
 }
 
-func (ct *ChatTransformer) Resolve(head map[string]*pb.Entity, changedID string) (upsert []*pb.Entity, remove []string) {
+func (ct *ChatTransformer) Resolve(head map[string]*pb.Entity, changedID string, _ map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	return nil, nil
 }

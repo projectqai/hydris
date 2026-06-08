@@ -1,0 +1,10 @@
+{
+  "name": "@hydris/builtin-cue",
+  "version": "0.0.4",
+  "main": "index.ts",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@projectqai/proto": ">=0.0.54"
+  }
+}

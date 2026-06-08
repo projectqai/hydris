@@ -130,7 +130,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	})
 
 	serviceEntityID := controllerName + ".service"
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:    serviceEntityID,
 		Label: proto.String("ADS-B"),
 		Controller: &pb.Controller{
@@ -141,10 +141,26 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		},
 		Configurable: &pb.ConfigurableComponent{
 			SupportedDeviceClasses: []*pb.DeviceClassOption{
-				{Class: "location", Label: "Location Poller"},
-				{Class: "military", Label: "Military Poller"},
-				{Class: "callsign", Label: "Callsign Poller"},
-				{Class: "icao", Label: "ICAO Poller"},
+				{
+					Class:       "location",
+					Label:       "Location Poller",
+					Description: "Poll adsb.lol for all aircraft within a radius of a lat/lng. Use this to populate a regional air picture.",
+				},
+				{
+					Class:       "military",
+					Label:       "Military Poller",
+					Description: "Poll adsb.lol for all currently-tracked military aircraft worldwide. Use this for a global military air feed.",
+				},
+				{
+					Class:       "callsign",
+					Label:       "Callsign Poller",
+					Description: "Poll adsb.lol for a single aircraft by callsign. Use this to follow one specific flight.",
+				},
+				{
+					Class:       "icao",
+					Label:       "ICAO Poller",
+					Description: "Poll adsb.lol for a single aircraft by ICAO24 hex address. Use this to follow one specific airframe.",
+				},
 			},
 		},
 		Interactivity: &pb.InteractivityComponent{
@@ -161,8 +177,8 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		{Class: "icao", Label: "ICAO Poller", Schema: icaoSchema},
 	}
 
-	return controller.WatchChildren(ctx, serviceEntityID, controllerName, classes, func(ctx context.Context, entityID string) error {
-		return controller.RunPolled(ctx, entityID, func(ctx context.Context, entity *pb.Entity) (time.Duration, error) {
+	return controller.WatchChildren(ctx, controllerName, serviceEntityID, controllerName, classes, func(ctx context.Context, entityID string) error {
+		return controller.RunPolled(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity) (time.Duration, error) {
 			return pollOnce(ctx, logger, entity)
 		})
 	})
@@ -174,7 +190,7 @@ func pollOnce(ctx context.Context, logger *slog.Logger, entity *pb.Entity) (time
 		return 0, fmt.Errorf("parse config: %w", err)
 	}
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("adsblol")
 	if err != nil {
 		return 0, fmt.Errorf("gRPC connection: %w", err)
 	}

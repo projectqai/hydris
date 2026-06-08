@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.11.0",
+    "@config-plugins/react-native-blob-util": "^13.0.0",
     "@connectrpc/connect": "^2.1.1",
     "@connectrpc/connect-web": "^2.1.1",
     "@expo-google-fonts/inter": "^0.4.2",
@@ -44,6 +45,7 @@
     "expo-build-properties": "catalog:",
     "expo-clipboard": "catalog:",
     "expo-constants": "catalog:",
+    "expo-document-picker": "catalog:",
     "expo-font": "catalog:",
     "expo-haptics": "catalog:",
     "expo-image": "catalog:",
@@ -62,6 +64,7 @@
     "react": "catalog:",
     "react-dom": "catalog:",
     "react-native": "catalog:",
+    "react-native-blob-util": "catalog:",
     "react-native-css-interop": "catalog:",
     "react-native-gesture-handler": "catalog:",
     "react-native-keyboard-controller": "catalog:",

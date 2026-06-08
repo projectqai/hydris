@@ -39,6 +39,7 @@ func setupGlobals(loop *eventloop.EventLoop, vm *goja.Runtime) {
 	setupWebSocket(loop, vm)
 	setupDecompressionStream(loop, vm)
 	setupCrypto(vm)
+	setupHTMLRewriter(vm)
 	setupNet(loop, vm)
 	setupDevice(loop, vm)
 }

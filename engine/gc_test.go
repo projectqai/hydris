@@ -1,9 +1,11 @@
 package engine
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/projectqai/hydris/engine/meta"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -88,8 +90,8 @@ func TestGC_NoLifetimeComponentDoesNotPreventExpiry(t *testing.T) {
 
 	// Geo has a real lifetime that expires. Administrative has noLifetime.
 	es := w.head["e1"]
-	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = componentMeta{fresh: past, until: past}
-	es.lifetimes[int32(pb.EntityComponent_EntityComponentAdministrative)] = componentMeta{noLifetime: true}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = meta.Component{Fresh: past, Until: past}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentAdministrative)] = meta.Component{NoLifetime: true}
 
 	w.GC()
 
@@ -115,9 +117,9 @@ func TestGC_NoLifetimeComponentKeptWhenTrackedSurvives(t *testing.T) {
 	w := testWorld(map[string]*pb.Entity{"e1": entity})
 
 	es := w.head["e1"]
-	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = componentMeta{fresh: past, until: past}
-	es.lifetimes[int32(pb.EntityComponent_EntityComponentTrack)] = componentMeta{fresh: past, until: future}
-	es.lifetimes[int32(pb.EntityComponent_EntityComponentAdministrative)] = componentMeta{noLifetime: true}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentGeo)] = meta.Component{Fresh: past, Until: past}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentTrack)] = meta.Component{Fresh: past, Until: future}
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentAdministrative)] = meta.Component{NoLifetime: true}
 
 	w.GC()
 
@@ -134,6 +136,174 @@ func TestGC_NoLifetimeComponentKeptWhenTrackedSurvives(t *testing.T) {
 	}
 	if e.Administrative == nil {
 		t.Error("Administrative (noLifetime) should be kept when entity survives")
+	}
+}
+
+func TestGC_TransformerGeneratedComponentDoesNotPreventExpiry(t *testing.T) {
+	w := NewWorldServer()
+	ctx := context.Background()
+
+	past := time.Now().Add(-time.Second)
+
+	// Push a parent with a geo position.
+	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{{
+			Id:  "parent",
+			Geo: &pb.GeoSpatialComponent{Latitude: 51, Longitude: 7},
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Push a child with a PoseComponent + short TTL. The PoseTransformer
+	// will resolve it into Geo/Bearing/Orientation on the child entity.
+	rng := 1000.0
+	_, err = w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{{
+			Id: "child",
+			Pose: &pb.PoseComponent{
+				Parent: "parent",
+				Offset: &pb.PoseComponent_Polar{
+					Polar: &pb.PolarOffset{Azimuth: 90, Range: &rng},
+				},
+			},
+			Lifetime: &pb.Lifetime{
+				From:  timestamppb.New(past),
+				Until: timestamppb.New(past),
+			},
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the transformer produced generated components.
+	child := w.GetHead("child")
+	if child == nil {
+		t.Fatal("child should exist after push")
+	}
+	if child.Geo == nil {
+		t.Fatal("PoseTransformer should have generated Geo on child")
+	}
+
+	// Run GC — the child's TTL is in the past, so it should expire.
+	w.GC()
+
+	if w.GetHead("child") != nil {
+		t.Error("child entity should be expired; transformer-generated components should not keep it alive")
+	}
+}
+
+func TestGC_GeneratedComponentDoesNotMakeEntityPermanent(t *testing.T) {
+	w := NewWorldServer()
+	ctx := context.Background()
+
+	now := time.Now()
+	until := now.Add(30 * time.Second)
+
+	// Push a parent with a geo position.
+	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{{
+			Id:  "parent",
+			Geo: &pb.GeoSpatialComponent{Latitude: 51, Longitude: 7},
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First push: child with Pose + 30s TTL.
+	// Push stamps Controller on the stored entity; markGeneratedComponents
+	// then marks Controller and transformer outputs as Generated.
+	rng := 1000.0
+	_, err = w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{{
+			Id: "child",
+			Pose: &pb.PoseComponent{
+				Parent: "parent",
+				Offset: &pb.PoseComponent_Polar{
+					Polar: &pb.PolarOffset{Azimuth: 90, Range: &rng},
+				},
+			},
+			Lifetime: &pb.Lifetime{
+				From:  timestamppb.New(now),
+				Until: timestamppb.New(until),
+			},
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Second push: ticker refresh with a new TTL window.
+	// Controller is NOT in incoming, so it stays as Generated with zero Until.
+	until2 := now.Add(60 * time.Second)
+	_, err = w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{{
+			Id: "child",
+			Pose: &pb.PoseComponent{
+				Parent: "parent",
+				Offset: &pb.PoseComponent_Polar{
+					Polar: &pb.PolarOffset{Azimuth: 90, Range: &rng},
+				},
+			},
+			Lifetime: &pb.Lifetime{
+				From:  timestamppb.New(now.Add(time.Second)),
+				Until: timestamppb.New(until2),
+			},
+		}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	child := w.GetHead("child")
+	if child == nil {
+		t.Fatal("child should exist")
+	}
+	if child.Lifetime == nil || !child.Lifetime.Until.IsValid() {
+		t.Fatal("child Lifetime.Until should be set after refresh; generated components must not make entity permanent")
+	}
+	if child.Lifetime.Until.AsTime().Before(until) {
+		t.Errorf("child Lifetime.Until should be >= %v, got %v", until, child.Lifetime.Until.AsTime())
+	}
+}
+
+func TestGC_PermanentTrackedSurvivesWhenTTLComponentExpires(t *testing.T) {
+	now := time.Now()
+	past := now.Add(-time.Second)
+
+	// Entity pushed with Lifetime (tracked, permanent Device) then a TTL
+	// component (TargetManualControl) is merged in by a client.
+	// When the TTL component expires, the entity must survive.
+	entity := &pb.Entity{
+		Id:     "e1",
+		Device: &pb.DeviceComponent{State: pb.DeviceState_DeviceStateActive},
+		Lifetime: &pb.Lifetime{
+			From: timestamppb.New(now),
+		},
+	}
+
+	w := testWorld(map[string]*pb.Entity{"e1": entity})
+
+	es := w.head["e1"]
+	es.lifetimes[int32(pb.EntityComponent_EntityComponentTargetManualControl)] = meta.Component{
+		Fresh: past, Until: past,
+	}
+	es.entity.TargetManualControl = &pb.TargetManualControlComponent{}
+
+	w.GC()
+
+	e := w.GetHead("e1")
+	if e == nil {
+		t.Fatal("entity should survive; Device is permanent and tracked")
+	}
+	if e.Device == nil {
+		t.Error("Device should still be present")
+	}
+	if e.TargetManualControl != nil {
+		t.Error("expired TargetManualControl should be removed")
 	}
 }
 

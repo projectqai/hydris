@@ -12,7 +12,7 @@ core.workflow(
         fetch = "main",
     ),
     authoring = authoring.overwrite("Project Q <opensource@project-q.ai>"),
-    origin_files = glob(["**"], exclude = ["copy.bara.sky"]),
+    origin_files = glob(["**"], exclude = ["copy.bara.sky", "EXT/**"]),
     mode = "SQUASH",
     transformations = [
         metadata.replace_message("release"),

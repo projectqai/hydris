@@ -1,14 +1,16 @@
-import { create as createProto } from "@bufbuild/protobuf";
+import { clone, create as createProto } from "@bufbuild/protobuf";
 import type { LayoutNode } from "@hydris/ui/layout/types";
+import type { Entity } from "@projectqai/proto/world";
 import {
   DeviceComponentSchema,
   EntitySchema,
-  MissionKitSchema,
+  MissionPackSchema,
   NodeDeviceSchema,
 } from "@projectqai/proto/world";
 import { create } from "zustand";
 
 import { worldClient } from "../../../lib/api/world-client";
+import { useEntityStore } from "./entity-store";
 
 type MissionKitLayout = {
   name: string;
@@ -28,6 +30,7 @@ type MissionKitState = {
   pendingLayout: PendingLayout | null;
   fetch: () => Promise<void>;
   save: (key: string, name: string, tree: LayoutNode) => Promise<void>;
+  saveMany: (updates: Record<string, { name: string; tree: LayoutNode }>) => Promise<void>;
   remove: (key: string) => Promise<void>;
   setPendingLayout: (presetId: string, presetName: string, tree: LayoutNode) => void;
   clearPendingLayout: () => void;
@@ -49,19 +52,24 @@ function deserializeLayout(raw: string): MissionKitLayout | null {
   }
 }
 
+// Dedup state for the entity-store subscriber below. Module-scoped so reset()
+// can clear it; otherwise a post-reset MissionKit that happens to serialize
+// identically to the pre-reset one would be deduped silently.
+let lastSerializedLayouts: string | null = null;
+
+function resetDedup() {
+  lastSerializedLayouts = null;
+}
+
 async function pushMissionKitLayouts(nodeId: string, layouts: Record<string, string>) {
-  const response = await worldClient.push({
-    changes: [
-      createProto(EntitySchema, {
-        id: nodeId,
-        device: createProto(DeviceComponentSchema, {
-          node: createProto(NodeDeviceSchema, {
-            missionKit: createProto(MissionKitSchema, { layouts }),
-          }),
-        }),
-      }),
-    ],
-  });
+  const node = useEntityStore.getState().entities.get(nodeId);
+  const entity = node ? clone(EntitySchema, node) : createProto(EntitySchema, { id: nodeId });
+  entity.device ??= createProto(DeviceComponentSchema, {});
+  entity.device.node ??= createProto(NodeDeviceSchema, {});
+  entity.device.node.mission ??= createProto(MissionPackSchema, {});
+  entity.device.node.mission.layouts = layouts;
+
+  const response = await worldClient.push({ changes: [entity] });
   if (!response.accepted) {
     throw new Error(response.debug || "Server rejected mission kit update");
   }
@@ -78,7 +86,7 @@ export const useMissionKitStore = create<MissionKitState>((set, get) => ({
     try {
       const res = await worldClient.getLocalNode({});
       const nodeId = res.entity?.id ?? res.nodeId;
-      const raw = res.entity?.device?.node?.missionKit?.layouts ?? {};
+      const raw = res.entity?.device?.node?.mission?.layouts ?? {};
       const layouts: Record<string, MissionKitLayout> = {};
       for (const [key, value] of Object.entries(raw)) {
         const layout = deserializeLayout(value);
@@ -91,18 +99,29 @@ export const useMissionKitStore = create<MissionKitState>((set, get) => ({
   },
 
   save: async (key, name, tree) => {
+    await get().saveMany({ [key]: { name, tree } });
+  },
+
+  saveMany: async (updates) => {
     const { nodeId, layouts } = get();
     if (!nodeId) return;
+    if (Object.keys(updates).length === 0) return;
 
-    const serialized = serializeLayout(name, tree);
     const rawLayouts: Record<string, string> = {};
     for (const [k, v] of Object.entries(layouts)) {
       rawLayouts[k] = serializeLayout(v.name, v.tree);
     }
-    rawLayouts[key] = serialized;
+    for (const [k, v] of Object.entries(updates)) {
+      rawLayouts[k] = serializeLayout(v.name, v.tree);
+    }
 
     await pushMissionKitLayouts(nodeId, rawLayouts);
-    set({ layouts: { ...layouts, [key]: { name, tree } } });
+
+    const nextLayouts = { ...layouts };
+    for (const [k, v] of Object.entries(updates)) {
+      nextLayouts[k] = { name: v.name, tree: v.tree };
+    }
+    set({ layouts: nextLayouts });
   },
 
   setPendingLayout: (presetId, presetName, tree) => {
@@ -114,6 +133,7 @@ export const useMissionKitStore = create<MissionKitState>((set, get) => ({
   },
 
   reset: () => {
+    resetDedup();
     set({ layouts: {}, nodeId: null, loading: false, pendingLayout: null });
   },
 
@@ -132,3 +152,37 @@ export const useMissionKitStore = create<MissionKitState>((set, get) => ({
     set({ layouts: next });
   },
 }));
+
+function deriveLayouts(node: Entity | undefined): Record<string, MissionKitLayout> {
+  const raw = node?.device?.node?.mission?.layouts ?? {};
+  const out: Record<string, MissionKitLayout> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const layout = deserializeLayout(value);
+    if (layout) out[key] = layout;
+  }
+  return out;
+}
+
+// Stable serialization of the proto map: key insertion order isn't guaranteed
+// to round-trip, so sort keys before stringifying for the dedup comparison.
+function stableSerializeLayouts(raw: Record<string, string>): string {
+  const keys = Object.keys(raw).sort();
+  const out: Record<string, string> = {};
+  for (const k of keys) out[k] = raw[k] ?? "";
+  return JSON.stringify(out);
+}
+
+// Reflect node-entity updates from entity-store into this store. Dedup by
+// serialized layouts so consumers don't have to re-implement change
+// detection, and so echoes of our own save() are dropped.
+useEntityStore.subscribe((state) => {
+  const nodeId = useMissionKitStore.getState().nodeId;
+  if (!nodeId) return;
+  const node = state.entities.get(nodeId);
+  if (!node) return;
+  const raw = node.device?.node?.mission?.layouts ?? {};
+  const serialized = stableSerializeLayouts(raw);
+  if (serialized === lastSerializedLayouts) return;
+  lastSerializedLayouts = serialized;
+  useMissionKitStore.setState({ layouts: deriveLayouts(node) });
+});

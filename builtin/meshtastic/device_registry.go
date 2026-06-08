@@ -63,7 +63,7 @@ func isMeshtasticCandidate(entity *pb.Entity) bool {
 // Each child device has Controller.Id = "meshtastic", Parent = parent device ID,
 // and Configurable entries for per-device configuration.
 func watchDevicesAndPublishMeshtasticDevices(ctx context.Context, logger *slog.Logger) {
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("meshtastic")
 	if err != nil {
 		logger.Error("device watch: failed to connect", "error", err)
 		return
@@ -144,7 +144,7 @@ func watchDevicesAndPublishMeshtasticDevices(ctx context.Context, logger *slog.L
 			childCtx, childCancel := context.WithCancel(ctx)
 			children[entity.Id] = &childInfo{cancel: childCancel}
 			go func() {
-				if err := controller.Run(childCtx, childEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+				if err := controller.Run(childCtx, "meshtastic", childEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 					ready()
 					return runInstance(ctx, logger, entity)
 				}); err != nil && childCtx.Err() == nil {
@@ -190,7 +190,7 @@ func isAutolistDevice(entity *pb.Entity) bool {
 // default config values. This way the controller.Run loop picks up the
 // device entity with its Config and starts runInstance.
 func runAutoManager(ctx context.Context, logger *slog.Logger) error {
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("meshtastic")
 	if err != nil {
 		return fmt.Errorf("auto manager: grpc connect: %w", err)
 	}

@@ -23,8 +23,8 @@ type PollFunc func(ctx context.Context, entity *pb.Entity) (time.Duration, error
 // polling loop when the entity has a Config. The PollFunc is called once
 // per cycle; the interval between cycles is determined by the PollFunc's
 // return value.
-func RunPolled(ctx context.Context, entityID string, run PollFunc) error {
-	grpcConn, err := builtin.BuiltinClientConn()
+func RunPolled(ctx context.Context, name string, entityID string, run PollFunc) error {
+	grpcConn, err := builtin.BuiltinClientConn(name)
 	if err != nil {
 		return err
 	}

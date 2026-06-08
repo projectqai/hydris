@@ -45,7 +45,7 @@ func isEdgeTXDevice(entity *pb.Entity) bool {
 }
 
 func watchDevicesAndPublish(ctx context.Context, logger *slog.Logger) {
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("edgetx")
 	if err != nil {
 		logger.Error("device watch: failed to connect", "error", err)
 		return
@@ -134,7 +134,7 @@ func watchDevicesAndPublish(ctx context.Context, logger *slog.Logger) {
 			childCtx, childCancel := context.WithCancel(ctx)
 			children[entity.Id] = &childInfo{cancel: childCancel}
 			go func() {
-				if err := controller.Run(childCtx, childEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+				if err := controller.Run(childCtx, controllerName, childEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 					ready()
 					return runInstance(ctx, logger, entity)
 				}); err != nil && childCtx.Err() == nil {

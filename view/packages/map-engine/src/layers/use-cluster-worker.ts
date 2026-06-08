@@ -149,6 +149,7 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
         if (e.assemblyParentId && map.has(e.assemblyParentId)) {
           continue;
         }
+        if (!e.position) continue;
         positions[i * 2] = e.position.lat;
         positions[i * 2 + 1] = e.position.lng;
         affiliations[i] = AFFILIATION_CODE[e.affiliation ?? "unknown"];

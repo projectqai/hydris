@@ -16,17 +16,30 @@ config:
   value:
     enabled: true
 ---
+id: onvif.service
+config:
+  value:
+    auto_probe: true
+    username: admin
+---
 id: reolink.service
 config:
   value:
     auto_probe: true
     username: admin
 ---
+id: observe.service
+config:
+  value:
+    altitude_offset: 0
+    elevation_offset: 0
+    zoom: 1
+---
 id: hal.service
 config:
   value:
-    serial: true
-    bluetooth: true
+    serial: false
+    bluetooth: false
     camera: false
 ---
 id: mediaserver.service
@@ -34,7 +47,16 @@ config:
   value:
     share_remote: false
 ---
+id: tailscale.service
+config:
+  value:
+    enabled: true
+---
 id: webcam.service
 config:
   value:
     enabled: true
+---
+id: simcam.service
+config:
+  value: {}

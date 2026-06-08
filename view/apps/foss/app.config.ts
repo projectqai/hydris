@@ -57,6 +57,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       },
     ],
     "./plugins/with-cleartext-traffic.js",
+    "@config-plugins/react-native-blob-util",
   ],
   experiments: {
     typedRoutes: true,

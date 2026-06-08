@@ -56,7 +56,7 @@ func runSender(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 
 	logger.Info("ASTERIX UDP sender connected", "local", conn.LocalAddr(), "dest", destAddr, "category", category)
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("asterix")
 	if err != nil {
 		return fmt.Errorf("gRPC connection: %w", err)
 	}

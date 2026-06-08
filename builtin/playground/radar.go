@@ -1,7 +1,9 @@
 package playground
 
 import (
+	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -11,16 +13,25 @@ import (
 	"time"
 
 	"github.com/projectqai/hydris/builtin"
+	"github.com/projectqai/hydris/builtin/artifacts"
 	"github.com/projectqai/hydris/builtin/controller"
+	"github.com/projectqai/hydris/goclient"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const radarSIDC = "SFGPESR---*****"
-
 const maxHistoryPoints = 60
+
+const (
+	defaultRadarLat = 51.9555
+	defaultRadarLon = 4.1694
+	defaultRadarAlt = 16.0
+)
+
+//go:embed drone.png
+var droneImage []byte
 
 // --- Configuration ---
 
@@ -31,9 +42,6 @@ type BlankingSector struct {
 }
 
 type RadarConfig struct {
-	Latitude         float64 `json:"latitude"`
-	Longitude        float64 `json:"longitude"`
-	Altitude         float64 `json:"altitude"`
 	GroundLevel      float64 `json:"ground_level"`
 	Orientation      float64 `json:"orientation"`
 	RangeKM          float64 `json:"range_km"`
@@ -56,6 +64,29 @@ type RadarConfig struct {
 	Blanking2Enabled bool    `json:"blanking_2_enabled"`
 }
 
+// radarGeo holds the radar's current geo position, updated by a watcher
+// when the user moves the entity on the map.
+type radarGeo struct {
+	mu        sync.Mutex
+	latitude  float64
+	longitude float64
+	altitude  float64
+}
+
+func (g *radarGeo) get() (lat, lon, alt float64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.latitude, g.longitude, g.altitude
+}
+
+func (g *radarGeo) set(lat, lon, alt float64) {
+	g.mu.Lock()
+	g.latitude = lat
+	g.longitude = lon
+	g.altitude = alt
+	g.mu.Unlock()
+}
+
 // --- Track types ---
 
 type trackClass struct {
@@ -68,15 +99,18 @@ type trackClass struct {
 	minRCS  float64
 	maxRCS  float64
 	isAlarm bool
+	widthM  float32
+	heightM float32
+	depthM  float32
 }
 
 var trackClasses = []trackClass{
-	{"drone", "SHAPUF----*****", 10, 200, 2, 27, -25, -10, true},
-	{"drone", "SHAPUF----*****", 10, 200, 2, 27, -25, -10, true},
-	{"suspected_drone", "SUSPUF----*****", 10, 300, 2, 30, -28, -8, true},
-	{"fixed_wing", "SNAPMF----*****", 100, 2000, 30, 130, -5, 15, false},
-	{"bird", "SUPAP-----*****", 0, 150, 1, 35, -35, -15, false},
-	{"vehicle", "SNGPU-----*****", 0, 5, 1, 30, -10, 5, false},
+	{"drone", "SHAPUF----*****", 10, 200, 2, 27, -25, -10, true, 0.5, 0.2, 0.5},
+	{"drone", "SHAPUF----*****", 10, 200, 2, 27, -25, -10, true, 0.5, 0.2, 0.5},
+	{"suspected_drone", "SUSPUF----*****", 10, 300, 2, 30, -28, -8, true, 0.6, 0.25, 0.6},
+	{"fixed_wing", "SNAPMF----*****", 100, 2000, 30, 130, -5, 15, false, 15, 4, 12},
+	{"bird", "SUPAP-----*****", 0, 150, 1, 35, -35, -15, false, 0.8, 0.3, 0.4},
+	{"vehicle", "SNGPU-----*****", 0, 5, 1, 30, -10, 5, false, 2, 1.5, 4.5},
 }
 
 type simTrack struct {
@@ -94,9 +128,6 @@ type simTrack struct {
 
 func runRadar(ctx context.Context, logger *slog.Logger, entity *pb.Entity, ready func()) error {
 	cfg := RadarConfig{
-		Latitude:         51.9555,
-		Longitude:        4.1694,
-		Altitude:         16.0,
 		GroundLevel:      5.0,
 		Orientation:      0,
 		RangeKM:          5.0,
@@ -130,11 +161,24 @@ func runRadar(ctx context.Context, logger *slog.Logger, entity *pb.Entity, ready
 		{Angle: cfg.Blanking2Angle, Span: cfg.Blanking2Span, Enabled: cfg.Blanking2Enabled},
 	}
 
+	// Geo position: use the entity's current geo if already placed on the map,
+	// otherwise push a default. The user can reposition via the map UI;
+	// we watch for changes below.
+	geo := &radarGeo{
+		latitude:  defaultRadarLat,
+		longitude: defaultRadarLon,
+		altitude:  defaultRadarAlt,
+	}
+	if entity.Geo != nil {
+		geo.set(entity.Geo.Latitude, entity.Geo.Longitude, entity.Geo.GetAltitude())
+	}
+
 	ready()
 
+	lat, lon, alt := geo.get()
 	logger.Info("Starting simulated radar",
 		"entityID", entity.Id,
-		"lat", cfg.Latitude, "lon", cfg.Longitude,
+		"lat", lat, "lon", lon,
 		"range_km", cfg.RangeKM,
 		"tracks", cfg.TrackCount,
 	)
@@ -145,27 +189,56 @@ func runRadar(ctx context.Context, logger *slog.Logger, entity *pb.Entity, ready
 	pushEntities := []*pb.Entity{{
 		Id: radarEntityID,
 		Geo: &pb.GeoSpatialComponent{
-			Longitude: cfg.Longitude,
-			Latitude:  cfg.Latitude,
-			Altitude:  proto.Float64(cfg.Altitude),
+			Longitude: lon,
+			Latitude:  lat,
+			Altitude:  proto.Float64(alt),
 		},
-		Symbol: &pb.SymbolComponent{MilStd2525C: radarSIDC},
+		Classification: &pb.ClassificationComponent{
+			Taxonomy: []*pb.ClassificationTaxonomy{{
+				Kind: &pb.ClassificationTaxonomy_Equipment{
+					Equipment: &pb.EquipmentTaxonomy{
+						Sensor: &pb.EquipmentTaxonomySensor{
+							Kind: &pb.EquipmentTaxonomySensor_Radar{Radar: &pb.EquipmentTaxonomySensorRadar{}},
+						},
+					},
+				},
+			}},
+		},
 		Sensor: &pb.SensorComponent{
 			Coverage: coverageIDs,
 		},
 	}}
 	pushEntities = append(pushEntities, coverageEntities...)
 
-	if err := controller.Push(ctx, pushEntities...); err != nil {
+	imageID := radarEntityID + ".droneimage"
+	pushEntities = append(pushEntities, &pb.Entity{
+		Id:      imageID,
+		Label:   proto.String("droneimage"),
+		Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
+		Artifact: &pb.ArtifactComponent{
+			Id:          imageID,
+			ContentType: "image/png",
+		},
+	})
+
+	if err := controller.Push(ctx, controllerName, pushEntities...); err != nil {
 		return err
 	}
+
+	if store := artifacts.Server; store != nil {
+		if err := store.Local().Put(ctx, imageID, bytes.NewReader(droneImage)); err != nil {
+			logger.Error("failed to upload drone image artifact", "err", err)
+		}
+	}
+
+	go watchRadarGeo(ctx, radarEntityID, geo)
 
 	tracks := make([]*simTrack, cfg.TrackCount)
 	for i := range tracks {
 		tracks[i] = randomTrack(radarEntityID, i, cfg)
 	}
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("playground")
 	if err != nil {
 		return err
 	}
@@ -182,7 +255,39 @@ func runRadar(ctx context.Context, logger *slog.Logger, entity *pb.Entity, ready
 			expireTracks(context.Background(), worldClient, tracks)
 			return ctx.Err()
 		case <-ticker.C:
-			stepAndPush(ctx, worldClient, tracks, cfg, blankingSectors, radarEntityID)
+			stepAndPush(ctx, worldClient, tracks, cfg, geo, blankingSectors, radarEntityID)
+		}
+	}
+}
+
+func watchRadarGeo(ctx context.Context, entityID string, geo *radarGeo) {
+	grpcConn, err := builtin.BuiltinClientConn("playground")
+	if err != nil {
+		return
+	}
+	defer func() { _ = grpcConn.Close() }()
+	client := pb.NewWorldServiceClient(grpcConn)
+
+	stream, err := goclient.WatchEntitiesWithRetry(ctx, client, &pb.ListEntitiesRequest{
+		Filter: &pb.EntityFilter{
+			Id:        &entityID,
+			Component: []uint32{uint32(pb.EntityComponent_EntityComponentGeo)},
+		},
+	})
+	if err != nil {
+		return
+	}
+
+	for {
+		event, err := stream.Recv()
+		if err != nil {
+			return
+		}
+		if event.Entity == nil || event.T != pb.EntityChange_EntityChangeUpdated {
+			continue
+		}
+		if g := event.Entity.Geo; g != nil {
+			geo.set(g.Latitude, g.Longitude, g.GetAltitude())
 		}
 	}
 }
@@ -206,9 +311,10 @@ func randomTrack(radarEntityID string, idx int, cfg RadarConfig) *simTrack {
 	}
 }
 
-func stepAndPush(ctx context.Context, client pb.WorldServiceClient, tracks []*simTrack, cfg RadarConfig, blankingSectors []BlankingSector, radarEntityID string) {
+func stepAndPush(ctx context.Context, client pb.WorldServiceClient, tracks []*simTrack, cfg RadarConfig, geo *radarGeo, blankingSectors []BlankingSector, radarEntityID string) {
 	maxRange := cfg.RangeKM * 1000
 	dt := float64(cfg.UpdateIntervalMs) / 1000.0
+	radarLat, radarLon, _ := geo.get()
 
 	entities := make([]*pb.Entity, 0, len(tracks))
 
@@ -265,7 +371,7 @@ func stepAndPush(ctx context.Context, client pb.WorldServiceClient, tracks []*si
 
 		// Apply orientation offset for output bearing
 		outputAz := normalizeAngle(t.azimuth + cfg.Orientation)
-		lat, lon := offsetLatLon(cfg.Latitude, cfg.Longitude, outputAz, t.rangeM)
+		lat, lon := offsetLatLon(radarLat, radarLon, outputAz, t.rangeM)
 		eastV := t.speedMps * math.Sin(headRad)
 		northV := t.speedMps * math.Cos(headRad)
 
@@ -304,7 +410,7 @@ func stepAndPush(ctx context.Context, client pb.WorldServiceClient, tracks []*si
 			})
 		}
 
-		entities = append(entities, &pb.Entity{
+		trackEntity := &pb.Entity{
 			Id:      t.id,
 			Label:   proto.String(classification),
 			Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
@@ -320,10 +426,19 @@ func stepAndPush(ctx context.Context, client pb.WorldServiceClient, tracks []*si
 					Up:    proto.Float64(0),
 				},
 			},
-			Track:    trackComp,
-			Symbol:   &pb.SymbolComponent{MilStd2525C: t.class.sidc},
+			Track: trackComp,
+			Classification: &pb.ClassificationComponent{
+				Taxonomy: []*pb.ClassificationTaxonomy{classificationTaxonomy(classification)},
+			},
+			Administrative: &pb.AdministrativeComponent{
+				Images:  []string{radarEntityID + ".droneimage"},
+				WidthM:  proto.Float32(t.class.widthM),
+				HeightM: proto.Float32(t.class.heightM),
+				LengthM: proto.Float32(t.class.depthM),
+			},
 			Lifetime: &pb.Lifetime{Until: ttl},
-		})
+		}
+		entities = append(entities, trackEntity)
 	}
 
 	if len(entities) > 0 {
@@ -334,6 +449,63 @@ func stepAndPush(ctx context.Context, client pb.WorldServiceClient, tracks []*si
 }
 
 // --- Classification logic ---
+
+func classificationTaxonomy(classification string) *pb.ClassificationTaxonomy {
+	switch classification {
+	case "drone":
+		return &pb.ClassificationTaxonomy{Kind: &pb.ClassificationTaxonomy_Vehicle{
+			Vehicle: &pb.VehicleTaxonomy{
+				Unmanned: &pb.VehicleTaxonomyUnmanned{},
+				Domain:   &pb.VehicleTaxonomy_Air{Air: &pb.VehicleTaxonomyAir{}},
+			},
+		}}
+	case "suspected_drone":
+		return &pb.ClassificationTaxonomy{
+			Confidence: &pb.ClassificationConfidence{Pending: true},
+			Kind: &pb.ClassificationTaxonomy_Vehicle{
+				Vehicle: &pb.VehicleTaxonomy{
+					Unmanned: &pb.VehicleTaxonomyUnmanned{},
+					Domain:   &pb.VehicleTaxonomy_Air{Air: &pb.VehicleTaxonomyAir{}},
+				},
+			},
+		}
+	case "fixed_wing":
+		return &pb.ClassificationTaxonomy{Kind: &pb.ClassificationTaxonomy_Vehicle{
+			Vehicle: &pb.VehicleTaxonomy{
+				Domain: &pb.VehicleTaxonomy_Air{Air: &pb.VehicleTaxonomyAir{
+					Kind: &pb.VehicleTaxonomyAir_FixedWing{FixedWing: &pb.VehicleTaxonomyAirFixedWing{}},
+				}},
+			},
+		}}
+	case "suspected_fixed_wing":
+		return &pb.ClassificationTaxonomy{
+			Confidence: &pb.ClassificationConfidence{Pending: true},
+			Kind: &pb.ClassificationTaxonomy_Vehicle{
+				Vehicle: &pb.VehicleTaxonomy{
+					Domain: &pb.VehicleTaxonomy_Air{Air: &pb.VehicleTaxonomyAir{
+						Kind: &pb.VehicleTaxonomyAir_FixedWing{FixedWing: &pb.VehicleTaxonomyAirFixedWing{}},
+					}},
+				},
+			},
+		}
+	case "bird":
+		return &pb.ClassificationTaxonomy{Kind: &pb.ClassificationTaxonomy_Animal{
+			Animal: &pb.AnimalTaxonomy{
+				Kind: &pb.AnimalTaxonomy_Air{Air: &pb.AnimalTaxonomyAir{
+					Bird: &pb.AnimalTaxonomyBird{},
+				}},
+			},
+		}}
+	case "vehicle":
+		return &pb.ClassificationTaxonomy{Kind: &pb.ClassificationTaxonomy_Vehicle{
+			Vehicle: &pb.VehicleTaxonomy{
+				Domain: &pb.VehicleTaxonomy_Land{Land: &pb.VehicleTaxonomyLand{}},
+			},
+		}}
+	default:
+		return &pb.ClassificationTaxonomy{}
+	}
+}
 
 func classify(t *simTrack, cfg RadarConfig) (string, bool) {
 	aboveGround := t.altM > cfg.GroundLevel+cfg.AltitudeMargin
@@ -602,7 +774,6 @@ func radarSchema() *structpb.Struct {
 	s, _ := structpb.NewStruct(map[string]any{
 		"type": "object",
 		"ui:groups": []any{
-			map[string]any{"key": "position", "title": "Position"},
 			map[string]any{"key": "radar", "title": "Radar"},
 			map[string]any{"key": "classification", "title": "Classification"},
 			map[string]any{"key": "filter", "title": "Track Filters"},
@@ -610,35 +781,22 @@ func radarSchema() *structpb.Struct {
 			map[string]any{"key": "blanking", "title": "Blanking Sectors", "collapsed": true},
 		},
 		"properties": map[string]any{
-			"latitude": map[string]any{
-				"type": "number", "title": "Latitude",
-				"default": 51.9555, "ui:group": "position", "ui:order": 0,
-			},
-			"longitude": map[string]any{
-				"type": "number", "title": "Longitude",
-				"default": 4.1694, "ui:group": "position", "ui:order": 1,
-			},
-			"altitude": map[string]any{
-				"type": "number", "title": "Altitude",
-				"description": "Height above WGS84 ellipsoid",
-				"default":     16.0, "ui:unit": "m", "ui:group": "position", "ui:order": 2,
-			},
 			"ground_level": map[string]any{
 				"type": "number", "title": "Ground Level",
 				"description": "Terrain elevation. Tracks below this are classified differently.",
-				"default":     5.0, "ui:unit": "m", "ui:group": "position", "ui:order": 3,
+				"default":     5.0, "ui:unit": "m", "ui:group": "radar", "ui:order": 0,
 			},
 			"range_km": map[string]any{
 				"type": "number", "title": "Range",
 				"description": "Maximum detection range",
 				"default":     5.0, "minimum": 0.5, "maximum": 100.0,
-				"ui:unit": "km", "ui:group": "radar", "ui:order": 0,
+				"ui:unit": "km", "ui:group": "radar", "ui:order": 1,
 			},
 			"orientation": map[string]any{
 				"type": "number", "title": "Orientation",
 				"description": "North offset. Rotates all track bearings by this angle.",
 				"default":     0, "minimum": 0, "maximum": 360,
-				"ui:unit": "°", "ui:group": "radar", "ui:order": 1,
+				"ui:unit": "°", "ui:group": "radar", "ui:order": 2,
 			},
 			"altitude_margin": map[string]any{
 				"type": "number", "title": "Altitude Margin",
@@ -656,7 +814,7 @@ func radarSchema() *structpb.Struct {
 				"type": "boolean", "title": "Track History",
 				"description": "Show track trail lines.",
 				"default":     true,
-				"ui:group":    "radar", "ui:order": 2,
+				"ui:group":    "radar", "ui:order": 3,
 			},
 			"only_alarms": map[string]any{
 				"type": "boolean", "title": "Only Alarms",
@@ -688,12 +846,12 @@ func radarSchema() *structpb.Struct {
 				"type": "number", "title": "Track Count",
 				"description": "Number of simultaneous simulated targets",
 				"default":     8, "minimum": 1, "maximum": 50,
-				"ui:group": "simulation", "ui:order": 0,
+				"ui:group": "simulation", "ui:order": 1,
 			},
 			"update_interval_ms": map[string]any{
 				"type": "number", "title": "Update Interval",
 				"default": 1000, "minimum": 200, "maximum": 10000,
-				"ui:unit": "ms", "ui:group": "simulation", "ui:order": 1,
+				"ui:unit": "ms", "ui:group": "simulation", "ui:order": 2,
 			},
 			"blanking_1_enabled": map[string]any{
 				"type": "boolean", "title": "Sector 1 Enabled", "default": false,
@@ -724,7 +882,6 @@ func radarSchema() *structpb.Struct {
 				"ui:group": "blanking", "ui:order": 5,
 			},
 		},
-		"required": []any{"latitude", "longitude"},
 	})
 	return s
 }

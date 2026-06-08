@@ -1,9 +1,9 @@
-import { MetricKind } from "@projectqai/proto/metrics";
+import { MetricKind, MetricUnit } from "@projectqai/proto/metrics";
 
 export type SensorKind = MetricKind.MetricKindRadiationHazard | MetricKind.MetricKindChemicalHazard;
 
-export type MetricValue = { value: number; unit: string };
-export type LevelValue = { code: string; value: number };
+export type MetricValue = { value: number; unit: MetricUnit };
+export type LevelValue = { code: string; value: number; max?: number };
 
 export type MetricReading = { shape: "metric"; primary: MetricValue; secondary?: MetricValue };
 export type LevelsReading = { shape: "levels"; levels: LevelValue[]; unit: string };
@@ -28,7 +28,9 @@ export type SensorWidgetData = {
   timestamp?: string;
 };
 
-export type ThresholdConfig = { type: "fixed"; value: number; unit: string } | { type: "none" };
+export type ThresholdConfig =
+  | { type: "fixed"; value: number; unit: MetricUnit | string }
+  | { type: "none" };
 
 export const SENSOR_KIND_LABEL: Record<SensorKind, string> = {
   [MetricKind.MetricKindRadiationHazard]: "Radiation",
@@ -36,6 +38,10 @@ export const SENSOR_KIND_LABEL: Record<SensorKind, string> = {
 };
 
 export const SENSOR_THRESHOLDS: Record<SensorKind, ThresholdConfig> = {
-  [MetricKind.MetricKindRadiationHazard]: { type: "fixed", value: 2.5, unit: "µSv/h" },
+  [MetricKind.MetricKindRadiationHazard]: {
+    type: "fixed",
+    value: 2.5,
+    unit: MetricUnit.MetricUnitMicrosievertPerHour,
+  },
   [MetricKind.MetricKindChemicalHazard]: { type: "fixed", value: 1, unit: "bars" },
 };

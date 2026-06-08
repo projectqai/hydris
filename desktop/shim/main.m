@@ -1,5 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import <objc/runtime.h>
 
 // Minimal native macOS webview helper.
 // Compiled once on a Mac, then the Go binary can be cross-compiled from any OS.
@@ -15,6 +16,88 @@
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app {
 	return YES;
 }
+@end
+
+// WKWebView drops blob: URL downloads (and Content-Disposition responses)
+// unless we route them through a WKDownloadDelegate ourselves.
+API_AVAILABLE(macos(11.3))
+@interface DownloadDelegate : NSObject <WKNavigationDelegate, WKDownloadDelegate, WKUIDelegate>
+@end
+
+@implementation DownloadDelegate
+
+- (void)webView:(WKWebView *)webView
+    decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction
+                    decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
+	if (navigationAction.shouldPerformDownload) {
+		decisionHandler(WKNavigationActionPolicyDownload);
+		return;
+	}
+	decisionHandler(WKNavigationActionPolicyAllow);
+}
+
+- (void)webView:(WKWebView *)webView
+    decidePolicyForNavigationResponse:(WKNavigationResponse *)navigationResponse
+                      decisionHandler:(void (^)(WKNavigationResponsePolicy))decisionHandler {
+	if ([navigationResponse.response isKindOfClass:[NSHTTPURLResponse class]]) {
+		NSString *cd = ((NSHTTPURLResponse *)navigationResponse.response).allHeaderFields[@"Content-Disposition"];
+		if (cd && [cd.lowercaseString containsString:@"attachment"]) {
+			decisionHandler(WKNavigationResponsePolicyDownload);
+			return;
+		}
+	}
+	decisionHandler(WKNavigationResponsePolicyAllow);
+}
+
+- (void)webView:(WKWebView *)webView
+    navigationAction:(WKNavigationAction *)navigationAction
+   didBecomeDownload:(WKDownload *)download {
+	download.delegate = self;
+}
+
+- (void)webView:(WKWebView *)webView
+    navigationResponse:(WKNavigationResponse *)navigationResponse
+     didBecomeDownload:(WKDownload *)download {
+	download.delegate = self;
+}
+
+- (void)download:(WKDownload *)download
+    decideDestinationUsingResponse:(NSURLResponse *)response
+                 suggestedFilename:(NSString *)suggestedFilename
+                 completionHandler:(void (^)(NSURL *destination))completionHandler {
+	NSURL *downloads = [[NSFileManager.defaultManager URLsForDirectory:NSDownloadsDirectory
+	                                                         inDomains:NSUserDomainMask] firstObject];
+	NSURL *dest = [downloads URLByAppendingPathComponent:suggestedFilename];
+	NSString *base = dest.URLByDeletingPathExtension.lastPathComponent;
+	NSString *ext = dest.pathExtension;
+	NSUInteger i = 1;
+	while ([NSFileManager.defaultManager fileExistsAtPath:dest.path]) {
+		NSString *name = [NSString stringWithFormat:@"%@ (%lu)", base, (unsigned long)i++];
+		if (ext.length > 0) name = [name stringByAppendingPathExtension:ext];
+		dest = [downloads URLByAppendingPathComponent:name];
+	}
+	completionHandler(dest);
+}
+
+- (void)download:(WKDownload *)download didFailWithError:(NSError *)error resumeData:(NSData *)resumeData {
+	NSLog(@"hydris-webview: download failed: %@", error.localizedDescription);
+}
+
+// WKWebView never shows a file picker for <input type="file"> on its own;
+// the host must present the NSOpenPanel via this WKUIDelegate callback.
+- (void)webView:(WKWebView *)webView
+    runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
+              initiatedByFrame:(WKFrameInfo *)frame
+             completionHandler:(void (^)(NSArray<NSURL *> *URLs))completionHandler {
+	NSOpenPanel *panel = [NSOpenPanel openPanel];
+	panel.canChooseFiles = YES;
+	panel.canChooseDirectories = NO;
+	panel.allowsMultipleSelection = parameters.allowsMultipleSelection;
+	[panel beginSheetModalForWindow:webView.window completionHandler:^(NSModalResponse result) {
+		completionHandler(result == NSModalResponseOK ? panel.URLs : nil);
+	}];
+}
+
 @end
 
 static void monitor_parent(void) {
@@ -128,6 +211,13 @@ int main(int argc, char *argv[]) {
 
 		WKWebView *webview = [[WKWebView alloc] initWithFrame:frame configuration:config];
 		[webview setValue:@NO forKey:@"drawsBackground"];
+
+		// WKWebView holds navigationDelegate and UIDelegate weakly, so retain via association.
+		DownloadDelegate *dl = [[DownloadDelegate alloc] init];
+		webview.navigationDelegate = dl;
+		webview.UIDelegate = dl;
+		objc_setAssociatedObject(webview, "hydris.dl", dl, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
 		[window setContentView:webview];
 
 		NSString *urlStr = [NSString stringWithUTF8String:url];

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -28,9 +29,10 @@ func init() {
 
 	// --- list ---
 	listCmd := &cobra.Command{
-		Use:   "list [prefix]",
-		Short: "list artifact entities",
-		RunE:  runArtifactList,
+		Use:     "ls [prefix]",
+		Aliases: []string{"list"},
+		Short:   "list artifact entities",
+		RunE:    runArtifactList,
 	}
 
 	// --- get (download) ---
@@ -65,10 +67,11 @@ func init() {
 
 	// --- delete ---
 	deleteCmd := &cobra.Command{
-		Use:   "delete <id>",
-		Short: "delete an artifact entity",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runArtifactDelete,
+		Use:     "rm <id>",
+		Aliases: []string{"delete"},
+		Short:   "delete an artifact entity",
+		Args:    cobra.ExactArgs(1),
+		RunE:    runArtifactDelete,
 	}
 
 	// --- info ---
@@ -240,28 +243,33 @@ func runArtifactPut(cmd *cobra.Command, args []string, entityID, contentType, ex
 		return fmt.Errorf("create entity: %w", err)
 	}
 
-	// Upload the data.
+	h := sha256.New()
+	if err := uploadArtifactStream(ctx, artClient, entityID, io.TeeReader(f, h)); err != nil {
+		return err
+	}
+
+	hash := hex.EncodeToString(h.Sum(nil))
+	fmt.Printf("uploaded %s (%s, %s, sha256:%s)\n", entityID, contentType, formatBytes(fi.Size()), hash[:12])
+	return nil
+}
+
+// uploadArtifactStream streams body as the payload of entityID via the
+// ArtifactService. The entity must already exist. Create it via
+// WorldService.Push before calling.
+func uploadArtifactStream(ctx context.Context, artClient pb.ArtifactServiceClient, entityID string, body io.Reader) error {
 	stream, err := artClient.UploadArtifact(ctx)
 	if err != nil {
 		return fmt.Errorf("upload: %w", err)
 	}
-
-	// First message with entity ID.
-	if err := stream.Send(&pb.UploadArtifactRequest{
-		Id: proto.String(entityID),
-	}); err != nil {
+	if err := stream.Send(&pb.UploadArtifactRequest{Id: proto.String(entityID)}); err != nil {
 		return fmt.Errorf("send header: %w", err)
 	}
-
-	// Stream file data.
-	h := sha256.New()
 	buf := make([]byte, artifactChunkSize)
 	for {
-		n, readErr := f.Read(buf)
+		n, readErr := body.Read(buf)
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
-			h.Write(chunk)
 			if err := stream.Send(&pb.UploadArtifactRequest{Chunk: chunk}); err != nil {
 				return fmt.Errorf("send chunk: %w", err)
 			}
@@ -270,16 +278,12 @@ func runArtifactPut(cmd *cobra.Command, args []string, entityID, contentType, ex
 			break
 		}
 		if readErr != nil {
-			return fmt.Errorf("read file: %w", readErr)
+			return fmt.Errorf("read: %w", readErr)
 		}
 	}
-
 	if _, err := stream.CloseAndRecv(); err != nil {
 		return fmt.Errorf("close upload: %w", err)
 	}
-
-	hash := hex.EncodeToString(h.Sum(nil))
-	fmt.Printf("uploaded %s (%s, %s, sha256:%s)\n", entityID, contentType, formatBytes(fi.Size()), hash[:12])
 	return nil
 }
 

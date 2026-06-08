@@ -2,6 +2,8 @@ import type { PaletteMode } from "@hydris/ui/command-palette/palette-reducer";
 import type { LayoutNode } from "@hydris/ui/layout/types";
 import type { LucideIcon } from "lucide-react-native";
 import {
+  Activity,
+  Download,
   Eye,
   Layout,
   Link2,
@@ -9,17 +11,19 @@ import {
   Map,
   MapPin,
   MousePointerClick,
+  Package,
   Pencil,
   RotateCcw,
   Save,
   Settings,
   SunMoon,
+  Upload,
   ZoomIn,
   ZoomOut,
 } from "lucide-react-native";
 
 import { toast } from "../../../../lib/sonner";
-import { PRESET_KEYBINDS, PRESETS } from "../../constants";
+import { PRESET_KEYBINDS, PRESETS } from "../../layouts";
 import { mapEngineActions } from "../../store/map-engine-store";
 import { useMapStore } from "../../store/map-store";
 import { useMissionKitStore } from "../../store/mission-kit-store";
@@ -60,7 +64,12 @@ export type LayoutActions = {
   toggleScreenLock: () => boolean;
 };
 
-export function buildCommands(layout: LayoutActions): Command[] {
+export type MissionPackActions = {
+  importFromPicker: () => Promise<void>;
+  exportPack: () => Promise<void>;
+};
+
+export function buildCommands(layout: LayoutActions, missionPack: MissionPackActions): Command[] {
   const commands: Command[] = [
     {
       id: "configuration",
@@ -325,19 +334,60 @@ export function buildCommands(layout: LayoutActions): Command[] {
 
     // World
     {
-      id: "world-reset",
-      label: "Reset world",
-      description: "Clears all entities including persisted data",
-      icon: RotateCcw,
+      id: "world-mission-import",
+      label: "Import mission pack",
+      description: "Load a mission pack from a file",
+      icon: Upload,
       category: "world",
-      holdToConfirm: true,
       action: () => {
-        resetWorld()
-          .then(() => toast.success("All world data cleared"))
-          .catch(() => toast.error("World reset failed, check connection"));
+        void missionPack.importFromPicker();
+      },
+    },
+    {
+      id: "world-mission-export",
+      label: "Export mission pack",
+      description: "Download the current world state as a mission pack",
+      icon: Package,
+      category: "world",
+      action: () => {
+        void missionPack.exportPack();
       },
     },
   ];
+
+  commands.push({
+    id: "world-mission-health",
+    label: "Mission health",
+    description: "Controller status overview",
+    icon: Activity,
+    category: "world",
+    action: () => {},
+    mode: { kind: "mission-health" },
+  });
+
+  commands.push({
+    id: "world-diagnostic-export",
+    label: "Report a bug",
+    description: "Export diagnostic with world state, logs, and system info",
+    icon: Download,
+    category: "world",
+    action: () => {},
+    mode: { kind: "diagnostic-export" },
+  });
+
+  commands.push({
+    id: "world-reset",
+    label: "Reset world",
+    description: "Clears all entities including persisted data",
+    icon: RotateCcw,
+    category: "world",
+    holdToConfirm: true,
+    action: () => {
+      resetWorld()
+        .then(() => toast.success("All world data cleared"))
+        .catch((err) => toast.error(err instanceof Error ? err.message : "World reset failed"));
+    },
+  });
 
   const pending = useMissionKitStore.getState().pendingLayout;
   if (pending) {
@@ -363,7 +413,9 @@ export function buildCommands(layout: LayoutActions): Command[] {
               toast.dismiss("shared-layout");
               toast.success(`Layout saved to ${preset.name}`);
             })
-            .catch(() => toast.error("Failed to save layout"));
+            .catch((err) =>
+              toast.error(err instanceof Error ? err.message : "Failed to save layout"),
+            );
         },
       });
     }

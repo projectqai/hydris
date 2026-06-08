@@ -2,13 +2,13 @@ package plugins
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
 
-	"github.com/blang/semver/v4"
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/controller"
 	"github.com/projectqai/hydris/pkg/plugin"
@@ -31,12 +31,11 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 		index = &PluginIndex{}
 	}
 
-	compatible := filterCompatible(index.Plugins, logger)
-	logger.Info("plugin registry loaded", "total", len(index.Plugins), "compatible", len(compatible), "hydris_version", version.Version)
+	logger.Info("plugin registry loaded", "total", len(index.Plugins), "hydris_version", version.Version)
 
 	serviceID := controllerName + ".service"
 
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:    serviceID,
 		Label: proto.String("Open Source Plugins"),
 		Controller: &pb.Controller{
@@ -53,10 +52,11 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 		return err
 	}
 
-	// Push a child entity per plugin and run a controller for each.
-	for _, p := range compatible {
+	// Push a child entity per plugin and run a controller for each. Every
+	// plugin is listed; the runner reports a Conflict if it can't run here.
+	for _, p := range index.Plugins {
 		childID := controllerName + "." + p.Name
-		if err := controller.Push(ctx, &pb.Entity{
+		if err := controller.Push(ctx, controllerName, &pb.Entity{
 			Id:    childID,
 			Label: proto.String(p.Label),
 			Controller: &pb.Controller{
@@ -79,7 +79,7 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 
 	// Custom plugins service entity.
 	customServiceID := controllerName + ".custom"
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:    customServiceID,
 		Label: proto.String("Custom Plugins"),
 		Controller: &pb.Controller{
@@ -91,9 +91,21 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 		},
 		Configurable: &pb.ConfigurableComponent{
 			SupportedDeviceClasses: []*pb.DeviceClassOption{
-				{Class: "plugin", Label: "Custom Plugin"},
-				{Class: "feed", Label: "Plugin Feed"},
-				{Class: "registry", Label: "Registry Credentials"},
+				{
+					Class:       "plugin",
+					Label:       "Custom Plugin",
+					Description: "Run a single user-supplied plugin (a script or OCI image). Use this to install one specific plugin by hand.",
+				},
+				{
+					Class:       "feed",
+					Label:       "Plugin Feed",
+					Description: "Subscribe to a remote plugin index URL and run every compatible plugin it lists. Use this to follow a curated plugin catalog.",
+				},
+				{
+					Class:       "registry",
+					Label:       "Registry Credentials",
+					Description: "Store credentials for an OCI registry so plugin images can be pulled from it. Auto-created on demand when a plugin references a private registry.",
+				},
 			},
 		},
 		Interactivity: &pb.InteractivityComponent{
@@ -106,18 +118,19 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 	var wg sync.WaitGroup
 
 	// Run registry plugins.
-	for _, p := range compatible {
+	for _, p := range index.Plugins {
 		p := p
 		childID := controllerName + "." + p.Name
+		p.EntityID = childID
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := controller.Run(ctx, childID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+			err := controller.Run(ctx, controllerName, childID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 				if !isEnabled(entity) {
 					return nil
 				}
 				ready()
-				return runPlugin(ctx, logger, p, serverURL)
+				return runPluginChild(ctx, logger, p, serverURL)
 			})
 			if err != nil && ctx.Err() == nil {
 				logger.Error("plugin controller exited", "name", p.Name, "error", err)
@@ -129,12 +142,12 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := controller.WatchChildren(ctx, customServiceID, controllerName, []controller.DeviceClass{
+		err := controller.WatchChildren(ctx, controllerName, customServiceID, controllerName, []controller.DeviceClass{
 			{Class: "plugin", Label: "Custom Plugin", Schema: customPluginSchema()},
 			{Class: "feed", Label: "Plugin Feed", Schema: feedSchema()},
 			{Class: "registry", Label: "Registry Credentials", Schema: registrySchema()},
 		}, func(ctx context.Context, entityID string) error {
-			return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+			return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 				// Registry credential entities: validate and keep alive.
 				if entity.Device.GetClass() == "registry" {
 					registry := configString(entity, "registry")
@@ -171,8 +184,8 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 					return err
 				}
 				ready()
-				info := PluginInfo{Name: entityID, Ref: ref}
-				return runPlugin(ctx, logger, info, serverURL)
+				info := PluginInfo{Name: entityID, Ref: ref, EntityID: entityID}
+				return runPluginChild(ctx, logger, info, serverURL)
 			})
 		})
 		if err != nil && ctx.Err() == nil {
@@ -206,32 +219,27 @@ func isEnabled(entity *pb.Entity) bool {
 	return ok && v.GetBoolValue()
 }
 
-func filterCompatible(plugins []PluginInfo, logger *slog.Logger) []PluginInfo {
-	raw := strings.TrimPrefix(version.Version, "v")
-	cur, err := semver.ParseTolerant(raw)
-	if err != nil {
-		logger.Warn("cannot parse hydris version, showing all plugins", "version", version.Version)
-		return plugins
+// runPluginChild runs an enabled plugin and turns a version incompatibility
+// into a controller.ErrConflict, so the framework shows Conflict (and stops
+// retrying) instead of a hot-looping Failure. Shared by the registry, feed,
+// and custom paths so a plugin is gated identically wherever it came from.
+func runPluginChild(ctx context.Context, logger *slog.Logger, info PluginInfo, serverURL string) error {
+	err := runPlugin(ctx, logger, info, serverURL)
+	if errors.Is(err, plugin.ErrIncompatibleVersion) {
+		return fmt.Errorf("%w: %s", controller.ErrConflict, err)
 	}
+	return err
+}
 
-	var out []PluginInfo
-	for _, p := range plugins {
-		if p.Compat == "" {
-			out = append(out, p)
-			continue
-		}
-		rng, err := semver.ParseRange(p.Compat)
-		if err != nil {
-			logger.Warn("skipping plugin with invalid compat range", "name", p.Name, "compat", p.Compat)
-			continue
-		}
-		if rng(cur) {
-			out = append(out, p)
-		} else {
-			logger.Info("skipping incompatible plugin", "name", p.Name, "compat", p.Compat, "hydris", version.Version)
-		}
+// checkBundleCompat enforces the plugin's declared engines.hydris range against
+// the running version, for a resolved plugin directory. A bundle without a
+// package.json declares no constraint and is allowed.
+func checkBundleCompat(dir string) error {
+	pkg, err := plugin.ReadPackageJSON(dir)
+	if err != nil {
+		return nil
 	}
-	return out
+	return plugin.CheckHydrisVersion(pkg, version.Version)
 }
 
 func feedSchema() *structpb.Struct {
@@ -274,18 +282,17 @@ func runFeed(ctx context.Context, logger *slog.Logger, feedEntityID, feedURL, fe
 		return err
 	}
 
-	compatible := filterCompatible(index.Plugins, logger)
-	logger.Info("plugin feed loaded", "url", feedURL, "total", len(index.Plugins), "compatible", len(compatible))
+	logger.Info("plugin feed loaded", "url", feedURL, "total", len(index.Plugins))
 
 	// Push registry credential entities for each unique registry found.
 	if feedUser != "" && feedToken != "" {
 		seen := make(map[string]bool)
-		for _, p := range compatible {
+		for _, p := range index.Plugins {
 			host := registryHost(p.Ref)
 			if host != "" && !seen[host] {
 				seen[host] = true
 				regEntityID := feedEntityID + ".registry." + host
-				if err := controller.Push(ctx, &pb.Entity{
+				if err := controller.Push(ctx, controllerName, &pb.Entity{
 					Id: regEntityID,
 					Device: &pb.DeviceComponent{
 						Parent: proto.String(feedEntityID),
@@ -311,9 +318,9 @@ func runFeed(ctx context.Context, logger *slog.Logger, feedEntityID, feedURL, fe
 	}
 
 	// Push child entities for each plugin in the feed.
-	for _, p := range compatible {
+	for _, p := range index.Plugins {
 		childID := feedEntityID + "." + p.Name
-		if err := controller.Push(ctx, &pb.Entity{
+		if err := controller.Push(ctx, controllerName, &pb.Entity{
 			Id:    childID,
 			Label: proto.String(p.Label),
 			Controller: &pb.Controller{
@@ -336,18 +343,19 @@ func runFeed(ctx context.Context, logger *slog.Logger, feedEntityID, feedURL, fe
 
 	// Run a controller for each plugin.
 	var wg sync.WaitGroup
-	for _, p := range compatible {
+	for _, p := range index.Plugins {
 		p := p
 		childID := feedEntityID + "." + p.Name
+		p.EntityID = childID
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := controller.Run(ctx, childID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+			err := controller.Run(ctx, controllerName, childID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 				if !isEnabled(entity) {
 					return nil
 				}
 				ready()
-				return runPlugin(ctx, logger, p, serverURL)
+				return runPluginChild(ctx, logger, p, serverURL)
 			})
 			if err != nil && ctx.Err() == nil {
 				logger.Error("feed plugin controller exited", "name", p.Name, "error", err)
@@ -445,7 +453,7 @@ func registrySchema() *structpb.Struct {
 }
 
 func expireEntity(ctx context.Context, logger *slog.Logger, entityID string) {
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("plugins")
 	if err != nil {
 		logger.Error("expire entity: connect", "id", entityID, "error", err)
 		return

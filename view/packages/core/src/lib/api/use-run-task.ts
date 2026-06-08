@@ -1,3 +1,4 @@
+import type { TaskExecutionTarget } from "@projectqai/proto/tasking";
 import { TaskStatus } from "@projectqai/proto/world";
 import { useState } from "react";
 
@@ -7,12 +8,12 @@ export function useRunTask() {
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  const runTask = async (entityId: string) => {
+  const runTask = async (entityId: string, target?: TaskExecutionTarget) => {
     setIsPending(true);
     setError(null);
 
     try {
-      const response = await worldClient.runTask({ entityId });
+      const response = await worldClient.runTask({ entityId, target });
 
       if (response.status === TaskStatus.TaskStatusFailed) {
         throw new Error(response.humanReadableReason || "Task failed");

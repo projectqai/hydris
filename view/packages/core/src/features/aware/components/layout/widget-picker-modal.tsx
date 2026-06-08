@@ -5,6 +5,7 @@ import { cn } from "@hydris/ui/lib/utils";
 import {
   AlertTriangle,
   ArrowLeft,
+  Gauge,
   Globe,
   HeartPulse,
   Info,
@@ -17,9 +18,9 @@ import {
 } from "lucide-react-native";
 import type { ComponentType } from "react";
 import { useRef, useState } from "react";
-import { Platform, Pressable, ScrollView, Text, type TextInput, View } from "react-native";
+import { Pressable, ScrollView, Text, type TextInput, View } from "react-native";
 
-import { Z } from "../../constants";
+import { PickerModalShell } from "./picker-modal-shell";
 
 type WidgetOption = {
   id: string;
@@ -40,6 +41,7 @@ const LAYOUT_WIDGETS: WidgetOption[] = [
 const MONITORING_WIDGETS: WidgetOption[] = [
   { id: "environment", label: "Environment", description: "Environmental metrics", icon: Leaf },
   { id: "vitals", label: "Vitals", description: "Heart rate, SpO₂, temperature", icon: HeartPulse },
+  { id: "equipment", label: "Equipment", description: "Asset condition metrics", icon: Gauge },
 ];
 
 type Tab = string;
@@ -121,161 +123,108 @@ export function WidgetPickerModal({
   if (!visible) return null;
 
   return (
-    <View
-      style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: Z.WIDGET_PICKER,
-      }}
-    >
-      {Platform.OS === "web" && (
-        <Pressable
-          onPress={onClose}
-          aria-label="Close widget picker"
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: t.backdrop,
-          }}
-        />
-      )}
-
-      <View
-        role="dialog"
-        aria-label="Widget picker"
-        aria-modal={true}
-        style={
-          Platform.OS === "web"
-            ? {
-                alignSelf: "center",
-                marginTop: "10%",
-                width: "95%",
-                maxWidth: 640,
-                maxHeight: "75%",
-                borderRadius: 10,
-                backgroundColor: t.card,
-                borderWidth: 1,
-                borderColor: t.borderSubtle,
-                shadowColor: "#000",
-                shadowOffset: { width: 0, height: 24 },
-                shadowOpacity: 0.7,
-                shadowRadius: 48,
-                overflow: "hidden",
+    <PickerModalShell ariaLabel="Widget picker" onClose={onClose} maxWidth={640}>
+      <View className="flex-row items-center gap-2.5 px-4 py-3">
+        {pendingEntityPicker ? (
+          <Pressable
+            onPress={() => {
+              if (pendingEntityPicker.group.widgets.length <= 1) {
+                setActiveTab("layout");
               }
-            : {
-                flex: 1,
-                backgroundColor: t.card,
-              }
-        }
-      >
-        <View className="flex-row items-center gap-2.5 px-4 py-3">
-          {pendingEntityPicker ? (
-            <Pressable
-              onPress={() => {
-                if (pendingEntityPicker.group.widgets.length <= 1) {
-                  setActiveTab("layout");
-                }
-                setPendingEntityPicker(null);
-              }}
-              hitSlop={8}
-              className="p-1"
-            >
-              <ArrowLeft size={14} strokeWidth={2} color={t.iconMuted} />
-            </Pressable>
-          ) : null}
-          <Text className="font-sans-medium text-foreground flex-1 text-sm">
-            {pendingEntityPicker ? `Select ${pendingEntityPicker.group.tab}` : "Choose Widget"}
-          </Text>
-          <Pressable onPress={onClose} aria-label="Close" tabIndex={-1} hitSlop={8} className="p-1">
-            <X size={14} strokeWidth={2} color={t.iconMuted} />
+              setPendingEntityPicker(null);
+            }}
+            hitSlop={8}
+            className="p-1"
+          >
+            <ArrowLeft size={14} strokeWidth={2} color={t.iconMuted} />
           </Pressable>
-        </View>
-        <View className="bg-surface-overlay/6 h-px" />
+        ) : null}
+        <Text className="font-sans-medium text-foreground flex-1 text-sm">
+          {pendingEntityPicker ? `Select ${pendingEntityPicker.group.tab}` : "Choose Widget"}
+        </Text>
+        <Pressable onPress={onClose} aria-label="Close" tabIndex={-1} hitSlop={8} className="p-1">
+          <X size={14} strokeWidth={2} color={t.iconMuted} />
+        </Pressable>
+      </View>
+      <View className="bg-surface-overlay/6 h-px" />
 
-        {!pendingEntityPicker && (
-          <>
-            <View className="flex-row gap-1 px-4 py-2" accessibilityRole="tablist">
-              {tabs.map((tab) => (
-                <Pressable
-                  key={tab.id}
-                  onPress={() => {
-                    setActiveTab(tab.id);
-                    const group = additionalWidgets?.find((g) => `group:${g.tab}` === tab.id);
-                    if (group) handleGroupTabClick(group);
-                  }}
-                  accessibilityRole="tab"
-                  accessibilityState={{ selected: activeTab === tab.id }}
-                  tabIndex={-1}
+      {!pendingEntityPicker && (
+        <>
+          <View className="flex-row gap-1 px-4 py-2" accessibilityRole="tablist">
+            {tabs.map((tab) => (
+              <Pressable
+                key={tab.id}
+                onPress={() => {
+                  setActiveTab(tab.id);
+                  const group = additionalWidgets?.find((g) => `group:${g.tab}` === tab.id);
+                  if (group) handleGroupTabClick(group);
+                }}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: activeTab === tab.id }}
+                tabIndex={-1}
+                className={cn(
+                  "rounded-full px-2.5 py-1.5",
+                  activeTab === tab.id
+                    ? "bg-surface-overlay/10"
+                    : "hover:bg-surface-overlay/5 bg-transparent",
+                )}
+              >
+                <Text
                   className={cn(
-                    "rounded-full px-2.5 py-1.5",
-                    activeTab === tab.id
-                      ? "bg-surface-overlay/10"
-                      : "hover:bg-surface-overlay/5 bg-transparent",
+                    "font-sans-medium text-xs",
+                    activeTab === tab.id ? "text-foreground/90" : "text-muted-foreground",
                   )}
                 >
-                  <Text
-                    className={cn(
-                      "font-sans-medium text-xs",
-                      activeTab === tab.id ? "text-foreground/90" : "text-muted-foreground",
-                    )}
-                  >
-                    {tab.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-            <View className="bg-surface-overlay/6 h-px" />
+                  {tab.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          <View className="bg-surface-overlay/6 h-px" />
+        </>
+      )}
+
+      <ScrollView style={{ flex: 1 }}>
+        {pendingEntityPicker?.group.EntityPicker ? (
+          <pendingEntityPicker.group.EntityPicker
+            widgetId={pendingEntityPicker.widgetId}
+            onSelect={(content) => {
+              onSelect(content);
+              onClose();
+              setPendingEntityPicker(null);
+            }}
+          />
+        ) : (
+          <>
+            {TAB_WIDGETS[activeTab] && (
+              <WidgetGrid
+                widgets={TAB_WIDGETS[activeTab]!}
+                currentComponentId={currentComponentId}
+                onSelect={handleSelectWidget}
+              />
+            )}
+            {additionalWidgets?.map((group) =>
+              activeTab === `group:${group.tab}` ? (
+                <WidgetGrid
+                  key={group.tab}
+                  widgets={group.widgets.map((w) => ({
+                    id: w.id,
+                    label: w.label,
+                    description: w.description,
+                    icon: w.icon,
+                  }))}
+                  currentComponentId={currentComponentId}
+                  onSelect={(widgetId) => handleGroupWidgetSelect(group, widgetId)}
+                />
+              ) : null,
+            )}
+            {activeTab === "embed" && (
+              <EmbedTab url={embedUrl} onUrlChange={setEmbedUrl} onSubmit={handleSubmitEmbed} />
+            )}
           </>
         )}
-
-        <ScrollView style={{ flex: 1 }}>
-          {pendingEntityPicker?.group.EntityPicker ? (
-            <pendingEntityPicker.group.EntityPicker
-              widgetId={pendingEntityPicker.widgetId}
-              onSelect={(content) => {
-                onSelect(content);
-                onClose();
-                setPendingEntityPicker(null);
-              }}
-            />
-          ) : (
-            <>
-              {TAB_WIDGETS[activeTab] && (
-                <WidgetGrid
-                  widgets={TAB_WIDGETS[activeTab]!}
-                  currentComponentId={currentComponentId}
-                  onSelect={handleSelectWidget}
-                />
-              )}
-              {additionalWidgets?.map((group) =>
-                activeTab === `group:${group.tab}` ? (
-                  <WidgetGrid
-                    key={group.tab}
-                    widgets={group.widgets.map((w) => ({
-                      id: w.id,
-                      label: w.label,
-                      description: w.description,
-                      icon: w.icon,
-                    }))}
-                    currentComponentId={currentComponentId}
-                    onSelect={(widgetId) => handleGroupWidgetSelect(group, widgetId)}
-                  />
-                ) : null,
-              )}
-              {activeTab === "embed" && (
-                <EmbedTab url={embedUrl} onUrlChange={setEmbedUrl} onSubmit={handleSubmitEmbed} />
-              )}
-            </>
-          )}
-        </ScrollView>
-      </View>
-    </View>
+      </ScrollView>
+    </PickerModalShell>
   );
 }
 

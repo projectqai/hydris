@@ -1,25 +1,35 @@
 import { EmptyState } from "@hydris/ui/empty-state";
 import { MetricKind } from "@projectqai/proto/metrics";
-import { Activity } from "lucide-react-native";
+import { Activity, ShieldAlert } from "lucide-react-native";
 
 import { useEntityStore } from "../../aware/store/entity-store";
+import {
+  MetricCategoryWidget,
+  type MetricCategoryWidgetConfig,
+} from "../../aware/widgets/metric-category-widget";
 import { getSensorKind } from "../adapter";
+import { RAD_DOSE_RATE_IDS } from "../metric-ids";
 import { LevelsWidget } from "./levels-widget";
 import { MetricWidget } from "./metric-widget";
+import { SensorWidgetShell } from "./sensor-widget-shell";
 
-type MetricFormat = (value: number, unit: string) => { value: string; unit: string };
-
-const formatDoseRate: MetricFormat = (microSv) => {
-  if (microSv >= 1_000_000) return { value: (microSv / 1_000_000).toFixed(2), unit: "Sv/h" };
-  if (microSv >= 1_000) return { value: (microSv / 1_000).toFixed(2), unit: "mSv/h" };
-  return { value: microSv.toFixed(2), unit: "µSv/h" };
+const RADIATION_CONFIG: MetricCategoryWidgetConfig = {
+  title: "Radiation",
+  icon: ShieldAlert,
+  categories: ["cbrn"],
+  heroIds: RAD_DOSE_RATE_IDS,
+  supportingPerPage: 3,
 };
 
-const formatAccumulatedDose: MetricFormat = (microSv) => {
-  if (microSv >= 1_000_000) return { value: (microSv / 1_000_000).toFixed(2), unit: "Sv" };
-  if (microSv >= 1_000) return { value: (microSv / 1_000).toFixed(2), unit: "mSv" };
-  return { value: microSv.toFixed(2), unit: "µSv" };
-};
+function RadiationSensorWidget({ entityId }: { entityId: string }) {
+  return (
+    <SensorWidgetShell entityId={entityId}>
+      {() => (
+        <MetricCategoryWidget config={RADIATION_CONFIG} entityId={entityId} showHeader={false} />
+      )}
+    </SensorWidgetShell>
+  );
+}
 
 export function SensorPane({ entityId, widgetId }: { entityId: string; widgetId: string }) {
   const kind = useEntityStore((s) => {
@@ -37,13 +47,7 @@ export function SensorPane({ entityId, widgetId }: { entityId: string; widgetId:
 
   switch (kind) {
     case MetricKind.MetricKindRadiationHazard:
-      return (
-        <MetricWidget
-          entityId={entityId}
-          formatPrimary={formatDoseRate}
-          formatSecondary={formatAccumulatedDose}
-        />
-      );
+      return <RadiationSensorWidget entityId={entityId} />;
     default:
       return <MetricWidget entityId={entityId} />;
   }

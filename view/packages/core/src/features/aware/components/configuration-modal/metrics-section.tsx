@@ -10,6 +10,7 @@ import {
   BarChart3,
   Box,
   Cloud,
+  Gauge,
   HeartPulse,
   Move3d,
   ShieldAlert,
@@ -39,6 +40,7 @@ const CATEGORY_ICONS: Record<MetricCategory, LucideIcon> = {
   airQuality: Wind,
   cbrn: ShieldAlert,
   vital: HeartPulse,
+  equipment: Gauge,
   general: Box,
 };
 

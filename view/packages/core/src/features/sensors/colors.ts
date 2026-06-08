@@ -2,6 +2,7 @@ import { useThemeColors } from "@hydris/ui/lib/theme";
 import { useColorScheme } from "nativewind";
 import { Platform } from "react-native";
 
+import { convertUnit } from "../aware/utils/format-metrics";
 import type { SensorWidgetData, ThresholdConfig } from "./types";
 import { SENSOR_THRESHOLDS } from "./types";
 
@@ -56,9 +57,14 @@ export function calculateGlow(
 
   let percentage = 0;
   switch (data.reading.shape) {
-    case "metric":
-      percentage = data.reading.primary.value / threshold.value;
+    case "metric": {
+      const { primary } = data.reading;
+      if (typeof threshold.unit !== "number") return { color: "", intensity: 0 };
+      const converted = convertUnit(primary.value, primary.unit, threshold.unit);
+      if (converted == null) return { color: "", intensity: 0 };
+      percentage = converted / threshold.value;
       break;
+    }
     case "levels": {
       const maxValue = Math.max(...data.reading.levels.map((l) => l.value));
       percentage = maxValue / threshold.value;

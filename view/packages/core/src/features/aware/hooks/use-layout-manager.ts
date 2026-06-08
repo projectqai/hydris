@@ -21,9 +21,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 
-import { COMPONENT_REGISTRY, PERSIST_DEBOUNCE_MS, PRESETS, STORAGE_KEY } from "../constants";
+import { PERSIST_DEBOUNCE_MS, STORAGE_KEY } from "../constants";
+import { COMPONENT_REGISTRY, PRESETS } from "../layouts";
 import { useMissionKitStore } from "../store/mission-kit-store";
-import { layoutResetRef, layoutSnapshotRef } from "./layout-snapshot";
+import { layoutApplyMissionKitRef, layoutResetRef, layoutSnapshotRef } from "./layout-snapshot";
 
 const BASE_COMPONENT_IDS = new Set(Object.keys(COMPONENT_REGISTRY));
 
@@ -53,6 +54,7 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
   const pendingTreeRef = useRef<LayoutNode | null>(null);
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipPersistRef = useRef(false);
+  const didPersistMountRef = useRef(false);
   const externalPendingRef = useRef(false);
   const opacity = useSharedValue(1);
 
@@ -232,6 +234,13 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
   const layoutOpacity = useAnimatedStyle(() => ({ opacity: opacity.value }));
 
   useEffect(() => {
+    // don't persist the default layout on first mount. the mission-kit apply
+    // below would treat it as a saved layout and skip the pack on a fresh profile.
+    if (!didPersistMountRef.current) {
+      didPersistMountRef.current = true;
+      return;
+    }
+
     if (skipPersistRef.current) {
       skipPersistRef.current = false;
       return;
@@ -288,21 +297,26 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
       .catch(() => {});
   }, []);
 
-  const missionKitAppliedRef = useRef(false);
-
   useEffect(() => {
+    // If a share-link layout is in the URL, the deeplink hook wins on first
+    // paint. Skip the initial apply here. The subscribe still runs so a later
+    // explicit import can override the deeplink.
+    let skipInitialApply = false;
     if (process.env.EXPO_OS === "web" && typeof window !== "undefined") {
       const url = new URL(window.location.href);
-      if (url.searchParams.has("layout")) return;
+      skipInitialApply = url.searchParams.has("layout");
     }
 
     const apply = (layouts: Record<string, { tree: LayoutNode }>) => {
-      if (missionKitAppliedRef.current || Object.keys(layouts).length === 0) return;
-      missionKitAppliedRef.current = true;
+      if (Object.keys(layouts).length === 0) return;
 
       let updated = false;
       for (const [presetId, layout] of Object.entries(layouts)) {
         if (!PRESETS.some((p) => p.id === presetId)) continue;
+        // Local layout (with the user's runtime pins and tweaks) wins on
+        // reload. Only seed presets with no local copy. An explicit import
+        // clears customTreesRef first, so it still applies in full.
+        if (customTreesRef.current[presetId]) continue;
         const validated = validateLayoutNode(layout.tree, validIds);
         if (validated) {
           customTreesRef.current[presetId] = validated;
@@ -310,24 +324,46 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
         }
       }
 
-      if (updated) {
-        const tree = customTreesRef.current[activePresetIdRef.current];
-        if (tree) {
-          skipPersistRef.current = true;
-          setLayoutTree(tree);
-          structureKeyRef.current = getStructureKey(tree);
+      if (!updated) return;
+
+      let activeId = activePresetIdRef.current;
+      let tree = customTreesRef.current[activeId];
+      // Fallback: if active preset is not in the pack, switch to the first
+      // preset that IS, so the import is visible to the user.
+      if (!tree) {
+        const fallbackId = PRESETS.map((p) => p.id).find((id) => customTreesRef.current[id]);
+        if (fallbackId) {
+          activeId = fallbackId;
+          activePresetIdRef.current = fallbackId;
+          setActivePresetId(fallbackId);
+          tree = customTreesRef.current[fallbackId];
         }
+      }
+      if (tree) {
+        skipPersistRef.current = true;
+        setLayoutTree(tree);
+        structureKeyRef.current = getStructureKey(tree);
       }
     };
 
-    apply(useMissionKitStore.getState().layouts);
+    if (!skipInitialApply) {
+      apply(useMissionKitStore.getState().layouts);
+    }
     const unsub = useMissionKitStore.subscribe((state) => apply(state.layouts));
-    return unsub;
+
+    layoutApplyMissionKitRef.current = () => {
+      customTreesRef.current = {};
+      apply(useMissionKitStore.getState().layouts);
+    };
+
+    return () => {
+      unsub();
+      layoutApplyMissionKitRef.current = null;
+    };
   }, []);
 
   layoutResetRef.current = () => {
     customTreesRef.current = {};
-    missionKitAppliedRef.current = false;
     skipPersistRef.current = true;
     const defaultPreset = PRESETS[0]!;
     setActivePresetId(defaultPreset.id);
@@ -341,6 +377,7 @@ export function useLayoutManager(additionalComponentIds?: string[]) {
     activePresetId,
     tree: layoutTree,
     isModified: !!isLayoutModified,
+    customTrees: customTreesRef.current,
   };
 
   return {

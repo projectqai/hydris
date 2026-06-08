@@ -31,7 +31,7 @@ func TestPoseTransformer_CartesianOffset(t *testing.T) {
 		},
 	}
 
-	pt.Resolve(head, "child")
+	pt.Resolve(head, "child", nil)
 
 	child := head["child"]
 	if child.Geo == nil {
@@ -72,7 +72,7 @@ func TestPoseTransformer_PolarOffsetWithRange(t *testing.T) {
 		},
 	}
 
-	pt.Resolve(head, "child")
+	pt.Resolve(head, "child", nil)
 
 	child := head["child"]
 	if child.Geo == nil {
@@ -119,7 +119,7 @@ func TestPoseTransformer_PolarBearingOnly(t *testing.T) {
 		},
 	}
 
-	pt.Resolve(head, "child")
+	pt.Resolve(head, "child", nil)
 
 	child := head["child"]
 	// No geo without range
@@ -159,14 +159,14 @@ func TestPoseTransformer_ParentChangeRecalculatesChild(t *testing.T) {
 	}
 
 	// Initial resolve
-	pt.Resolve(head, "child")
+	pt.Resolve(head, "child", nil)
 	lat1 := head["child"].Geo.Latitude
 
 	// Move parent north
 	head["parent"].Geo.Latitude = 52.0
 
 	// Resolve parent — should re-resolve child
-	pt.Resolve(head, "parent")
+	pt.Resolve(head, "parent", nil)
 	lat2 := head["child"].Geo.Latitude
 
 	if lat2 <= lat1 {
@@ -199,14 +199,14 @@ func TestPoseTransformer_ParentExpiryRemovesChildGeo(t *testing.T) {
 		},
 	}
 
-	pt.Resolve(head, "child")
+	pt.Resolve(head, "child", nil)
 	if head["child"].Geo == nil {
 		t.Fatal("expected child geo after resolve")
 	}
 
 	// Parent expires
 	delete(head, "parent")
-	pt.Resolve(head, "parent")
+	pt.Resolve(head, "parent", nil)
 
 	if head["child"].Geo != nil {
 		t.Error("expected child Geo to be cleared after parent expired")
@@ -246,7 +246,7 @@ func TestPoseTransformer_OrientationComposition(t *testing.T) {
 		},
 	}
 
-	pt.Resolve(head, "child")
+	pt.Resolve(head, "child", nil)
 
 	child := head["child"]
 	if child.Geo == nil {
@@ -284,15 +284,15 @@ func TestPoseTransformer_ChildExpiryCleanup(t *testing.T) {
 		},
 	}
 
-	pt.Resolve(head, "child")
+	pt.Resolve(head, "child", nil)
 
 	// Expire child
 	delete(head, "child")
-	pt.Resolve(head, "child")
+	pt.Resolve(head, "child", nil)
 
 	// Parent change should not panic (no children to resolve)
 	head["parent"].Geo.Latitude = 52.0
-	pt.Resolve(head, "parent")
+	pt.Resolve(head, "parent", nil)
 }
 
 func TestPoseTransformer_CartesianWithAltitude(t *testing.T) {
@@ -321,7 +321,7 @@ func TestPoseTransformer_CartesianWithAltitude(t *testing.T) {
 		},
 	}
 
-	pt.Resolve(head, "child")
+	pt.Resolve(head, "child", nil)
 
 	child := head["child"]
 	if child.Geo == nil {
@@ -360,7 +360,7 @@ func TestPoseTransformer_PolarAzimuthSetsOrientation(t *testing.T) {
 		},
 	}
 
-	pt.Resolve(head, "head")
+	pt.Resolve(head, "head", nil)
 
 	child := head["head"]
 	// Geo should be resolved (range=0 → same position as parent)
@@ -422,7 +422,7 @@ func TestPoseTransformer_PolarAzimuthComposesWithParentOrientation(t *testing.T)
 		},
 	}
 
-	pt.Resolve(head, "head")
+	pt.Resolve(head, "head", nil)
 
 	child := head["head"]
 	if child.Orientation == nil || child.Orientation.Orientation == nil {
@@ -460,7 +460,7 @@ func TestPoseTransformer_PolarBearingOnlySetsOrientation(t *testing.T) {
 		},
 	}
 
-	pt.Resolve(head, "head")
+	pt.Resolve(head, "head", nil)
 
 	child := head["head"]
 	// No geo without range
@@ -506,7 +506,7 @@ func TestPoseTransformer_PolarElevationSetsOrientation(t *testing.T) {
 		},
 	}
 
-	pt.Resolve(head, "head")
+	pt.Resolve(head, "head", nil)
 
 	child := head["head"]
 	if child.Orientation == nil || child.Orientation.Orientation == nil {
@@ -545,7 +545,7 @@ func TestPoseTransformer_NoOffset_InheritsParentPosition(t *testing.T) {
 		},
 	}
 
-	pt.Resolve(head, "child")
+	pt.Resolve(head, "child", nil)
 
 	child := head["child"]
 	if child.Geo == nil {

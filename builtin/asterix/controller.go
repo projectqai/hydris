@@ -81,7 +81,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 
 	serviceID := controllerName + ".service"
 
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:    serviceID,
 		Label: proto.String("ASTERIX"),
 		Controller: &pb.Controller{
@@ -92,8 +92,16 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		},
 		Configurable: &pb.ConfigurableComponent{
 			SupportedDeviceClasses: []*pb.DeviceClassOption{
-				{Class: "receiver", Label: "Receiver"},
-				{Class: "sender", Label: "Sender"},
+				{
+					Class:       "receiver",
+					Label:       "Receiver",
+					Description: "Ingest ASTERIX surveillance data (radar tracks, plots) over UDP or multicast. Use this to consume feeds from civil/military radar systems.",
+				},
+				{
+					Class:       "sender",
+					Label:       "Sender",
+					Description: "Encode hydris track entities as ASTERIX and transmit them over UDP. Use this to publish hydris's air picture to external ASTERIX consumers.",
+				},
 			},
 		},
 		Interactivity: &pb.InteractivityComponent{
@@ -108,8 +116,8 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		{Class: "sender", Label: "Sender", Schema: senderSchema},
 	}
 
-	return controller.WatchChildren(ctx, serviceID, controllerName, classes, func(ctx context.Context, entityID string) error {
-		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+	return controller.WatchChildren(ctx, controllerName, serviceID, controllerName, classes, func(ctx context.Context, entityID string) error {
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			switch entity.Device.GetClass() {
 			case "receiver":
 				return runReceiver(ctx, logger, entity, ready)

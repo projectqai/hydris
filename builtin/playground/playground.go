@@ -24,6 +24,7 @@ import (
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const controllerName = "playground"
@@ -84,6 +85,16 @@ func serviceSchema() *structpb.Struct {
 				"type":        "boolean",
 				"title":       "Enable Blue Team",
 				"description": "When enabled, simulates two hiking teams with sensors in the Swiss Alps",
+			},
+			"enable_ship": map[string]any{
+				"type":        "boolean",
+				"title":       "Enable Demo Ship",
+				"description": "When enabled, creates a demo vessel with assembly outline, cameras, and radar",
+			},
+			"enable_map_layers": map[string]any{
+				"type":        "boolean",
+				"title":       "Enable Map Layers",
+				"description": "When enabled, publishes two demo plugin map layers",
 			},
 		},
 	})
@@ -255,25 +266,49 @@ func manualSchema() *structpb.Struct {
 func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	serviceEntityID := controllerName + ".service"
 
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:    serviceEntityID,
 		Label: proto.String("Playground"),
 		Controller: &pb.Controller{
 			Id: proto.String(controllerName),
 		},
 		Device: &pb.DeviceComponent{
-			Category: proto.String("Missions"),
+			Category: proto.String("Mission"),
 			State:    pb.DeviceState_DeviceStateActive,
 		},
 		Configurable: &pb.ConfigurableComponent{
 			Schema: serviceSchema(),
 			SupportedDeviceClasses: []*pb.DeviceClassOption{
-				{Class: "configured", Label: "Configured Device"},
-				{Class: "unconfigured", Label: "Unconfigured Device"},
-				{Class: "manual", Label: "Manual Device"},
-				{Class: "drone_radar", Label: "Simulated Drone Radar"},
-				{Class: "sensor_network", Label: "Sensor Network"},
-				{Class: "blue_team", Label: "Blue Team"},
+				{
+					Class:       "configured",
+					Label:       "Configured Device",
+					Description: "Example continuous controller backed by a configurable schema with default values. Useful as a template when writing your own continuous controller.",
+				},
+				{
+					Class:       "unconfigured",
+					Label:       "Unconfigured Device",
+					Description: "Example polling controller with a configurable schema but no defaults. Useful as a template for periodic-poll style controllers.",
+				},
+				{
+					Class:       "manual",
+					Label:       "Manual Device",
+					Description: "Example device with no auto-behavior, useful for poking entity components by hand from the UI.",
+				},
+				{
+					Class:       "drone_radar",
+					Label:       "Simulated Drone Radar",
+					Description: "Spawns a fake radar that emits synthetic drone detections in a region. Useful for demoing the air picture and detection rendering.",
+				},
+				{
+					Class:       "sensor_network",
+					Label:       "Sensor Network",
+					Description: "Simulated weather and hazard sensor network around Lake Geneva. Useful for demoing environmental layers.",
+				},
+				{
+					Class:       "blue_team",
+					Label:       "Blue Team",
+					Description: "Simulated hiking teams in the Swiss Alps carrying sensors and radios. Useful for demoing friendly-force tracking.",
+				},
 			},
 		},
 		Interactivity: &pb.InteractivityComponent{
@@ -284,7 +319,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	}
 
 	// Watch the service entity's own config for toggles (discovery, cameras).
-	go controller.Run(ctx, serviceEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error { //nolint:errcheck // fire-and-forget goroutine
+	go controller.Run(ctx, controllerName, serviceEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error { //nolint:errcheck // fire-and-forget goroutine
 		ready()
 		return runServiceConfig(ctx, logger, entity)
 	})
@@ -301,7 +336,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		// will not push a Configurable onto it, so it stays schema-less.
 	}
 
-	return controller.WatchChildren(ctx, serviceEntityID, controllerName, classes, func(ctx context.Context, entityID string) error {
+	return controller.WatchChildren(ctx, controllerName, serviceEntityID, controllerName, classes, func(ctx context.Context, entityID string) error {
 		return runChild(ctx, logger, entityID)
 	})
 }
@@ -323,6 +358,8 @@ var (
 	radarDevices      []string
 	sensorDevices     []string
 	blueTeamDevices   []string
+	shipDevices       []string
+	mapLayerDevices   []string
 )
 
 type serviceConfig struct {
@@ -335,6 +372,8 @@ type serviceConfig struct {
 	EnableRadar     bool
 	EnableSensors   bool
 	EnableBlueTeam  bool
+	EnableShip      bool
+	EnableMapLayers bool
 }
 
 func parseServiceConfig(entity *pb.Entity) serviceConfig {
@@ -368,6 +407,12 @@ func parseServiceConfig(entity *pb.Entity) serviceConfig {
 	}
 	if v, ok := entity.Config.Value.Fields["enable_blue_team"]; ok {
 		cfg.EnableBlueTeam = v.GetBoolValue()
+	}
+	if v, ok := entity.Config.Value.Fields["enable_ship"]; ok {
+		cfg.EnableShip = v.GetBoolValue()
+	}
+	if v, ok := entity.Config.Value.Fields["enable_map_layers"]; ok {
+		cfg.EnableMapLayers = v.GetBoolValue()
 	}
 	return cfg
 }
@@ -460,12 +505,12 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 			"longitude":             9.93,
 			"port":                  float64(5631),
 		})
-		pushTrackedEntities(ctx, logger, &aisDevices, "ais", []*pb.Entity{
+		pushTrackedEntities(ctx, logger, &aisDevices, "nmea", []*pb.Entity{
 			{
-				Id:    "ais.stream.norway",
+				Id:    "nmea.stream.norway",
 				Label: proto.String("AIS Stream Norway"),
 				Device: &pb.DeviceComponent{
-					Parent: proto.String("ais.service"),
+					Parent: proto.String("nmea.service"),
 					Class:  proto.String("stream"),
 				},
 				Config: &pb.ConfigurationComponent{Value: aisCfg, Version: 1},
@@ -473,7 +518,7 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 		})
 	} else {
 		logger.Info("playground: AIS disabled, cleaning up")
-		expireTrackedEntities(ctx, logger, &aisDevices, "ais")
+		expireTrackedEntities(ctx, logger, &aisDevices, "nmea")
 	}
 
 	if cfg.EnableRadar {
@@ -481,9 +526,6 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 		radarEntityID := controllerName + ".discovered.drone_radar"
 		serviceEntityID := controllerName + ".service"
 		radarCfg, _ := structpb.NewStruct(map[string]any{
-			"latitude":           51.9555,
-			"longitude":          4.1694,
-			"altitude":           16.0,
 			"ground_level":       5.0,
 			"range_km":           5.0,
 			"track_count":        float64(8),
@@ -507,6 +549,11 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 					Parent:   proto.String(serviceEntityID),
 					Class:    proto.String("drone_radar"),
 					Category: proto.String("Missions"),
+				},
+				Geo: &pb.GeoSpatialComponent{
+					Latitude:  51.9555,
+					Longitude: 4.1694,
+					Altitude:  proto.Float64(16.0),
 				},
 				Configurable: &pb.ConfigurableComponent{
 					Schema: radarSchema(),
@@ -581,6 +628,49 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 		expireTrackedEntities(ctx, logger, &blueTeamDevices, "blue_team")
 	}
 
+	if cfg.EnableShip {
+		logger.Info("playground: demo ship enabled, creating vessel assembly")
+		pushTrackedEntities(ctx, logger, &shipDevices, "ship", demoShip())
+	} else {
+		logger.Info("playground: demo ship disabled, cleaning up")
+		expireTrackedEntities(ctx, logger, &shipDevices, "ship")
+	}
+
+	if cfg.EnableMapLayers {
+		logger.Info("playground: map layers enabled, publishing demo layers")
+		pushTrackedEntities(ctx, logger, &mapLayerDevices, "map layers", []*pb.Entity{
+			{
+				Id:       "playground.layers.osm-tiles",
+				Label:    proto.String("OSM tiles"),
+				Lifetime: &pb.Lifetime{From: timestamppb.Now(), Fresh: timestamppb.Now()},
+				MapLayer: &pb.MapLayerComponent{
+					ZIndex: 0,
+					Source: &pb.MapLayerComponent_Tiles{
+						Tiles: &pb.MapLayerComponent_Tile{
+							Url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+						},
+					},
+				},
+			},
+			{
+				Id:       "playground.layers.night-lights",
+				Label:    proto.String("Night Lights"),
+				Lifetime: &pb.Lifetime{From: timestamppb.Now(), Fresh: timestamppb.Now()},
+				MapLayer: &pb.MapLayerComponent{
+					ZIndex: 1,
+					Source: &pb.MapLayerComponent_Tiles{
+						Tiles: &pb.MapLayerComponent_Tile{
+							Url: "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png",
+						},
+					},
+				},
+			},
+		})
+	} else {
+		logger.Info("playground: map layers disabled, cleaning up")
+		expireTrackedEntities(ctx, logger, &mapLayerDevices, "map layers")
+	}
+
 	<-ctx.Done()
 	return nil
 }
@@ -637,7 +727,7 @@ func pushDiscoveredDevices(ctx context.Context, logger *slog.Logger) {
 	}
 	discoveredMu.Unlock()
 
-	if err := controller.Push(ctx, subdevices...); err != nil {
+	if err := controller.Push(ctx, controllerName, subdevices...); err != nil {
 		logger.Error("playground: failed to push discovered subdevices", "error", err)
 		return
 	}
@@ -649,7 +739,7 @@ func pushDiscoveredDevices(ctx context.Context, logger *slog.Logger) {
 		"mode":             "normal",
 		"crash":            false,
 	})
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:     controllerName + ".discovered.configured",
 		Config: &pb.ConfigurationComponent{Value: defaultCfg, Version: 1},
 	}); err != nil {
@@ -686,7 +776,7 @@ func pushTrackedEntities(ctx context.Context, logger *slog.Logger, tracked *[]st
 	}
 	discoveredMu.Unlock()
 
-	if err := controller.Push(ctx, entities...); err != nil {
+	if err := controller.Push(ctx, controllerName, entities...); err != nil {
 		logger.Error("playground: failed to push "+name+" entities", "error", err)
 	}
 }
@@ -701,7 +791,7 @@ func expireTrackedEntities(ctx context.Context, logger *slog.Logger, tracked *[]
 		return
 	}
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("playground")
 	if err != nil {
 		logger.Error("playground: expire "+name+" connect error", "error", err)
 		return
@@ -802,8 +892,13 @@ func demoCameras() []*pb.Entity {
 			Id:      d.id,
 			Label:   proto.String(d.label),
 			Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
-			Symbol: &pb.SymbolComponent{
-				MilStd2525C: "SFGPE-----",
+			Classification: &pb.ClassificationComponent{
+				Identity: pb.ClassificationIdentity_ClassificationIdentityFriend.Enum(), //nolint:staticcheck
+				Taxonomy: []*pb.ClassificationTaxonomy{{
+					Kind: &pb.ClassificationTaxonomy_Equipment{Equipment: &pb.EquipmentTaxonomy{
+						Sensor: &pb.EquipmentTaxonomySensor{Kind: &pb.EquipmentTaxonomySensor_ElectroOptical{ElectroOptical: &pb.EquipmentTaxonomySensorElectroOptical{}}},
+					}},
+				}},
 			},
 			Geo: &pb.GeoSpatialComponent{
 				Latitude:  d.lat,
@@ -834,7 +929,7 @@ func expireDiscoveredDevices(ctx context.Context, logger *slog.Logger) {
 		return
 	}
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("playground")
 	if err != nil {
 		logger.Error("playground: expire connect error", "error", err)
 		return
@@ -855,7 +950,7 @@ func expireDiscoveredDevices(ctx context.Context, logger *slog.Logger) {
 
 func runChild(ctx context.Context, logger *slog.Logger, entityID string) error {
 	// Determine the device class by reading the entity.
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("playground")
 	if err != nil {
 		return fmt.Errorf("grpc connect: %w", err)
 	}
@@ -873,44 +968,44 @@ func runChild(ctx context.Context, logger *slog.Logger, entityID string) error {
 		subClasses := []controller.DeviceClass{
 			{Class: "subdevice", Label: "Subdevice", Schema: subdeviceSchema()},
 		}
-		go controller.WatchChildren(ctx, entityID, controllerName, subClasses, func(ctx context.Context, subEntityID string) error { //nolint:errcheck // fire-and-forget goroutine
-			return controller.Run(ctx, subEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+		go controller.WatchChildren(ctx, controllerName, entityID, controllerName, subClasses, func(ctx context.Context, subEntityID string) error { //nolint:errcheck // fire-and-forget goroutine
+			return controller.Run(ctx, controllerName, subEntityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 				return runSubdevice(ctx, logger, entity, ready)
 			})
 		})
 
 		// Continuous controller — blocks until context cancelled.
-		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			return runConfigured(ctx, logger, entity, ready)
 		})
 
 	case "unconfigured":
 		// Polling controller — runs periodically.
-		return controller.RunPolled(ctx, entityID, func(ctx context.Context, entity *pb.Entity) (time.Duration, error) {
+		return controller.RunPolled(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity) (time.Duration, error) {
 			return pollUnconfigured(ctx, logger, entity)
 		})
 
 	case "manual":
 		// Continuous controller — blocks until context cancelled.
-		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			return runManual(ctx, logger, entity, ready)
 		})
 
 	case "drone_radar":
 		// Simulated drone detection radar.
-		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			return runRadar(ctx, logger, entity, ready)
 		})
 
 	case "sensor_network":
 		// Simulated weather + hazard sensor network around Lake Geneva.
-		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			return runSensorNetwork(ctx, logger, entity, ready)
 		})
 
 	case "blue_team":
 		// Simulated hiking teams in the Swiss Alps with sensors and radios.
-		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			return runBlueTeam(ctx, logger, entity, ready)
 		})
 
@@ -969,7 +1064,7 @@ func runConfigured(ctx context.Context, logger *slog.Logger, entity *pb.Entity, 
 				},
 			})
 		}
-		if err := controller.Push(ctx, subs...); err != nil {
+		if err := controller.Push(ctx, controllerName, subs...); err != nil {
 			logger.Error("playground: failed to push subdevices", "error", err)
 		}
 	}
@@ -979,7 +1074,7 @@ func runConfigured(ctx context.Context, logger *slog.Logger, entity *pb.Entity, 
 		}
 		expCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		grpcConn, err := builtin.BuiltinClientConn()
+		grpcConn, err := builtin.BuiltinClientConn("playground")
 		if err != nil {
 			return
 		}
@@ -1206,7 +1301,7 @@ func pushConfigurableValue(ctx context.Context, entity *pb.Entity) {
 	if entity.Config == nil || entity.Config.Value == nil {
 		return
 	}
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("playground")
 	if err != nil {
 		return
 	}
@@ -1230,7 +1325,7 @@ func pushConfigurableValue(ctx context.Context, entity *pb.Entity) {
 }
 
 func pushMetric(ctx context.Context, entityID, label string, val uint64) {
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("playground")
 	if err != nil {
 		return
 	}

@@ -3,7 +3,7 @@
 import { cn } from "@hydris/ui/lib/utils";
 import { Pressable, Text, View } from "react-native";
 
-import { PRESETS } from "../../constants";
+import { PRESETS } from "../../layouts";
 
 // Web-only CSS shadows — React Native doesn't support boxShadow/inset
 const INSET_SHADOW = "inset 0 1px 3px rgba(0,0,0,0.45)";

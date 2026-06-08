@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 	"unsafe"
 
 	"github.com/projectqai/hydris/engine"
@@ -68,7 +69,7 @@ func (h *androidLogHandler) Handle(_ context.Context, r slog.Record) error {
 	defer C.free(unsafe.Pointer(cMsg))
 
 	C.androidLog(C.int(priority), cTag, cMsg)
-	fmt.Fprintln(&Ring, msg)
+	fmt.Fprintf(&Ring, "%s %s\n", r.Time.Format(time.Kitchen), msg)
 	return nil
 }
 

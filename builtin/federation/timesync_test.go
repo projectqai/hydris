@@ -20,10 +20,13 @@ func TestEstimateClockOffset_ReturnsNearZero(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	client := pb.NewWorldServiceClient(conn)
-	offset := estimateClockOffset(context.Background(), client)
+	offset, rtt := estimateClockOffset(context.Background(), client)
 
 	if offset < -500*time.Millisecond || offset > 500*time.Millisecond {
 		t.Fatalf("expected offset near zero for same-host, got %v", offset)
+	}
+	if rtt < 0 || rtt > 500*time.Millisecond {
+		t.Fatalf("expected rtt near zero for same-host, got %v", rtt)
 	}
 }
 
@@ -37,12 +40,6 @@ func TestShiftEntityTimestamps_AllFields(t *testing.T) {
 			From:  timestamppb.New(now),
 			Fresh: timestamppb.New(now),
 			Until: timestamppb.New(now.Add(60 * time.Second)),
-			Components: map[int32]*pb.Lifetime{
-				11: {
-					Fresh: timestamppb.New(now),
-					Until: timestamppb.New(now.Add(30 * time.Second)),
-				},
-			},
 		},
 		Lease: &pb.Lease{
 			Controller: "ctrl",
@@ -82,10 +79,8 @@ func TestShiftEntityTimestamps_AllFields(t *testing.T) {
 	check("Lifetime.From", e.Lifetime.From, shifted)
 	check("Lifetime.Fresh", e.Lifetime.Fresh, shifted)
 	check("Lifetime.Until", e.Lifetime.Until, now.Add(60*time.Second).Add(offset))
-	check("Lifetime.Components[11].Fresh", e.Lifetime.Components[11].Fresh, shifted)
-	check("Lifetime.Components[11].Until", e.Lifetime.Components[11].Until, now.Add(30*time.Second).Add(offset))
 	check("Lease.Expires", e.Lease.Expires, now.Add(10*time.Second).Add(offset))
-	check("Detection.LastMeasured", e.Detection.LastMeasured, shifted)
+	check("Detection.LastMeasured", e.Detection.LastMeasured, shifted) //nolint:staticcheck
 	check("Mission.Eta", e.Mission.Eta, now.Add(3600*time.Second).Add(offset))
 	check("Link.LastSeen", e.Link.LastSeen, shifted)
 	check("Capture.CapturedAt", e.Capture.CapturedAt, shifted)

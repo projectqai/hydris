@@ -329,7 +329,13 @@ func buildWindSensor(h *hiker, ttl *timestamppb.Timestamp) *pb.Entity {
 				},
 			},
 		},
-		Symbol: &pb.SymbolComponent{MilStd2525C: "SFGPE-----*****"},
+		Classification: &pb.ClassificationComponent{
+			Taxonomy: []*pb.ClassificationTaxonomy{{
+				Kind: &pb.ClassificationTaxonomy_Equipment{Equipment: &pb.EquipmentTaxonomy{
+					Sensor: &pb.EquipmentTaxonomySensor{},
+				}},
+			}},
+		},
 		Sensor: &pb.SensorComponent{},
 		Metric: &pb.MetricComponent{
 			Metrics: []*pb.Metric{
@@ -373,7 +379,13 @@ func buildVitalSensor(h *hiker, ttl *timestamppb.Timestamp) *pb.Entity {
 				},
 			},
 		},
-		Symbol: &pb.SymbolComponent{MilStd2525C: "SFGPE-----*****"},
+		Classification: &pb.ClassificationComponent{
+			Taxonomy: []*pb.ClassificationTaxonomy{{
+				Kind: &pb.ClassificationTaxonomy_Equipment{Equipment: &pb.EquipmentTaxonomy{
+					Sensor: &pb.EquipmentTaxonomySensor{},
+				}},
+			}},
+		},
 		Sensor: &pb.SensorComponent{},
 		Metric: &pb.MetricComponent{
 			Metrics: []*pb.Metric{
@@ -460,7 +472,11 @@ func buildCampEntity(parentID string, ttl *timestamppb.Timestamp) *pb.Entity {
 			Longitude: campLocation.lon,
 			Altitude:  proto.Float64(campLocation.alt),
 		},
-		Symbol:   &pb.SymbolComponent{MilStd2525C: "SFGPI-----*****"},
+		Classification: &pb.ClassificationComponent{
+			Taxonomy: []*pb.ClassificationTaxonomy{{
+				Kind: &pb.ClassificationTaxonomy_Infrastructure{Infrastructure: &pb.InfrastructureTaxonomy{}},
+			}},
+		},
 		Lifetime: &pb.Lifetime{Until: ttl},
 	}
 }
@@ -566,7 +582,7 @@ func runBlueTeam(ctx context.Context, logger *slog.Logger, entity *pb.Entity, re
 		"update_ms", cfg.UpdateIntervalMs,
 	)
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("playground")
 	if err != nil {
 		return err
 	}

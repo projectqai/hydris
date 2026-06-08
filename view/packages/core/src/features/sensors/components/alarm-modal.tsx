@@ -3,6 +3,7 @@ import { TriangleAlert } from "lucide-react-native";
 import { Modal, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { getUnitSymbol, scaleForDisplay } from "../../aware/utils/format-metrics";
 import type { AlarmState } from "../alarm-store";
 import { SENSOR_KIND_LABEL } from "../types";
 
@@ -13,8 +14,13 @@ type Props = {
 
 function formatReading(alarm: AlarmState): string {
   switch (alarm.reading.shape) {
-    case "metric":
-      return `${alarm.reading.primary.value.toFixed(2)} ${alarm.reading.primary.unit}`;
+    case "metric": {
+      const { value, unit } = scaleForDisplay(
+        alarm.reading.primary.value,
+        alarm.reading.primary.unit,
+      );
+      return `${value.toFixed(2)} ${getUnitSymbol(unit)}`;
+    }
     case "levels": {
       if (alarm.levelCode) {
         const level = alarm.reading.levels.find((l) => l.code === alarm.levelCode);

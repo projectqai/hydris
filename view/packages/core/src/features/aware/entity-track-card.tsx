@@ -2,7 +2,7 @@ import { Badge } from "@hydris/ui/badge";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import type { Entity } from "@projectqai/proto/world";
-import { Clock, Compass, Mountain, Radio, Ruler, Zap } from "lucide-react-native";
+import { Clock, Compass, Mountain, Navigation, Radio, Ruler, Zap } from "lucide-react-native";
 import { useColorScheme } from "nativewind";
 import type { ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
@@ -18,6 +18,7 @@ import { selectSelfGeo, useEntityStore } from "./store/entity-store";
 import {
   calculateCourseFromVelocity,
   calculateGroundSpeed,
+  calculateHeadingFromOrientation,
   formatDistance,
   haversineDistance,
 } from "./utils/format-kinematics";
@@ -120,8 +121,8 @@ export function EntityCard({ entity, isSelected, onPress }: EntityCardProps) {
   const status = getTrackStatus(entity);
   const time = formatTime(entity.lifetime?.from || entity.detection?.lastMeasured);
   const altitude = formatAltitude(entity.geo?.altitude);
-  const course =
-    entity.bearing?.azimuth ?? calculateCourseFromVelocity(entity.kinematics?.velocityEnu);
+  const course = calculateCourseFromVelocity(entity.kinematics?.velocityEnu);
+  const heading = calculateHeadingFromOrientation(entity.orientation);
   const speed = calculateGroundSpeed(entity.kinematics?.velocityEnu);
   const source = entity.controller?.id;
   const selfGeo = useEntityStore(selectSelfGeo);
@@ -138,6 +139,7 @@ export function EntityCard({ entity, isSelected, onPress }: EntityCardProps) {
         }
       />
       <CardRow>
+        {heading !== undefined && <DataItem icon={Navigation} value={`${heading.toFixed(0)}°`} />}
         {course !== undefined && <DataItem icon={Compass} value={`${course.toFixed(0)}°`} />}
         <DataItem icon={Mountain} value={altitude} />
         {distance !== undefined && <DataItem icon={Ruler} value={formatDistance(distance)} />}

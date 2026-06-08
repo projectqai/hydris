@@ -8,14 +8,17 @@ import {
   LeafRendererContext,
 } from "@hydris/ui/layout/contexts";
 import { LayoutRenderer } from "@hydris/ui/layout/layout-renderer";
+import { setPaneEntityId } from "@hydris/ui/layout/tree-utils";
 import type {
   LayoutEditingContextValue,
+  NodePath,
+  PaneContent,
   WidgetGroup,
   WidgetPickerState,
 } from "@hydris/ui/layout/types";
 import { PanelProvider } from "@hydris/ui/panels";
 import type { Entity } from "@projectqai/proto/world";
-import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
+import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View } from "react-native";
 import Animated, { runOnJS, useSharedValue, withTiming } from "react-native-reanimated";
 
@@ -23,18 +26,22 @@ import { useEntityMutation } from "../../lib/api/use-entity-mutation";
 import { getEntityName } from "../../lib/api/use-track-utils";
 import { toast } from "../../lib/sonner";
 import { buildShareViewUrl, copyShareableLink } from "../../lib/use-url-params";
+import { DropZone } from "../mission-pack/drop-zone";
+import { useMissionHealthStore } from "../mission-pack/mission-health-store";
 import { CameraPaneProvider } from "./camera-pane-context";
 import { CommandPalette } from "./components/command-palette/command-palette";
+import { PaneEntityPickerModal } from "./components/layout/pane-entity-picker-modal";
 import { PaneShell } from "./components/layout/pane-shell";
 import { WidgetPickerModal } from "./components/layout/widget-picker-modal";
 import { FloatingChatInput } from "./components/panes/floating-chat-input";
 import { TopBar } from "./components/top-bar/top-bar";
 import { useUpdateBanner } from "./components/update-banner";
-import { COMPONENT_LABELS, COMPONENT_REGISTRY, PRESETS, Z } from "./constants";
+import { Z } from "./constants";
 import { layoutSnapshotRef } from "./hooks/layout-snapshot";
 import { useDeepLink } from "./hooks/use-deep-link";
 import { useEscapeHandler } from "./hooks/use-escape-handler";
 import { useLayoutManager } from "./hooks/use-layout-manager";
+import { COMPONENT_LABELS, COMPONENT_REGISTRY, PRESETS } from "./layouts";
 import { PaletteContext, type PaletteContextValue } from "./palette-context";
 import { PIPProvider } from "./pip-context";
 import { PIPPlayer } from "./pip-player";
@@ -46,6 +53,7 @@ import { mapEngineActions } from "./store/map-engine-store";
 import { useMapStore } from "./store/map-store";
 import { useMissionKitStore } from "./store/mission-kit-store";
 import { DEFAULT_OVERLAYS, useOverlayStore } from "./store/overlay-store";
+import { useRadialMenuStore } from "./store/radial-menu-store";
 import { useSelectionStore } from "./store/selection-store";
 import { useTabStore } from "./store/tab-store";
 
@@ -92,10 +100,10 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
   const { updateEntityLocation } = useEntityMutation();
 
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
-  const openPalette = useCallback(
-    (mode: PaletteMode = { kind: "root" }) => setPaletteMode(mode),
-    [],
-  );
+  const openPalette = useCallback((mode: PaletteMode = { kind: "root" }) => {
+    useRadialMenuStore.getState().close();
+    setPaletteMode(mode);
+  }, []);
   const closePalette = useCallback(() => setPaletteMode(null), []);
   const paletteCtx = useMemo<PaletteContextValue>(() => ({ open: openPalette }), [openPalette]);
 
@@ -106,7 +114,31 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
   );
   const closePicker = useCallback(() => setPickerState(null), []);
 
+  const [entityPickerState, setEntityPickerState] = useState<{
+    path: NodePath;
+    content: PaneContent;
+  } | null>(null);
+  const openEntityPicker: LayoutEditingContextValue["openEntityPicker"] = useCallback(
+    (path, content) => setEntityPickerState({ path, content }),
+    [],
+  );
+  const closeEntityPicker = useCallback(() => setEntityPickerState(null), []);
+
   useDeepLink(mapVisible, { applyExternalLayout, openPalette });
+
+  // Open the palette to mission-health when an import lands while the palette
+  // is closed. CommandPalette has its own watcher for the already-open case.
+  const latestImportedAt = useMissionHealthStore((s) =>
+    Number(s.mission?.importedAt?.seconds ?? 0),
+  );
+  const lastSeenImportRef = useRef(latestImportedAt);
+  useEffect(() => {
+    if (latestImportedAt <= lastSeenImportRef.current) return;
+    lastSeenImportRef.current = latestImportedAt;
+    if (paletteMode === null) {
+      openPalette({ kind: "mission-health" });
+    }
+  }, [latestImportedAt, paletteMode, openPalette]);
 
   const finishExitCustomize = useCallback(() => {
     setIsCustomizing(false);
@@ -162,8 +194,8 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
         longitude: view.lng,
       });
       toast.success(`Position set for ${getEntityName(placementEntity)}`);
-    } catch {
-      toast.error("Failed to set position");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set position");
     }
     exitPlacement();
   }, [placementEntity, updateEntityLocation, exitPlacement]);
@@ -209,6 +241,8 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
     exitPlacement,
     pickerOpen: pickerState !== null,
     closePicker,
+    entityPickerOpen: entityPickerState !== null,
+    closeEntityPicker,
   });
 
   const extendedRegistry = useMemo(() => {
@@ -229,7 +263,11 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
-        setPaletteMode((v) => (v ? null : { kind: "root" }));
+        setPaletteMode((v) => {
+          if (v) return null;
+          useRadialMenuStore.getState().close();
+          return { kind: "root" };
+        });
         return;
       }
       if (e.key.startsWith("F") && !e.altKey && !e.metaKey && !e.ctrlKey) {
@@ -259,6 +297,7 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
       pickerState,
       openPicker,
       closePicker,
+      openEntityPicker,
     }),
     [
       isCustomizing,
@@ -273,6 +312,7 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
       handleSwapTarget,
       openPicker,
       closePicker,
+      openEntityPicker,
     ],
   );
 
@@ -339,6 +379,26 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
               additionalWidgets={additionalWidgets}
             />
           )}
+          {entityPickerState && (
+            <PaneEntityPickerModal
+              content={entityPickerState.content}
+              onSelect={(entityId) => {
+                handleChangeContent(
+                  entityPickerState.path,
+                  setPaneEntityId(entityPickerState.content, entityId),
+                );
+                closeEntityPicker();
+              }}
+              onClear={() => {
+                handleChangeContent(
+                  entityPickerState.path,
+                  setPaneEntityId(entityPickerState.content, undefined),
+                );
+                closeEntityPicker();
+              }}
+              onClose={closeEntityPicker}
+            />
+          )}
           {paletteMode && (
             <CommandPalette
               onClose={closePalette}
@@ -363,6 +423,7 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
           )}
           <FloatingChatInput />
           <PIPPlayer minTop={70} />
+          <DropZone />
         </View>
       </PaletteContext.Provider>
     </PlacementContext.Provider>

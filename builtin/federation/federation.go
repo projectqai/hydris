@@ -8,27 +8,30 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/controller"
 	"github.com/projectqai/hydris/goclient"
+	"github.com/projectqai/hydris/pkg/timesync"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Instance represents a running federation connection
 type Instance struct {
 	entityID  string
 	serverURL string
 	remote    string
-	mode      string // "push" or "pull"
 	filter    *pb.EntityFilter
 	limiter   *pb.WatchBehavior
 	logger    *slog.Logger
-	wgConfig  *goclient.WireGuardConfig // optional WireGuard config
+	wgConfig  *goclient.WireGuardConfig
+	sshDest   string
+
+	ts timesync.Tracker
 }
 
 var (
@@ -41,44 +44,22 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 	globalServerURL = serverURL
 	controllerName := "federation"
 
-	pushSchema, _ := structpb.NewStruct(map[string]any{
+	enabledProp := map[string]any{
+		"type":        "boolean",
+		"title":       "Enabled",
+		"description": "Enable or disable this federation link",
+		"default":     true,
+		"ui:order":    -1,
+	}
+
+	downstreamSchema, _ := structpb.NewStruct(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"target": map[string]any{
-				"type":           "string",
-				"title":          "Target",
-				"description":    "Remote server address to push entities to",
-				"ui:placeholder": "e.g. 10.0.0.2:9090",
-				"ui:order":       0,
-			},
-			"filter": map[string]any{
-				"type":        "object",
-				"title":       "Filter",
-				"description": "Entity filter to select which entities to push",
-				"ui:order":    1,
-			},
-			"limiter": map[string]any{
-				"type":        "object",
-				"title":       "Rate Limiter",
-				"description": "Watch behavior / rate limiter",
-				"ui:order":    2,
-			},
-			"wireguard": map[string]any{
-				"type":        "object",
-				"title":       "WireGuard",
-				"description": "Inline WireGuard tunnel config",
-				"ui:order":    3,
-			},
-		},
-		"required": []any{"target"},
-	})
-	pullSchema, _ := structpb.NewStruct(map[string]any{
-		"type": "object",
-		"properties": map[string]any{
+			"enabled": enabledProp,
 			"source": map[string]any{
 				"type":           "string",
 				"title":          "Source",
-				"description":    "Remote server address to pull entities from",
+				"description":    "Remote server address to sync with (pull all, push back taskables and changes to pulled entities)",
 				"ui:placeholder": "e.g. 10.0.0.2:9090",
 				"ui:order":       0,
 			},
@@ -100,13 +81,19 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 				"description": "Inline WireGuard tunnel config",
 				"ui:order":    3,
 			},
+			"ssh": map[string]any{
+				"type":        "object",
+				"title":       "SSH Tunnel",
+				"description": "Inline SSH tunnel config",
+				"ui:order":    4,
+			},
 		},
 		"required": []any{"source"},
 	})
 
 	serviceID := controllerName + ".service"
 
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:    serviceID,
 		Label: proto.String("Federation"),
 		Controller: &pb.Controller{
@@ -117,8 +104,11 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 		},
 		Configurable: &pb.ConfigurableComponent{
 			SupportedDeviceClasses: []*pb.DeviceClassOption{
-				{Class: "push", Label: "Push"},
-				{Class: "pull", Label: "Pull"},
+				{
+					Class:       "downstream",
+					Label:       "Downstream",
+					Description: "Pull from a remote node and selectively push back local changes. Use this when the remote node owns the data but also you want to control its assets remotely.",
+				},
 			},
 		},
 		Interactivity: &pb.InteractivityComponent{
@@ -129,85 +119,184 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 	}
 
 	classes := []controller.DeviceClass{
-		{Class: "push", Label: "Push", Schema: pushSchema},
-		{Class: "pull", Label: "Pull", Schema: pullSchema},
+		{Class: "downstream", Schema: downstreamSchema},
 	}
 
-	return controller.WatchChildren(ctx, serviceID, controllerName, classes, func(ctx context.Context, entityID string) error {
-		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
-			ready()
-			switch entity.Device.GetClass() {
-			case "push":
-				return runInstance(ctx, globalLogger, globalServerURL, entity, "push")
-			case "pull":
-				return runInstance(ctx, globalLogger, globalServerURL, entity, "pull")
+	go autoDiscoverDownstream(ctx, logger, serviceID, controllerName)
+
+	return controller.WatchChildren(ctx, controllerName, serviceID, controllerName, classes, func(ctx context.Context, entityID string) error {
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+			if entity.Config != nil && entity.Config.Value != nil {
+				if v, ok := entity.Config.Value.Fields["enabled"]; ok && !v.GetBoolValue() {
+					return nil
+				}
 			}
-			return fmt.Errorf("unknown device class: %s", entity.Device.GetClass())
+			ready()
+			if entity.Device.GetClass() != "downstream" {
+				return fmt.Errorf("unknown device class: %s", entity.Device.GetClass())
+			}
+			return runInstance(ctx, globalLogger, globalServerURL, entity)
 		})
 	})
 }
 
-func runInstance(ctx context.Context, logger *slog.Logger, serverURL string, entity *pb.Entity, mode string) error {
+func autoDiscoverDownstream(ctx context.Context, logger *slog.Logger, serviceID, controllerName string) {
+	grpcConn, err := builtin.BuiltinClientConn("federation")
+	if err != nil {
+		logger.Error("auto-discover: connect", "error", err)
+		return
+	}
+	defer func() { _ = grpcConn.Close() }()
+
+	client := pb.NewWorldServiceClient(grpcConn)
+
+	localNodeResp, err := client.GetLocalNode(ctx, &pb.GetLocalNodeRequest{})
+	if err != nil {
+		logger.Error("auto-discover: get local node", "error", err)
+		return
+	}
+
+	stream, err := goclient.WatchEntitiesWithRetry(ctx, client, &pb.ListEntitiesRequest{
+		Filter: &pb.EntityFilter{
+			Component: []uint32{uint32(pb.EntityComponent_EntityComponentDevice)},
+		},
+	})
+	if err != nil {
+		logger.Error("auto-discover: watch", "error", err)
+		return
+	}
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		event, err := stream.Recv()
+		if err != nil {
+			logger.Error("auto-discover: recv", "error", err)
+			return
+		}
+		if event.Entity == nil || event.Entity.Device == nil {
+			continue
+		}
+		dev := event.Entity.Device
+		if dev.Ip == nil || dev.Node == nil {
+			continue
+		}
+		// Skip our own node entity.
+		if event.Entity.Id == localNodeResp.Entity.GetId() {
+			continue
+		}
+
+		host := dev.Ip.GetHost()
+		if host == "" {
+			continue
+		}
+		port := dev.Ip.GetPort()
+		if port == 0 {
+			port = 50051
+		}
+		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+
+		hostname := dev.Node.GetHostname()
+		if hostname == "" {
+			hostname = host
+		}
+
+		childID := fmt.Sprintf("federation.downstream.%s", event.Entity.Id)
+
+		existing, _ := client.GetEntity(ctx, &pb.GetEntityRequest{Id: childID})
+		if existing != nil && existing.Entity != nil {
+			continue
+		}
+
+		cfg, _ := structpb.NewStruct(map[string]any{
+			"enabled": false,
+			"source":  addr,
+		})
+
+		_, err = client.Push(ctx, &pb.EntityChangeRequest{
+			Changes: []*pb.Entity{{
+				Id:    childID,
+				Label: proto.String(hostname),
+				Controller: &pb.Controller{
+					Id: &controllerName,
+				},
+				Device: &pb.DeviceComponent{
+					Parent: &serviceID,
+					Class:  proto.String("downstream"),
+				},
+				Config: &pb.ConfigurationComponent{
+					Value: cfg,
+				},
+				Configurable: &pb.ConfigurableComponent{
+					Label: proto.String(hostname),
+				},
+			}},
+		})
+		if err != nil {
+			logger.Error("auto-discover: push child", "entity", event.Entity.Id, "error", err)
+			continue
+		}
+		logger.Info("auto-discover: created disabled downstream", "entity", event.Entity.Id, "addr", addr)
+	}
+}
+
+func runInstance(ctx context.Context, logger *slog.Logger, serverURL string, entity *pb.Entity) error {
 	if entity.Config == nil || entity.Config.Value == nil || entity.Config.Value.Fields == nil {
 		return fmt.Errorf("federation entity %s has no config", entity.Id)
 	}
 
 	fields := entity.Config.Value.Fields
 
-	// Parse configuration
 	remote := ""
 	var filter *pb.EntityFilter
 	var limiter *pb.WatchBehavior
 	var wgConfig *goclient.WireGuardConfig
+	var sshDest string
 
-	// Remote target/source
-	if v, ok := fields["target"]; ok {
-		remote = v.GetStringValue()
-	}
 	if v, ok := fields["source"]; ok {
 		remote = v.GetStringValue()
 	}
-
-	// Parse filter
 	if v, ok := fields["filter"]; ok {
 		filter = parseEntityFilter(v)
 	}
-
-	// Parse limiter
 	if v, ok := fields["limiter"]; ok {
 		limiter = parseWatchLimiter(v)
 	}
-
-	// Parse inline WireGuard config
 	if v, ok := fields["wireguard"]; ok {
 		wgConfig = parseWireGuardConfig(v)
 	}
+	if v, ok := fields["ssh"]; ok {
+		sshDest = v.GetStringValue()
+	}
 
+	if wgConfig != nil && sshDest != "" {
+		return fmt.Errorf("federation config has both wireguard and ssh; pick one")
+	}
 	if remote == "" {
-		return fmt.Errorf("federation config missing target/source")
+		return fmt.Errorf("federation config missing source")
 	}
 
 	instance := &Instance{
 		entityID:  entity.Id,
 		serverURL: serverURL,
 		remote:    remote,
-		mode:      mode,
 		filter:    filter,
 		limiter:   limiter,
 		logger:    logger,
 		wgConfig:  wgConfig,
+		sshDest:   sshDest,
 	}
 
 	if wgConfig != nil {
-		logger.Info("starting federation with WireGuard", "entityID", entity.Id, "mode", mode, "remote", remote)
+		logger.Info("starting federation with WireGuard", "entityID", entity.Id, "remote", remote)
+	} else if sshDest != "" {
+		logger.Info("starting federation with SSH", "entityID", entity.Id, "remote", remote)
 	} else {
-		logger.Info("starting federation", "entityID", entity.Id, "mode", mode, "remote", remote)
+		logger.Info("starting federation", "entityID", entity.Id, "remote", remote)
 	}
 
-	if mode == "push" {
-		return instance.runPush(ctx)
-	}
-	return instance.runPull(ctx)
+	return instance.runDownstream(ctx)
 }
 
 const defaultFederationKeepaliveMs = 30000 // 30s
@@ -232,6 +321,29 @@ func (i *Instance) keepaliveTTL() time.Duration {
 	return 2 * time.Duration(*i.limiter.KeepaliveIntervalMs) * time.Millisecond
 }
 
+const timeSyncInterval = 30 * time.Second
+
+func (i *Instance) timeSyncLoop(ctx context.Context, client pb.WorldServiceClient) {
+	probe := func() {
+		offset, rtt := estimateClockOffset(ctx, client)
+		i.ts.Add(offset, rtt)
+	}
+	probe()
+	i.logger.Info("time sync", "offset", i.ts.Offset(), "rtt", i.ts.RTT())
+
+	ticker := time.NewTicker(timeSyncInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			probe()
+			i.logger.Debug("time sync", "offset", i.ts.Offset(), "rtt", i.ts.RTT())
+		}
+	}
+}
+
 // connectToRemote establishes a connection to the remote server
 func (i *Instance) connectToRemote() (*goclient.Connection, error) {
 	if i.wgConfig != nil {
@@ -240,6 +352,9 @@ func (i *Instance) connectToRemote() (*goclient.Connection, error) {
 			return nil, err
 		}
 		return &goclient.Connection{ClientConn: conn, Tunnel: tunnel}, nil
+	}
+	if i.sshDest != "" {
+		return goclient.ConnectWithSSH(i.remote, i.sshDest)
 	}
 	return goclient.Connect(i.remote)
 }
@@ -353,21 +468,16 @@ func filterForFederation(entity *pb.Entity, sourceNodeID string, keepaliveTTL ti
 	entity.Lease = nil
 	entity.Config = nil
 
-	// Strip engine-managed GeoShapeComponent when LocalShapeComponent has
-	// relative_to set. The receiving engine will recompute GeoShapeComponent
-	// from LocalShapeComponent + the parent entity's position.
-	if entity.LocalShape != nil && entity.LocalShape.RelativeTo != "" {
-		entity.Shape = nil
-	}
-
 	return true
 }
 
-// runPull connects to a remote node and pulls their entities to local.
-func (i *Instance) runPull(ctx context.Context) error {
+// runDownstream pulls from a remote node and selectively pushes back.
+// Only entities with a TaskableComponent or whose Controller.Node matches
+// the remote node (i.e. entities that originated there) are pushed back.
+func (i *Instance) runDownstream(ctx context.Context) error {
 	i.ensureKeepalive()
 
-	localConn, err := goclient.Connect(i.serverURL)
+	localConn, err := builtin.BuiltinClientConn("federation")
 	if err != nil {
 		return err
 	}
@@ -382,179 +492,143 @@ func (i *Instance) runPull(ctx context.Context) error {
 	localClient := pb.NewWorldServiceClient(localConn)
 	remoteClient := pb.NewWorldServiceClient(remoteConn)
 
-	// Discover remote node_id — we only pull entities that originated there
-	// (no multi-hop: skip anything the remote itself received via federation).
-	remoteNodeID, remoteNodeEntity, err := discoverNode(ctx, remoteClient)
-	if err != nil {
-		return fmt.Errorf("discover remote node ID: %w", err)
-	}
-	i.logger.Info("pull: discovered remote node", "nodeID", remoteNodeID)
-
-	clockOffset := estimateClockOffset(ctx, remoteClient)
-	if clockOffset != 0 {
-		i.logger.Info("pull: clock offset estimated", "offset", clockOffset)
-	}
-
-	// Push the remote node entity to local so receivers can resolve the sender.
-	// No clock offset: the node entity lifetime is stamped with local now.
-	federateNodeEntity(ctx, localClient, remoteNodeEntity, i.keepaliveTTL(), 0)
-
-	stream, err := goclient.WatchEntitiesWithRetry(ctx, remoteClient, &pb.ListEntitiesRequest{
-		Filter:    i.filter,
-		Behaviour: i.limiter,
-	})
-	if err != nil {
-		return err
-	}
-
-	i.logger.Info("pull started", "entityID", i.entityID)
-
-	keepaliveTTL := i.keepaliveTTL()
-
-	var entitiesReceived, entitiesPushed uint64
-
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		event, err := stream.Recv()
-		if err != nil {
-			return err
-		}
-
-		entitiesReceived++
-
-		// Translate timestamps from remote clock domain to local.
-		shiftEntityTimestamps(event.Entity, -clockOffset)
-
-		if !filterForFederation(event.Entity, remoteNodeID, keepaliveTTL) {
-			continue
-		}
-
-		// Rewrite private camera URLs to point to the remote's media proxy.
-		if event.Entity.Camera != nil {
-			rewriteCameraURLs(event.Entity, "http://"+i.remote)
-		}
-
-		_, err = localClient.Push(ctx, &pb.EntityChangeRequest{
-			Changes: []*pb.Entity{event.Entity},
-		})
-		if err != nil {
-			i.logger.Error("failed to push to local", "entityID", i.entityID, "targetEntity", event.Entity.Id, "error", err)
-			continue
-		}
-
-		entitiesPushed++
-		_, _ = localClient.Push(ctx, &pb.EntityChangeRequest{
-			Changes: []*pb.Entity{{
-				Id: i.entityID,
-				Metric: &pb.MetricComponent{Metrics: []*pb.Metric{
-					{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("entities received"), Id: proto.Uint32(1), Val: &pb.Metric_Uint64{Uint64: entitiesReceived}},
-					{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("entities pushed"), Id: proto.Uint32(2), Val: &pb.Metric_Uint64{Uint64: entitiesPushed}},
-				}},
-			}},
-		})
-
-		i.logger.Debug("pulled", "entityID", i.entityID, "targetEntity", event.Entity.Id)
-	}
-}
-
-// runPush watches local entities and pushes them to a remote node.
-func (i *Instance) runPush(ctx context.Context) error {
-	i.ensureKeepalive()
-
-	localConn, err := goclient.Connect(i.serverURL)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = localConn.Close() }()
-
-	remoteConn, err := i.connectToRemote()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = remoteConn.Close() }()
-
-	localClient := pb.NewWorldServiceClient(localConn)
-	remoteClient := pb.NewWorldServiceClient(remoteConn)
-
-	// Discover local node_id — we only push entities that originated here
-	// (no multi-hop: skip anything we received via federation from other nodes).
 	localNodeID, localNodeEntity, err := discoverNode(ctx, localClient)
 	if err != nil {
 		return fmt.Errorf("discover local node ID: %w", err)
 	}
-	i.logger.Info("push: discovered local node", "nodeID", localNodeID)
+	i.logger.Info("downstream: discovered local node", "nodeID", localNodeID)
 
-	clockOffset := estimateClockOffset(ctx, remoteClient)
-	if clockOffset != 0 {
-		i.logger.Info("push: clock offset estimated", "offset", clockOffset)
-	}
-
-	// Push the local node entity to remote so receivers can resolve the sender.
-	federateNodeEntity(ctx, remoteClient, localNodeEntity, i.keepaliveTTL(), clockOffset)
-
-	stream, err := goclient.WatchEntitiesWithRetry(ctx, localClient, &pb.ListEntitiesRequest{
-		Filter:    i.filter,
-		Behaviour: i.limiter,
-	})
+	remoteNodeID, remoteNodeEntity, err := discoverNode(ctx, remoteClient)
 	if err != nil {
-		return err
+		return fmt.Errorf("discover remote node ID: %w", err)
 	}
+	i.logger.Info("downstream: discovered remote node", "nodeID", remoteNodeID)
 
-	i.logger.Info("push started", "entityID", i.entityID)
+	go i.timeSyncLoop(ctx, remoteClient)
+
+	federateNodeEntity(ctx, localClient, remoteNodeEntity, i.keepaliveTTL(), 0)
+	federateNodeEntity(ctx, remoteClient, localNodeEntity, i.keepaliveTTL(), i.ts.Offset())
 
 	keepaliveTTL := i.keepaliveTTL()
 
-	var entitiesReceived, entitiesPushed uint64
+	// pulledFresh tracks the Fresh timestamp (in local clock domain) last
+	// ingested by the pull leg for each entity. The push-back leg uses this
+	// to skip owned-by-remote entities that haven't been locally modified.
+	var pulledFresh sync.Map // entityID → time.Time
 
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-		event, err := stream.Recv()
-		if err != nil {
-			return err
-		}
+	errc := make(chan error, 2)
 
-		entitiesReceived++
-
-		if !filterForFederation(event.Entity, localNodeID, keepaliveTTL) {
-			continue
-		}
-
-		// Rewrite private camera URLs to point to our media proxy.
-		if event.Entity.Camera != nil {
-			origin := detectOrigin(i.remote)
-			rewriteCameraURLs(event.Entity, origin)
-		}
-
-		// Translate timestamps from local clock domain to remote.
-		shiftEntityTimestamps(event.Entity, clockOffset)
-
-		_, err = remoteClient.Push(ctx, &pb.EntityChangeRequest{
-			Changes: []*pb.Entity{event.Entity},
+	// Pull: remote → local (same as regular pull)
+	go func() {
+		stream, err := goclient.WatchEntitiesWithRetry(ctx, remoteClient, &pb.ListEntitiesRequest{
+			Filter:    i.filter,
+			Behaviour: i.limiter,
 		})
 		if err != nil {
-			i.logger.Error("failed to push", "entityID", i.entityID, "targetEntity", event.Entity.Id, "error", err)
-			continue
+			cancel()
+			errc <- err
+			return
 		}
+		i.logger.Info("downstream pull started", "entityID", i.entityID)
+		for {
+			if ctx.Err() != nil {
+				errc <- ctx.Err()
+				return
+			}
+			event, err := stream.Recv()
+			if err != nil {
+				cancel()
+				errc <- err
+				return
+			}
+			if event.Entity == nil {
+				continue
+			}
+			shiftEntityTimestamps(event.Entity, -i.ts.Offset())
+			if !filterForFederation(event.Entity, remoteNodeID, keepaliveTTL) {
+				continue
+			}
+			if event.Entity.Camera != nil {
+				rewriteCameraURLs(event.Entity, "http://"+i.remote)
+			}
+			if event.Entity.Lifetime != nil && event.Entity.Lifetime.Fresh != nil {
+				pulledFresh.Store(event.Entity.Id, event.Entity.Lifetime.Fresh.AsTime())
+			}
+			_, err = localClient.Push(ctx, &pb.EntityChangeRequest{
+				Changes: []*pb.Entity{event.Entity},
+			})
+			if err != nil {
+				i.logger.Error("downstream: failed to push to local", "targetEntity", event.Entity.Id, "error", err)
+			}
+		}
+	}()
 
-		entitiesPushed++
-		_, _ = localClient.Push(ctx, &pb.EntityChangeRequest{
-			Changes: []*pb.Entity{{
-				Id: i.entityID,
-				Metric: &pb.MetricComponent{Metrics: []*pb.Metric{
-					{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("entities received"), Id: proto.Uint32(1), Val: &pb.Metric_Uint64{Uint64: entitiesReceived}},
-					{Kind: pb.MetricKind_MetricKindCount.Enum(), Unit: pb.MetricUnit_MetricUnitCount, Label: proto.String("entities pushed"), Id: proto.Uint32(2), Val: &pb.Metric_Uint64{Uint64: entitiesPushed}},
-				}},
-			}},
+	// Push: local → remote (only TaskableComponent or entities owned by remote)
+	go func() {
+		stream, err := goclient.WatchEntitiesWithRetry(ctx, localClient, &pb.ListEntitiesRequest{
+			Behaviour: i.limiter,
 		})
+		if err != nil {
+			cancel()
+			errc <- err
+			return
+		}
+		i.logger.Info("downstream push started", "entityID", i.entityID)
+		for {
+			if ctx.Err() != nil {
+				errc <- ctx.Err()
+				return
+			}
+			event, err := stream.Recv()
+			if err != nil {
+				cancel()
+				errc <- err
+				return
+			}
+			if event.Entity == nil {
+				continue
+			}
+			hasTaskable := event.Entity.Taskable != nil
+			ownedByRemote := event.Entity.Controller != nil &&
+				event.Entity.Controller.Node != nil &&
+				*event.Entity.Controller.Node == remoteNodeID
+			if !hasTaskable && !ownedByRemote {
+				continue
+			}
+			if ownedByRemote {
+				if event.Entity.Lifetime != nil && event.Entity.Lifetime.Fresh != nil {
+					entityFresh := event.Entity.Lifetime.Fresh.AsTime()
+					if last, ok := pulledFresh.Load(event.Entity.Id); ok {
+						if !entityFresh.After(last.(time.Time)) {
+							continue
+						}
+					}
+				}
+			}
+			if !filterForFederation(event.Entity, localNodeID, keepaliveTTL) {
+				continue
+			}
+			if event.Entity.Camera != nil {
+				origin := detectOrigin(i.remote)
+				rewriteCameraURLs(event.Entity, origin)
+			}
+			shiftEntityTimestamps(event.Entity, i.ts.Offset())
+			_, err = remoteClient.Push(ctx, &pb.EntityChangeRequest{
+				Changes: []*pb.Entity{event.Entity},
+			})
+			if err != nil {
+				i.logger.Error("downstream: failed to push to remote", "targetEntity", event.Entity.Id, "error", err)
+			}
+		}
+	}()
 
-		i.logger.Debug("pushed", "entityID", i.entityID, "targetEntity", event.Entity.Id)
-	}
+	err = <-errc
+	cancel()
+	<-errc
+	return err
 }
 
 // parseWireGuardConfig parses inline WireGuard config from structpb.Value

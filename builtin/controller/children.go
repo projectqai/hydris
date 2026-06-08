@@ -28,13 +28,13 @@ type ChildHandler func(ctx context.Context, entityID string) error
 // ConfigurableComponent (schema for that class) + Controller onto it
 // and starts handler(ctx, entityID) in a goroutine.
 // When the child expires or is unobserved, the handler's context is cancelled.
-func WatchChildren(ctx context.Context, serviceEntityID, controllerName string, classes []DeviceClass, handler ChildHandler) error {
+func WatchChildren(ctx context.Context, name string, serviceEntityID, controllerName string, classes []DeviceClass, handler ChildHandler) error {
 	classMap := make(map[string]DeviceClass, len(classes))
 	for _, c := range classes {
 		classMap[c.Class] = c
 	}
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn(name)
 	if err != nil {
 		return err
 	}
@@ -103,13 +103,10 @@ func WatchChildren(ctx context.Context, serviceEntityID, controllerName string, 
 				continue
 			}
 
-			// Push ConfigurableComponent + Controller onto the child entity.
+			// Push ConfigurableComponent onto the child entity.
 			_, pushErr := worldClient.Push(ctx, &pb.EntityChangeRequest{
 				Changes: []*pb.Entity{{
 					Id: entityID,
-					Controller: &pb.Controller{
-						Id: &controllerName,
-					},
 					Configurable: func() *pb.ConfigurableComponent {
 						c := &pb.ConfigurableComponent{Schema: class.Schema}
 						if class.Label != "" {

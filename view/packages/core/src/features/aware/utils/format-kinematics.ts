@@ -1,4 +1,9 @@
-import type { AngularVelocity, GeoSpatialComponent, KinematicsEnu } from "@projectqai/proto/world";
+import type {
+  AngularVelocity,
+  GeoSpatialComponent,
+  KinematicsEnu,
+  OrientationComponent,
+} from "@projectqai/proto/world";
 
 const EARTH_RADIUS = 6_371_008.8;
 const DEG = Math.PI / 180;
@@ -27,6 +32,15 @@ export function calculateGroundSpeed(velocityEnu?: KinematicsEnu): number | unde
   const north = velocityEnu.north ?? 0;
   if (east === 0 && north === 0) return undefined;
   return Math.sqrt(east * east + north * north);
+}
+
+export function calculateHeadingFromOrientation(
+  orientation?: OrientationComponent,
+): number | undefined {
+  const q = orientation?.orientation;
+  if (!q) return undefined;
+  const yawRad = 2 * Math.atan2(q.z, q.w);
+  return ((yawRad * 180) / Math.PI + 360) % 360;
 }
 
 export function calculateCourseFromVelocity(velocityEnu?: KinematicsEnu): number | undefined {

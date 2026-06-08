@@ -24,6 +24,38 @@
       "description": "Sensors → Support for Airthings BLE Air Quality Monitor",
       "icon": "air-vent",
       "compat": ">=0.0.20"
+    },
+    {
+      "name": "cue",
+      "ref": "ghcr.io/projectqai/hydris/plugins/cue:0.0.4",
+      "label": "Autocue",
+      "description": "Mission → slew PTZ cameras to follow tracked entities",
+      "icon": "video",
+      "compat": ">=0.0.20"
+    },
+    {
+      "name": "openmeteo",
+      "ref": "ghcr.io/projectqai/hydris/plugins/openmeteo:0.0.1",
+      "label": "Weather and AQI by open-meteo.com",
+      "description": "Feeds → Add virtual weather sensor on the map, powered by open-meteo,com",
+      "icon": "cloud-sun",
+      "compat": ">=0.0.20"
+    },
+    {
+      "name": "nina",
+      "ref": "ghcr.io/projectqai/hydris/plugins/nina:0.0.1",
+      "label": "NINA Warnungen",
+      "description": "Feeds → German emergency warnings from NINA (MoWaS, KATWARN, BIWAPP, DWD, Hochwasserportal, Polizei)",
+      "icon": "alert-triangle",
+      "compat": ">=0.0.20"
+    },
+    {
+      "name": "blitzortung",
+      "ref": "ghcr.io/projectqai/hydris/plugins/blitzortung:0.0.1",
+      "label": "Blitzortung Lightning",
+      "description": "Feeds → Live global lightning strikes from the Blitzortung.org network",
+      "icon": "zap",
+      "compat": ">=0.0.20"
     }
   ]
 }

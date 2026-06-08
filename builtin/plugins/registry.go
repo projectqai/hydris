@@ -36,6 +36,7 @@ type PluginInfo struct {
 	Description string `json:"description"`
 	Icon        string `json:"icon,omitempty"`
 	Compat      string `json:"compat,omitempty"` // semver range for hydris version compatibility
+	EntityID    string `json:"-"`
 }
 
 // FetchIndex tries to read index.json from the directory containing the

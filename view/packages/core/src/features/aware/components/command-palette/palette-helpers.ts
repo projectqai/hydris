@@ -52,6 +52,12 @@ export function getTrailSegments(
       case "command-group":
         label = mode.groupLabel;
         break;
+      case "mission-health":
+        label = "Mission health";
+        break;
+      case "diagnostic-export":
+        label = "Report a bug";
+        break;
       default:
         label = "Root";
         break;

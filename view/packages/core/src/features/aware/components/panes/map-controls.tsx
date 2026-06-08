@@ -2,7 +2,7 @@
 
 import type { BaseLayer } from "@hydris/map-engine/types";
 import type { OverlayCategoryOption } from "@hydris/ui/controls";
-import { ControlIconButton, OverlayCategory } from "@hydris/ui/controls";
+import { ControlIconButton, ControlSlider, OverlayCategory } from "@hydris/ui/controls";
 import { useKeyboardShortcut } from "@hydris/ui/keyboard";
 import { GRADIENT_PROPS, useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
@@ -26,7 +26,9 @@ import type { RefObject } from "react";
 import { useLayoutEffect, useRef, useState } from "react";
 import type { ViewStyle } from "react-native";
 import { Dimensions, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { GestureHandlerRootView, ScrollView } from "react-native-gesture-handler";
 import Animated, { FadeIn } from "react-native-reanimated";
+import { useShallow } from "zustand/react/shallow";
 
 import { toast } from "../../../../lib/sonner";
 import {
@@ -38,6 +40,7 @@ import {
 } from "../../../../lib/use-url-params";
 import { layoutSnapshotRef } from "../../hooks/layout-snapshot";
 import type { MapViewRef } from "../../map-view";
+import { useEntityStore } from "../../store/entity-store";
 import { useLeftPanelStore } from "../../store/left-panel-store";
 import { mapEngineActions } from "../../store/map-engine-store";
 import { useMapStore } from "../../store/map-store";
@@ -237,18 +240,20 @@ function ControlMenu({
   if (!pos) return null;
   return (
     <Modal visible transparent animationType="none" onRequestClose={onClose}>
-      <Pressable
-        style={StyleSheet.absoluteFill}
-        onPress={onClose}
-        accessibilityLabel="Close menu"
-      />
-      <Animated.View
-        onLayout={handleNativeMenuLayout}
-        entering={ready ? FadeIn.duration(150) : undefined}
-        style={[{ position: "absolute", top: pos.top, left: pos.left }, !ready && { opacity: 0 }]}
-      >
-        {children}
-      </Animated.View>
+      <GestureHandlerRootView style={StyleSheet.absoluteFill}>
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={onClose}
+          accessibilityLabel="Close menu"
+        />
+        <Animated.View
+          onLayout={handleNativeMenuLayout}
+          entering={ready ? FadeIn.duration(150) : undefined}
+          style={[{ position: "absolute", top: pos.top, left: pos.left }, !ready && { opacity: 0 }]}
+        >
+          {children}
+        </Animated.View>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
@@ -264,7 +269,21 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
   const sensors = useOverlayStore((state) => state.sensors);
   const network = useOverlayStore((state) => state.network);
   const visualization = useOverlayStore((state) => state.visualization);
+  const hiddenLayers = useOverlayStore((state) => state.hiddenLayers);
   const toggleOverlayStore = useOverlayStore((state) => state.toggle);
+  const toggleLayer = useOverlayStore((state) => state.toggleLayer);
+  const layerOpacity = useOverlayStore((state) => state.layerOpacity);
+  const setLayerOpacity = useOverlayStore((state) => state.setLayerOpacity);
+  const [expandedLayerId, setExpandedLayerId] = useState<string | null>(null);
+  const mapLayerEntities = useEntityStore(
+    useShallow((s) => Array.from(s.entities.values()).filter((e) => e.mapLayer)),
+  );
+  const expandedLayer = mapLayerEntities.find((e) => e.id === expandedLayerId);
+  // handles proto3 zero-default for opacity
+  const expandedOpacity =
+    expandedLayer?.mapLayer != null
+      ? (layerOpacity[expandedLayer.id] ?? (expandedLayer.mapLayer.opacity || 1))
+      : 1;
   const rangeRingPlacing = useRangeRingStore((s) => s.isPlacing);
   const rangeRingCenter = useRangeRingStore((s) => s.center);
   const toggleRangeRing = useRangeRingStore((s) => s.togglePlacing);
@@ -461,35 +480,133 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
             <LinearGradient
               colors={t.gradients.default}
               {...GRADIENT_PROPS}
-              className="border-border/40 w-[290px] gap-2.5 overflow-hidden rounded-lg border p-2.5"
+              className="border-border/40 w-[290px] overflow-hidden rounded-lg border"
             >
-              <OverlayCategory
-                title="Tracks"
-                options={TRACK_OPTIONS}
-                activeStates={tracks}
-                onToggle={(id) => toggleOverlay("tracks", id as TrackType)}
-              />
+              <ScrollView className="max-h-[80vh]">
+                <View className="gap-2.5 p-2.5">
+                  <OverlayCategory
+                    title="Tracks"
+                    options={TRACK_OPTIONS}
+                    activeStates={tracks}
+                    onToggle={(id) => toggleOverlay("tracks", id as TrackType)}
+                  />
 
-              <OverlayCategory
-                title="Sensors"
-                options={SENSOR_OPTIONS}
-                activeStates={sensors}
-                onToggle={(id) => toggleOverlay("sensors", id as SensorStatus)}
-              />
+                  <OverlayCategory
+                    title="Sensors"
+                    options={SENSOR_OPTIONS}
+                    activeStates={sensors}
+                    onToggle={(id) => toggleOverlay("sensors", id as SensorStatus)}
+                  />
 
-              <OverlayCategory
-                title="Network"
-                options={NETWORK_OPTIONS}
-                activeStates={network}
-                onToggle={(id) => toggleOverlay("network", id as NetworkType)}
-              />
+                  <OverlayCategory
+                    title="Network"
+                    options={NETWORK_OPTIONS}
+                    activeStates={network}
+                    onToggle={(id) => toggleOverlay("network", id as NetworkType)}
+                  />
 
-              <OverlayCategory
-                title="Visualization"
-                options={VISUALIZATION_OPTIONS}
-                activeStates={visualization}
-                onToggle={(id) => toggleOverlay("visualization", id as VisualizationType)}
-              />
+                  <OverlayCategory
+                    title="Visualization"
+                    options={VISUALIZATION_OPTIONS}
+                    activeStates={visualization}
+                    onToggle={(id) => toggleOverlay("visualization", id as VisualizationType)}
+                  />
+
+                  {mapLayerEntities.length > 0 && (
+                    <View className="gap-1.5">
+                      <Text
+                        selectable={false}
+                        className="text-12 text-on-surface/70 font-sans-medium tracking-wider uppercase"
+                      >
+                        Layers
+                      </Text>
+                      <View className="flex-row flex-wrap gap-1">
+                        {mapLayerEntities.map((e) => {
+                          const visible = !hiddenLayers[e.id];
+                          return (
+                            <Pressable
+                              key={e.id}
+                              onPress={() =>
+                                setExpandedLayerId(expandedLayerId === e.id ? null : e.id)
+                              }
+                              className={cn(
+                                "flex-row items-center gap-2 rounded px-2.5 py-1 select-none",
+                                visible
+                                  ? "bg-surface-overlay/15 hover:bg-surface-overlay/20 active:bg-surface-overlay/25"
+                                  : "bg-surface-overlay/5 hover:bg-surface-overlay/10 active:bg-surface-overlay/15",
+                              )}
+                            >
+                              <Layers
+                                size={14}
+                                strokeWidth={1.5}
+                                color={visible ? t.iconActive : t.iconSubtle}
+                              />
+                              <Text
+                                selectable={false}
+                                className={cn(
+                                  "font-sans-medium text-sm",
+                                  visible ? "text-foreground" : "text-on-surface/40",
+                                )}
+                              >
+                                {e.label || e.id}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                      {expandedLayer?.mapLayer && (
+                        <View className="bg-surface-overlay/10 mt-1 gap-2 rounded p-2">
+                          <View className="flex-row items-center justify-between gap-2">
+                            <Text
+                              selectable={false}
+                              className="text-foreground font-sans-medium flex-1 text-sm"
+                              numberOfLines={1}
+                            >
+                              {expandedLayer.label || expandedLayer.id}
+                            </Text>
+                            <Text
+                              selectable={false}
+                              className="text-on-surface/60 font-mono text-xs tabular-nums"
+                            >
+                              {Math.round(expandedOpacity * 100)}%
+                            </Text>
+                            <Pressable
+                              onPress={() => toggleLayer(expandedLayer.id)}
+                              className={cn(
+                                "w-14 items-center rounded px-2 py-0.5",
+                                !hiddenLayers[expandedLayer.id]
+                                  ? "bg-surface-overlay/25"
+                                  : "bg-surface-overlay/10",
+                              )}
+                            >
+                              <Text
+                                selectable={false}
+                                className={cn(
+                                  "font-sans-medium text-xs",
+                                  !hiddenLayers[expandedLayer.id]
+                                    ? "text-foreground"
+                                    : "text-on-surface/60",
+                                )}
+                              >
+                                {!hiddenLayers[expandedLayer.id] ? "Visible" : "Hidden"}
+                              </Text>
+                            </Pressable>
+                          </View>
+                          <ControlSlider
+                            value={expandedOpacity}
+                            onValueChange={(v) => setLayerOpacity(expandedLayer.id, v)}
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            accessibilityLabel="Layer opacity"
+                            compact
+                          />
+                        </View>
+                      )}
+                    </View>
+                  )}
+                </View>
+              </ScrollView>
             </LinearGradient>
           </ControlMenu>
         </View>

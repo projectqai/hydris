@@ -8,7 +8,8 @@ import { useEffect, useState } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 
-import { PRESET_KEYBINDS, PRESETS, Z } from "../../constants";
+import { Z } from "../../constants";
+import { PRESET_KEYBINDS, PRESETS } from "../../layouts";
 
 export function LayoutMenu({
   activePresetId,

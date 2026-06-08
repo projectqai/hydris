@@ -12,6 +12,9 @@ import { cn } from "../lib/utils";
 const TRACK_H = 6;
 const THUMB_SIZE = 24;
 const THUMB_RADIUS = THUMB_SIZE / 2;
+const COMPACT_TRACK_H = 4;
+const COMPACT_THUMB_SIZE = 14;
+const COMPACT_THUMB_RADIUS = COMPACT_THUMB_SIZE / 2;
 
 function clamp(val: number, lo: number, hi: number): number {
   "worklet";
@@ -32,6 +35,7 @@ export type ControlSliderProps = {
   unit?: string;
   readOnly?: boolean;
   accessibilityLabel: string;
+  compact?: boolean;
 };
 
 export function ControlSlider({
@@ -43,7 +47,11 @@ export function ControlSlider({
   unit,
   readOnly,
   accessibilityLabel,
+  compact,
 }: ControlSliderProps) {
+  const trackH = compact ? COMPACT_TRACK_H : TRACK_H;
+  const thumbSize = compact ? COMPACT_THUMB_SIZE : THUMB_SIZE;
+  const thumbRadius = compact ? COMPACT_THUMB_RADIUS : THUMB_RADIUS;
   const t = useThemeColors();
   const range = max - min || 1;
   const trackWidth = useSharedValue(0);
@@ -83,7 +91,7 @@ export function ControlSlider({
     })
     .onUpdate((e) => {
       "worklet";
-      const travel = trackWidth.value - THUMB_SIZE;
+      const travel = trackWidth.value - thumbSize;
       if (travel <= 0) return;
       const delta = e.translationX / travel;
       const rawRatio = clamp(startRatio.value + delta, 0, 1);
@@ -100,9 +108,9 @@ export function ControlSlider({
     .enabled(!readOnly)
     .onEnd((e) => {
       "worklet";
-      const travel = trackWidth.value - THUMB_SIZE;
+      const travel = trackWidth.value - thumbSize;
       if (travel <= 0) return;
-      const ratio = clamp((e.x - THUMB_RADIUS) / travel, 0, 1);
+      const ratio = clamp((e.x - thumbRadius) / travel, 0, 1);
       const rawVal = min + ratio * (max - min);
       const snapped = clamp(snap(rawVal, min, step), min, max);
       const snappedRatio = clamp((snapped - min) / (max - min), 0, 1);
@@ -117,7 +125,7 @@ export function ControlSlider({
   }));
 
   const thumbStyle = useAnimatedStyle(() => {
-    const travel = trackWidth.value - THUMB_SIZE;
+    const travel = trackWidth.value - thumbSize;
     return { transform: [{ translateX: thumbRatio.value * Math.max(travel, 0) }] };
   });
 
@@ -133,24 +141,33 @@ export function ControlSlider({
         text: unit ? `${value} ${unit}` : String(value),
       }}
     >
-      <View className="mb-2 flex-row justify-between">
-        <Text className="text-control-fg-active font-mono text-sm">
-          {value}
-          {unit ? <Text className="text-control-text-muted text-11"> {unit}</Text> : null}
-        </Text>
-      </View>
+      {!compact && (
+        <View className="mb-2 flex-row justify-between">
+          <Text className="text-control-fg-active font-mono text-sm">
+            {value}
+            {unit ? <Text className="text-control-text-muted text-11"> {unit}</Text> : null}
+          </Text>
+        </View>
+      )}
 
       <GestureDetector gesture={composedGesture}>
         <View
           onLayout={handleLayout}
-          className={cn("h-8 justify-center", readOnly ? "cursor-not-allowed" : "cursor-pointer")}
+          className={cn(
+            "justify-center",
+            compact ? "h-5" : "h-8",
+            readOnly ? "cursor-not-allowed" : "cursor-pointer",
+          )}
         >
-          <View className="bg-control-border h-1.5 overflow-hidden rounded-full">
+          <View
+            className="bg-control-border overflow-hidden rounded-full"
+            style={{ height: trackH }}
+          >
             <Animated.View
               style={[
                 {
-                  height: TRACK_H,
-                  borderRadius: TRACK_H / 2,
+                  height: trackH,
+                  borderRadius: trackH / 2,
                   backgroundColor: t.activeGreen,
                 },
                 filledStyle,
@@ -162,9 +179,9 @@ export function ControlSlider({
             style={[
               {
                 position: "absolute",
-                width: THUMB_SIZE,
-                height: THUMB_SIZE,
-                borderRadius: THUMB_RADIUS,
+                width: thumbSize,
+                height: thumbSize,
+                borderRadius: thumbRadius,
                 shadowColor: "#000",
                 shadowOffset: { width: 0, height: 2 },
                 shadowOpacity: 0.5,
@@ -177,16 +194,22 @@ export function ControlSlider({
               colors={thumbGradient}
               start={{ x: 0, y: 0 }}
               end={{ x: 0, y: 1 }}
-              className="size-6 rounded-full"
+              style={{
+                width: thumbSize,
+                height: thumbSize,
+                borderRadius: thumbRadius,
+              }}
             />
           </Animated.View>
         </View>
       </GestureDetector>
 
-      <View className="mt-0.5 flex-row justify-between">
-        <Text className="text-control-text-muted text-10 font-mono">{min}</Text>
-        <Text className="text-control-text-muted text-10 font-mono">{max}</Text>
-      </View>
+      {!compact && (
+        <View className="mt-0.5 flex-row justify-between">
+          <Text className="text-control-text-muted text-10 font-mono">{min}</Text>
+          <Text className="text-control-text-muted text-10 font-mono">{max}</Text>
+        </View>
+      )}
     </View>
   );
 }

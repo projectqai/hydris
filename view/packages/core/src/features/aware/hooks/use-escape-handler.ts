@@ -14,6 +14,8 @@ export function useEscapeHandler({
   exitPlacement,
   pickerOpen,
   closePicker,
+  entityPickerOpen,
+  closeEntityPicker,
 }: {
   swapSourceId: PaneId | null;
   clearSwapSource: () => void;
@@ -23,6 +25,8 @@ export function useEscapeHandler({
   exitPlacement: () => void;
   pickerOpen?: boolean;
   closePicker?: () => void;
+  entityPickerOpen?: boolean;
+  closeEntityPicker?: () => void;
 }) {
   const { windows, closeAllPIP } = usePIPContext();
   const { collapseAll } = usePanelContext();
@@ -34,6 +38,10 @@ export function useEscapeHandler({
   useKeyboardShortcut(
     "Escape",
     () => {
+      if (entityPickerOpen && closeEntityPicker) {
+        closeEntityPicker();
+        return true;
+      }
       if (pickerOpen && closePicker) {
         closePicker();
         return true;

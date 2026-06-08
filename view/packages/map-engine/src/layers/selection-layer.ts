@@ -34,7 +34,7 @@ export function createSelectionLayer({ data }: SelectionLayerProps) {
     id: "selection",
     data: [data],
     visible: true,
-    getPosition: (d) => [d.entity.position.lng, d.entity.position.lat],
+    getPosition: (d) => [d.entity.position!.lng, d.entity.position!.lat],
     getIcon: () => ({
       url: frameDataUri,
       width: frameSize,

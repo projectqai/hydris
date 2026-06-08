@@ -4,9 +4,12 @@ import type { Entity } from "@projectqai/proto/world";
 import { LinkStatus } from "@projectqai/proto/world";
 import { format } from "date-fns";
 
+import { RAD_ACCUMULATED_IDS, RAD_DOSE_RATE_IDS } from "./metric-ids";
 import type {
   CardStatus,
   ConnectionState,
+  LevelValue,
+  MetricValue,
   SensorKind,
   SensorReading,
   SensorWidgetData,
@@ -19,49 +22,34 @@ function getVal(m: Metric): number {
   return m.val.value;
 }
 
-const DOSE_RATE_UNITS = new Set([
+function getRangeMax(m: Metric): number | undefined {
+  const r = m.range?.max;
+  if (!r || r.case === undefined) return undefined;
+  return Number(r.value);
+}
+
+const DOSE_RATE_UNITS = new Set<MetricUnit>([
   MetricUnit.MetricUnitNanosievertPerHour,
   MetricUnit.MetricUnitMicrosievertPerHour,
   MetricUnit.MetricUnitMillisievertPerHour,
   MetricUnit.MetricUnitSievertPerHour,
+  MetricUnit.MetricUnitNanograyPerHour,
+  MetricUnit.MetricUnitMicrograyPerHour,
+  MetricUnit.MetricUnitMilligrayPerHour,
+  MetricUnit.MetricUnitGrayPerHour,
 ]);
 
-const ACCUMULATED_DOSE_UNITS = new Set([
+const ACCUMULATED_DOSE_UNITS = new Set<MetricUnit>([
   MetricUnit.MetricUnitNanosievert,
   MetricUnit.MetricUnitMicrosievert,
   MetricUnit.MetricUnitMillisievert,
   MetricUnit.MetricUnitSievert,
+  MetricUnit.MetricUnitNanogray,
+  MetricUnit.MetricUnitMicrogray,
+  MetricUnit.MetricUnitMilligray,
+  MetricUnit.MetricUnitGray,
+  MetricUnit.MetricUnitCentigray,
 ]);
-
-function toMicrosievertPerHour(value: number, unit: MetricUnit): number {
-  switch (unit) {
-    case MetricUnit.MetricUnitNanosievertPerHour:
-      return value / 1000;
-    case MetricUnit.MetricUnitMicrosievertPerHour:
-      return value;
-    case MetricUnit.MetricUnitMillisievertPerHour:
-      return value * 1000;
-    case MetricUnit.MetricUnitSievertPerHour:
-      return value * 1_000_000;
-    default:
-      return value;
-  }
-}
-
-function toMicrosievert(value: number, unit: MetricUnit): number {
-  switch (unit) {
-    case MetricUnit.MetricUnitNanosievert:
-      return value / 1000;
-    case MetricUnit.MetricUnitMicrosievert:
-      return value;
-    case MetricUnit.MetricUnitMillisievert:
-      return value * 1000;
-    case MetricUnit.MetricUnitSievert:
-      return value * 1_000_000;
-    default:
-      return value;
-  }
-}
 
 export function getSensorKind(entity: Entity): SensorKind | null {
   const metrics = entity.metric?.metrics;
@@ -93,36 +81,38 @@ function extractReading(entity: Entity, kind: SensorKind): SensorReading | null 
   if (!metrics?.length) return null;
 
   if (kind === MetricKind.MetricKindRadiationHazard) {
-    let doseRate: number | undefined;
-    let accumulatedDose: number | undefined;
+    let doseRate: MetricValue | undefined;
+    let accumulatedDose: MetricValue | undefined;
 
     for (const m of metrics) {
       if (m.kind !== MetricKind.MetricKindRadiationHazard) continue;
-      const val = getVal(m);
-      if (DOSE_RATE_UNITS.has(m.unit)) {
-        doseRate = toMicrosievertPerHour(val, m.unit);
-      } else if (ACCUMULATED_DOSE_UNITS.has(m.unit)) {
-        accumulatedDose = toMicrosievert(val, m.unit);
+      if (m.id != null && RAD_DOSE_RATE_IDS.has(m.id) && DOSE_RATE_UNITS.has(m.unit)) {
+        doseRate = { value: getVal(m), unit: m.unit };
+      } else if (
+        m.id != null &&
+        RAD_ACCUMULATED_IDS.has(m.id) &&
+        ACCUMULATED_DOSE_UNITS.has(m.unit)
+      ) {
+        accumulatedDose = { value: getVal(m), unit: m.unit };
       }
     }
 
-    if (doseRate === undefined && accumulatedDose === undefined) return null;
+    if (!doseRate) return null;
     return {
       shape: "metric",
-      primary: { value: doseRate ?? 0, unit: "µSv/h" },
-      ...(accumulatedDose !== undefined && {
-        secondary: { value: accumulatedDose, unit: "µSv" },
-      }),
+      primary: doseRate,
+      ...(accumulatedDose && { secondary: accumulatedDose }),
     };
   }
 
   if (kind === MetricKind.MetricKindChemicalHazard) {
-    const levels: { code: string; value: number }[] = [];
+    const levels: LevelValue[] = [];
     for (const m of metrics) {
       if (m.kind !== MetricKind.MetricKindChemicalHazard) continue;
       levels.push({
         code: m.label || `S${m.id ?? levels.length}`,
         value: getVal(m),
+        max: getRangeMax(m),
       });
     }
     if (levels.length === 0) return null;
@@ -156,8 +146,9 @@ export function hasHardwareAlarm(entity: Entity): boolean {
   );
 }
 
-function deriveStatus(connectionState: ConnectionState): CardStatus {
+function deriveStatus(connectionState: ConnectionState, inCooldown: boolean): CardStatus {
   if (connectionState === "disconnected") return "disconnected";
+  if (inCooldown) return "cooldown";
   return "normal";
 }
 
@@ -189,7 +180,6 @@ export function entityToSensorData(entity: Entity): SensorWidgetData | null {
 
   const reading = extractReading(entity, kind);
   const connectionState = deriveConnectionState(entity);
-  const status = deriveStatus(connectionState);
   const signalStrength = deriveSignalStrength(entity);
 
   const isInitializing = connectionState !== "disconnected" && !reading;
@@ -198,6 +188,7 @@ export function entityToSensorData(entity: Entity): SensorWidgetData | null {
   const cfgValue = entity.configurable?.value;
   const isLocked = cfgValue?.locked === true;
   const isSilent = cfgValue?.silent === true;
+  const status = deriveStatus(connectionState, cfgValue?.cooldown === true);
 
   return {
     id: entity.id,

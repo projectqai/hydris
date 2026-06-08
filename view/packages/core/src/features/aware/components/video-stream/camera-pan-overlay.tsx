@@ -9,6 +9,7 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { runOnJS } from "react-native-reanimated";
 
 import { useCameraPan } from "../../../../lib/api/use-camera-pan";
+import { ManualControlOverlay } from "./manual-control-overlay";
 
 const CHEVRON_OPACITY = 0.55;
 const CHEVRON_SIZE = 20;
@@ -60,6 +61,13 @@ export function CameraPanOverlay({
   camera: Entity | undefined;
   children: ReactNode;
 }) {
+  if (camera?.manualControl) {
+    return <ManualControlOverlay camera={camera}>{children}</ManualControlOverlay>;
+  }
+  return <TapPanOverlay camera={camera}>{children}</TapPanOverlay>;
+}
+
+function TapPanOverlay({ camera, children }: { camera: Entity | undefined; children: ReactNode }) {
   const { enabled, pan } = useCameraPan(camera);
   const widthRef = useRef(0);
 

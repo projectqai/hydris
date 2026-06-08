@@ -19,7 +19,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 
 	controllerName := "webcam"
 
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:    "webcam.service",
 		Label: proto.String("Webcams"),
 		Controller: &pb.Controller{
@@ -36,10 +36,10 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		return fmt.Errorf("push service entity: %w", err)
 	}
 
-	return controller.Run(ctx, "webcam.service", func(ctx context.Context, entity *pb.Entity, ready func()) error {
+	return controller.Run(ctx, controllerName, "webcam.service", func(ctx context.Context, entity *pb.Entity, ready func()) error {
 		ready()
 
-		grpcConn, err := builtin.BuiltinClientConn()
+		grpcConn, err := builtin.BuiltinClientConn("webcam")
 		if err != nil {
 			return fmt.Errorf("grpc connect: %w", err)
 		}

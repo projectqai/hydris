@@ -5,10 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestParseEntities_SingleEntity(t *testing.T) {
@@ -435,6 +437,50 @@ func TestFlushToFile_Roundtrip(t *testing.T) {
 	}
 }
 
+func TestFlushToFile_SkipsExpiringEntities(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "world.yaml")
+
+	now := time.Now()
+	w := testWorld(map[string]*pb.Entity{
+		"conn.172.17.0.2:57194": {
+			Id:         "conn.172.17.0.2:57194",
+			Controller: &pb.Controller{Node: proto.String("n1")},
+			Lifetime: &pb.Lifetime{
+				Fresh: timestamppb.New(now),
+				Until: timestamppb.New(now.Add(30 * time.Second)),
+			},
+			Device: &pb.DeviceComponent{
+				Parent: proto.String("node.n1"),
+				State:  pb.DeviceState_DeviceStateActive,
+			},
+		},
+		"permanent": {
+			Id:         "permanent",
+			Controller: &pb.Controller{Node: proto.String("n1")},
+			Device:     &pb.DeviceComponent{State: pb.DeviceState_DeviceStateActive},
+		},
+	})
+	w.worldFile = path
+	w.nodeID = "n1"
+
+	if err := w.FlushToFile(); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if strings.Contains(s, "conn.172.17.0.2") {
+		t.Error("entity with lifetime.until should not be persisted")
+	}
+	if !strings.Contains(s, "permanent") {
+		t.Error("permanent entity should be persisted")
+	}
+}
+
 func TestFlushToFile_SortsByID(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "world.yaml")
@@ -459,5 +505,18 @@ func TestFlushToFile_SortsByID(t *testing.T) {
 	zIdx := strings.Index(s, "z-last")
 	if aIdx > zIdx {
 		t.Error("entities should be sorted by ID")
+	}
+}
+
+func TestInitNodeIdentity_IsPersistable(t *testing.T) {
+	w := testWorld(nil)
+	w.InitNodeIdentity()
+
+	es, ok := w.head[w.nodeEntity.Id]
+	if !ok {
+		t.Fatal("node entity not in head")
+	}
+	if !w.isPersisted(es) {
+		t.Error("node entity created by InitNodeIdentity must be persistable")
 	}
 }

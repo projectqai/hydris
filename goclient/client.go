@@ -4,9 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/url"
+	"strings"
 	"time"
 
 	proto "github.com/projectqai/proto/go"
@@ -19,10 +22,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Connection wraps a gRPC connection with optional WireGuard tunnel
+// Connection wraps a gRPC connection with optional tunnel (WireGuard, SSH, etc.)
 type Connection struct {
 	*grpc.ClientConn
-	Tunnel *WireGuardTunnel // nil for non-WireGuard connections
+	Tunnel io.Closer // nil for plain connections
 }
 
 // Close closes the connection and tunnel if present
@@ -34,6 +37,74 @@ func (c *Connection) Close() error {
 		_ = c.Tunnel.Close()
 	}
 	return nil
+}
+
+// Tunnel represents a network tunnel (SSH, WireGuard) that can dial
+// connections and be closed.
+type Tunnel interface {
+	Dial(ctx context.Context, address string) (net.Conn, error)
+	Close() error
+}
+
+// ParseServer parses a server address and optional WireGuard config path,
+// returning a tunnel (if any), the resolved remote address, and a display label.
+func ParseServer(server, wgConfigPath string) (tunnel Tunnel, remoteAddr, label string, err error) {
+	if strings.HasPrefix(server, "ssh://") {
+		if wgConfigPath != "" {
+			return nil, "", "", fmt.Errorf("cannot use both ssh:// and --wireguard")
+		}
+		dest := strings.TrimPrefix(server, "ssh://")
+		t, e := NewSSHTunnel(dest)
+		if e != nil {
+			return nil, "", "", fmt.Errorf("SSH: %w", e)
+		}
+		return t, "localhost:50051", "SSH → " + dest, nil
+	}
+
+	if wgConfigPath != "" {
+		cfg, e := ParseWireGuardConfig(wgConfigPath)
+		if e != nil {
+			return nil, "", "", e
+		}
+		t, e := NewWireGuardTunnel(cfg)
+		if e != nil {
+			return nil, "", "", fmt.Errorf("WireGuard: %w", e)
+		}
+		return t, server, "WireGuard", nil
+	}
+
+	return nil, server, "", nil
+}
+
+// ConnectURL establishes a gRPC connection, parsing the server address for
+// ssh:// URLs and optional WireGuard config.
+func ConnectURL(server, wgConfigPath string) (*Connection, error) {
+	tunnel, remoteAddr, _, err := ParseServer(server, wgConfigPath)
+	if err != nil {
+		return nil, err
+	}
+
+	target, opts, err := parseServerURL(remoteAddr)
+	if err != nil {
+		if tunnel != nil {
+			_ = tunnel.Close()
+		}
+		return nil, err
+	}
+
+	if tunnel != nil {
+		opts = append(opts, grpc.WithContextDialer(tunnel.Dial))
+	}
+
+	grpcConn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		if tunnel != nil {
+			_ = tunnel.Close()
+		}
+		return nil, err
+	}
+
+	return &Connection{ClientConn: grpcConn, Tunnel: tunnel}, nil
 }
 
 // basicAuthCreds implements credentials.PerRPCCredentials for HTTP basic auth.

@@ -23,7 +23,7 @@ function PIPContent({
   const entity = useEntityStore((s) => s.entities.get(entityId));
   return (
     <CameraPanOverlay camera={entity}>
-      <VideoStream url={url} protocol={protocol} objectFit="contain" />
+      <VideoStream url={url} protocol={protocol} objectFit="contain" cameraEntityId={entityId} />
     </CameraPanOverlay>
   );
 }
@@ -82,7 +82,7 @@ export function PIPPlayer({ minTop = PANEL_TOP_OFFSET - 12 }: PIPPlayerProps) {
                 <Text className="font-sans-medium text-foreground/90 text-xs" numberOfLines={1}>
                   {window.entityName || "Unknown"}
                 </Text>
-                {window.cameraLabel && (
+                {window.cameraLabel && window.cameraLabel !== window.entityName && (
                   <>
                     <Text className="text-foreground/75 text-11 font-mono">·</Text>
                     <Text className="text-foreground/75 text-11 font-mono" numberOfLines={1}>

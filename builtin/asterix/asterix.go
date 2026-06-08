@@ -225,8 +225,8 @@ func EntityToTrack(entity *pb.Entity, sac, sic uint8) (*cat62.Track, error) {
 	}
 	track.TrackNumber = &cat62.TrackNumber{Number: trackNum}
 	md4 := cat62.MD4NoInterrogation
-	if entity.Classification != nil && entity.Classification.Identity != nil {
-		if *entity.Classification.Identity == pb.ClassificationIdentity_ClassificationIdentityFriend {
+	if entity.Classification != nil && entity.Classification.Identity != nil { //nolint:staticcheck
+		if *entity.Classification.Identity == pb.ClassificationIdentity_ClassificationIdentityFriend { //nolint:staticcheck
 			md4 = cat62.MD4Friendly
 		}
 	}

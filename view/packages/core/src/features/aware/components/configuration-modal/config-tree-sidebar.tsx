@@ -2,16 +2,15 @@
 
 import { Badge } from "@hydris/ui/badge";
 import { HighlightText } from "@hydris/ui/command-palette/highlight-text";
-import { useListNav } from "@hydris/ui/command-palette/use-list-nav";
 import { useKeyboardShortcut } from "@hydris/ui/keyboard";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
-import { ArrowLeft, ChevronRight, Radio, Search, Settings } from "lucide-react-native";
+import { ChevronRight, Radio, Search, Settings } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 
 import { type ConfigStateLabel, getConfigStateBadgeVariant } from "../../utils/entity-helpers";
-import { type ConfigTreeMatch, filterConfigTree } from "../command-palette/palette-search";
+import { filterConfigTree } from "../command-palette/palette-search";
 import type { CategoryGroup, ConfigSelection, DeviceNode } from "./use-config-tree";
 
 function isInputFocused(): boolean {
@@ -436,328 +435,15 @@ function TreeView({
   );
 }
 
-type DrilldownLevel = { id: string; label: string };
-
-type DrilldownItem = {
-  id: string;
-  selection: ConfigSelection;
-  label: string;
-  icon: DeviceNode["icon"] | null;
-  hasChildren: boolean;
-  configState: ConfigStateLabel | null;
-  isConfigurable?: boolean;
-  breadcrumb?: string[];
-  ranges?: number[];
-};
-
-function DrilldownRow({
-  item,
-  isSelected,
-  isHighlighted,
-  onTap,
-  onDrillIn,
-  ref,
-}: {
-  item: DrilldownItem;
-  isSelected: boolean;
-  isHighlighted: boolean;
-  onTap: () => void;
-  onDrillIn?: () => void;
-  ref?: React.Ref<View>;
-}) {
-  const t = useThemeColors();
-  const Icon = item.icon;
-
-  return (
-    <Pressable
-      ref={ref}
-      onPress={onTap}
-      tabIndex={-1}
-      className={cn(
-        "min-h-[48px] flex-row items-center",
-        isHighlighted
-          ? "bg-glass-hover"
-          : isSelected
-            ? "bg-glass"
-            : "hover:bg-glass active:bg-glass-hover",
-      )}
-    >
-      <View className="flex-1 gap-0.5 py-2.5 pr-3 pl-4">
-        <View className="flex-row items-center gap-3">
-          {Icon ? (
-            <Icon
-              size={16}
-              strokeWidth={2}
-              color={isSelected || isHighlighted ? t.controlFgActive : t.iconDefault}
-            />
-          ) : (
-            <Settings
-              size={14}
-              strokeWidth={2}
-              color={isSelected || isHighlighted ? t.controlFgActive : t.iconDefault}
-            />
-          )}
-          <HighlightText
-            text={item.label}
-            ranges={item.ranges ?? []}
-            className={cn(
-              "flex-1 font-sans text-sm",
-              isSelected || isHighlighted ? "text-foreground" : "text-foreground/70",
-            )}
-            highlightClassName="text-blue-foreground"
-          />
-          {item.configState && (
-            <Badge variant={getConfigStateBadgeVariant(item.configState)} size="sm">
-              {item.configState}
-            </Badge>
-          )}
-        </View>
-        {item.breadcrumb && item.breadcrumb.length > 0 && (
-          <Text className="text-muted-foreground pl-7 font-sans text-xs" numberOfLines={1}>
-            {item.breadcrumb.join(" \u203A ")}
-          </Text>
-        )}
-      </View>
-
-      {onDrillIn && (
-        <Pressable
-          onPress={onDrillIn}
-          accessibilityLabel={`Show ${item.label} contents`}
-          className="hover:bg-glass-hover active:bg-glass-active w-12 items-center justify-center self-stretch"
-        >
-          <ChevronRight size={14} strokeWidth={2} color={t.iconSubtle} />
-        </Pressable>
-      )}
-    </Pressable>
-  );
-}
-
-function Breadcrumb({
-  path,
-  onBack,
-  onJumpTo,
-}: {
-  path: DrilldownLevel[];
-  onBack: () => void;
-  onJumpTo: (pathLength: number) => void;
-}) {
-  const t = useThemeColors();
-  const segments = [{ id: "__root", label: "Devices" }, ...path];
-
-  return (
-    <View className="min-h-11 flex-row items-center gap-1 px-4 py-2">
-      <Pressable
-        onPress={onBack}
-        accessibilityLabel="Back"
-        hitSlop={8}
-        className="hover:bg-glass-hover active:bg-glass-active mr-1 rounded p-1.5"
-      >
-        <ArrowLeft size={16} strokeWidth={2} color={t.foreground} />
-      </Pressable>
-      {segments.map((seg, i) => {
-        const isLast = i === segments.length - 1;
-        return (
-          <View key={seg.id} className="flex-row items-center gap-1">
-            {i > 0 && <ChevronRight size={10} strokeWidth={2} color={t.iconMuted} />}
-            {isLast ? (
-              <View className="px-1.5 py-0.5">
-                <Text className="font-sans-medium text-foreground/90 text-xs" numberOfLines={1}>
-                  {seg.label}
-                </Text>
-              </View>
-            ) : (
-              <Pressable
-                onPress={() => onJumpTo(i)}
-                className="hover:bg-glass-hover active:bg-glass-active rounded px-1.5 py-0.5"
-              >
-                <Text className="font-sans-medium text-muted-foreground text-xs" numberOfLines={1}>
-                  {seg.label}
-                </Text>
-              </Pressable>
-            )}
-          </View>
-        );
-      })}
-    </View>
-  );
-}
-
-function getDeviceItems(node: DeviceNode): DrilldownItem[] {
-  return node.children.map((child) => ({
-    id: child.entityId,
-    selection: { type: "device" as const, entityId: child.entityId },
-    label: child.label,
-    icon: child.icon,
-    hasChildren: child.children.length > 0,
-    configState: child.configState,
-    isConfigurable: child.isConfigurable,
-  }));
-}
-
-const alwaysSelectable = () => true;
-
-function matchesToDrilldownItems(matches: ConfigTreeMatch[]): DrilldownItem[] {
-  return matches.map((m) => ({
-    id: m.entityId,
-    selection: { type: "device" as const, entityId: m.entityId },
-    label: m.label,
-    icon: m.icon,
-    hasChildren: false,
-    configState: m.configState,
-    isConfigurable: m.isConfigurable,
-    breadcrumb: m.breadcrumb.slice(0, -1),
-    ranges: m.ranges,
-  }));
-}
-
-function DrilldownView({
-  tree,
-  selection,
-  onSelect,
-  query,
-}: {
-  tree: CategoryGroup[];
-  selection: ConfigSelection;
-  onSelect: (sel: ConfigSelection) => void;
-  query: string;
-}) {
-  const [path, setPath] = useState<DrilldownLevel[]>([]);
-  const isSearching = query.trim().length > 0;
-  const searchResult = useMemo(() => filterConfigTree(tree, query), [tree, query]);
-
-  const currentItems = useMemo((): DrilldownItem[] => {
-    if (isSearching) return matchesToDrilldownItems(searchResult.matches);
-
-    if (path.length === 0) {
-      return tree.map((category) => ({
-        id: `category:${category.category}`,
-        selection: null,
-        label: category.category,
-        icon: null,
-        hasChildren: category.roots.length > 0,
-        configState: null,
-      }));
-    }
-
-    const category = tree.find((c) => `category:${c.category}` === path[0]!.id);
-    if (!category) return [];
-
-    if (path.length === 1) {
-      return category.roots.map((node) => ({
-        id: node.entityId,
-        selection: { type: "device" as const, entityId: node.entityId },
-        label: node.label,
-        icon: node.icon,
-        hasChildren: node.children.length > 0,
-        configState: node.configState,
-        isConfigurable: node.isConfigurable,
-      }));
-    }
-
-    let nodes: DeviceNode[] = category.roots;
-    for (let i = 1; i < path.length; i++) {
-      const target = nodes.find((n) => n.entityId === path[i]!.id);
-      if (!target) return [];
-      if (i === path.length - 1) return getDeviceItems(target);
-      nodes = target.children;
-    }
-
-    return [];
-  }, [tree, path, isSearching, searchResult]);
-
-  const handleDrillIn = useCallback((item: DrilldownItem) => {
-    setPath((prev) => [...prev, { id: item.id, label: item.label }]);
-  }, []);
-
-  const handleTap = useCallback(
-    (item: DrilldownItem) => {
-      if (item.selection) onSelect(item.selection);
-      if (!isSearching && item.hasChildren)
-        setPath((prev) => [...prev, { id: item.id, label: item.label }]);
-    },
-    [onSelect, isSearching],
-  );
-
-  const handleBack = useCallback(() => setPath((prev) => prev.slice(0, -1)), []);
-  const handleJumpTo = useCallback(
-    (pathLength: number) => setPath((prev) => prev.slice(0, pathLength)),
-    [],
-  );
-
-  const pathKey = path.map((p) => p.id).join("/");
-  const resetKey = isSearching ? `search:${query}` : pathKey || "__root";
-
-  const { highlightedIndex, setHighlightedIndex, setHighlightedEl, handleScroll } = useListNav({
-    items: currentItems,
-    isSelectable: alwaysSelectable,
-    onActivate: handleTap,
-    resetKey,
-    stateKey: `config-drill:${resetKey}`,
-  });
-
-  const pathLengthRef = useRef(path.length);
-  pathLengthRef.current = path.length;
-
-  useKeyboardShortcut(
-    "ArrowLeft",
-    useCallback(() => {
-      if (pathLengthRef.current > 0) {
-        handleBack();
-        return true;
-      }
-      return false;
-    }, [handleBack]),
-    { priority: 200 },
-  );
-
-  const isItemSelected = (item: DrilldownItem) => {
-    if (!selection || !item.selection) return false;
-    return selection.entityId === item.selection.entityId;
-  };
-
-  if (isSearching && currentItems.length === 0) {
-    return <NoSearchResults />;
-  }
-
-  return (
-    <View className="flex-1">
-      {!isSearching && path.length > 0 && (
-        <>
-          <Breadcrumb path={path} onBack={handleBack} onJumpTo={handleJumpTo} />
-          <View className="bg-surface-overlay/6 h-px" />
-        </>
-      )}
-      <ScrollView className="flex-1" showsVerticalScrollIndicator={false} onScroll={handleScroll}>
-        {currentItems.map((item, index) => (
-          <DrilldownRow
-            key={item.id}
-            item={item}
-            isSelected={isItemSelected(item)}
-            isHighlighted={index === highlightedIndex}
-            onTap={() => {
-              setHighlightedIndex(index);
-              handleTap(item);
-            }}
-            onDrillIn={!isSearching && item.hasChildren ? () => handleDrillIn(item) : undefined}
-            ref={index === highlightedIndex ? setHighlightedEl : undefined}
-          />
-        ))}
-      </ScrollView>
-    </View>
-  );
-}
-
 export function ConfigTreeSidebar({
   tree,
   selection,
   onSelect,
-  isWide,
   query,
 }: {
   tree: CategoryGroup[];
   selection: ConfigSelection;
   onSelect: (sel: ConfigSelection) => void;
-  isWide: boolean;
   query: string;
 }) {
   const t = useThemeColors();
@@ -775,9 +461,5 @@ export function ConfigTreeSidebar({
     );
   }
 
-  return isWide ? (
-    <TreeView tree={tree} selection={selection} onSelect={onSelect} query={query} />
-  ) : (
-    <DrilldownView tree={tree} selection={selection} onSelect={onSelect} query={query} />
-  );
+  return <TreeView tree={tree} selection={selection} onSelect={onSelect} query={query} />;
 }

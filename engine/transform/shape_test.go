@@ -162,7 +162,7 @@ func TestResolve_WritesGeoShapeOnEntity(t *testing.T) {
 		},
 	}
 
-	st.Resolve(head, "shape1")
+	st.Resolve(head, "shape1", nil)
 
 	if head["shape1"].Shape == nil || head["shape1"].Shape.Geometry == nil {
 		t.Fatal("expected GeoShapeComponent on shape entity")
@@ -197,16 +197,19 @@ func TestResolve_ReResolvesWhenParentPositionChanges(t *testing.T) {
 	}
 
 	// Initial resolve
-	st.Resolve(head, "shape1")
+	st.Resolve(head, "shape1", nil)
 	origLon := head["shape1"].Shape.Geometry.Planar.GetPlane().(*pb.PlanarGeometry_Point).Point.Longitude
 
 	// Move parent
 	head["parent1"].Geo.Longitude = 12.0
-	st.Resolve(head, "parent1")
+	upsert, _ := st.Resolve(head, "parent1", nil)
 
 	newLon := head["shape1"].Shape.Geometry.Planar.GetPlane().(*pb.PlanarGeometry_Point).Point.Longitude
 	if newLon == origLon {
 		t.Error("shape should have changed after parent position update")
+	}
+	if len(upsert) != 1 || upsert[0].Id != "shape1" {
+		t.Errorf("expected shape1 in upsert list so bus gets dirtied, got %v", upsert)
 	}
 }
 
@@ -230,7 +233,7 @@ func TestResolve_ReResolvesWhenParentOrientationChanges(t *testing.T) {
 		},
 	}
 
-	st.Resolve(head, "shape1")
+	st.Resolve(head, "shape1", nil)
 	origLat := head["shape1"].Shape.Geometry.Planar.GetPlane().(*pb.PlanarGeometry_Point).Point.Latitude
 
 	// Add orientation (90° yaw)
@@ -238,7 +241,7 @@ func TestResolve_ReResolvesWhenParentOrientationChanges(t *testing.T) {
 	head["parent1"].Orientation = &pb.OrientationComponent{
 		Orientation: &pb.Quaternion{X: 0, Y: 0, Z: math.Sin(angle / 2), W: math.Cos(angle / 2)},
 	}
-	st.Resolve(head, "parent1")
+	st.Resolve(head, "parent1", nil)
 
 	newLat := head["shape1"].Shape.Geometry.Planar.GetPlane().(*pb.PlanarGeometry_Point).Point.Latitude
 	if newLat == origLat {
@@ -264,7 +267,7 @@ func TestResolve_CleansUpWhenShapeEntityExpires(t *testing.T) {
 		},
 	}
 
-	st.Resolve(head, "shape1")
+	st.Resolve(head, "shape1", nil)
 	if len(st.managed) != 1 {
 		t.Fatal("expected 1 managed entity")
 	}
@@ -274,7 +277,7 @@ func TestResolve_CleansUpWhenShapeEntityExpires(t *testing.T) {
 
 	// Expire shape entity
 	delete(head, "shape1")
-	st.Resolve(head, "shape1")
+	st.Resolve(head, "shape1", nil)
 
 	if len(st.managed) != 0 {
 		t.Error("managed should be empty after shape expiration")
@@ -302,11 +305,11 @@ func TestResolve_CleansUpWhenParentEntityExpires(t *testing.T) {
 		},
 	}
 
-	st.Resolve(head, "shape1")
+	st.Resolve(head, "shape1", nil)
 
 	// Expire parent
 	delete(head, "parent1")
-	_, remove := st.Resolve(head, "parent1")
+	_, remove := st.Resolve(head, "parent1", nil)
 
 	if len(remove) != 1 || remove[0] != "shape1" {
 		t.Errorf("expected shape1 in remove list, got %v", remove)

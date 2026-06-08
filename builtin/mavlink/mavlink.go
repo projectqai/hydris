@@ -109,7 +109,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 
 	serviceEntityID := controllerName + ".service"
 
-	if err := controller.Push(ctx,
+	if err := controller.Push(ctx, controllerName,
 		&pb.Entity{
 			Id:    serviceEntityID,
 			Label: proto.String("MAVLink"),
@@ -121,7 +121,11 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 			},
 			Configurable: &pb.ConfigurableComponent{
 				SupportedDeviceClasses: []*pb.DeviceClassOption{
-					{Class: "endpoint", Label: "MAVLink Endpoint"},
+					{
+						Class:       "endpoint",
+						Label:       "MAVLink Endpoint",
+						Description: "Connect to a MAVLink-speaking vehicle or autopilot over serial, UDP or TCP. Hydris ingests telemetry and exposes the vehicle as a controllable entity.",
+					},
 				},
 			},
 			Interactivity: &pb.InteractivityComponent{
@@ -136,8 +140,8 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		{Class: "endpoint", Label: "MAVLink Endpoint", Schema: schema},
 	}
 
-	return controller.WatchChildren(ctx, serviceEntityID, controllerName, classes, func(ctx context.Context, entityID string) error {
-		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+	return controller.WatchChildren(ctx, controllerName, serviceEntityID, controllerName, classes, func(ctx context.Context, entityID string) error {
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			ready()
 			return runEndpoint(ctx, logger, entity)
 		})
@@ -249,7 +253,7 @@ func runEndpoint(ctx context.Context, logger *slog.Logger, entity *pb.Entity) er
 
 	logger.Info("MAVLink endpoint started", "transport", cfg.Transport, "address", cfg.Address)
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("mavlink")
 	if err != nil {
 		return fmt.Errorf("gRPC connection: %w", err)
 	}

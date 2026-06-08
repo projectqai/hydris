@@ -1,11 +1,15 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
 
 	"github.com/projectqai/hydris/builtin"
+	"github.com/projectqai/hydris/builtin/artifacts"
+	"github.com/projectqai/hydris/engine/meta"
+	"github.com/projectqai/hydris/pkg/missionpkg"
 	pb "github.com/projectqai/proto/go"
 
 	"connectrpc.com/connect"
@@ -37,7 +41,7 @@ func TestMergeEntityComponents(t *testing.T) {
 		Lifetime: &pb.Lifetime{From: timestamppb.New(time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))},
 	}
 
-	merged, accepted := w.mergeEntityComponents("e1", w.head["e1"], src)
+	merged, accepted := w.mergeEntityComponents("e1", w.head["e1"], src, "test", false)
 	if !accepted {
 		t.Fatal("expected merge to accept components")
 	}
@@ -72,7 +76,7 @@ func TestMergeEntityComponents_EmptySrc(t *testing.T) {
 		Lifetime: &pb.Lifetime{From: timestamppb.New(time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))},
 	}
 
-	_, accepted := w.mergeEntityComponents("e1", w.head["e1"], src)
+	_, accepted := w.mergeEntityComponents("e1", w.head["e1"], src, "test", false)
 	if accepted {
 		t.Error("merge with no components should not accept anything")
 	}
@@ -87,18 +91,18 @@ func TestComponentAccepted(t *testing.T) {
 		name          string
 		incomingFresh time.Time
 		incomingUntil time.Time
-		existing      componentMeta
+		existing      meta.Component
 		want          bool
 	}{
-		{"existing zero fresh", t1, time.Time{}, componentMeta{}, true},
-		{"incoming zero fresh", time.Time{}, time.Time{}, componentMeta{fresh: t1}, true},
-		{"incoming fresher", t2, time.Time{}, componentMeta{fresh: t1}, true},
-		{"incoming older", t1, time.Time{}, componentMeta{fresh: t2}, false},
-		{"equal fresh both permanent", t1, time.Time{}, componentMeta{fresh: t1}, true},
-		{"equal fresh incoming shorter until", t1, t2, componentMeta{fresh: t1, until: t3}, true},
-		{"equal fresh incoming longer until", t1, t3, componentMeta{fresh: t1, until: t2}, false},
-		{"equal fresh incoming has until existing permanent", t1, t2, componentMeta{fresh: t1}, true},
-		{"equal fresh incoming permanent existing has until", t1, time.Time{}, componentMeta{fresh: t1, until: t2}, false},
+		{"existing zero fresh", t1, time.Time{}, meta.Component{}, true},
+		{"incoming zero fresh", time.Time{}, time.Time{}, meta.Component{Fresh: t1}, true},
+		{"incoming fresher", t2, time.Time{}, meta.Component{Fresh: t1}, true},
+		{"incoming older", t1, time.Time{}, meta.Component{Fresh: t2}, false},
+		{"equal fresh both permanent", t1, time.Time{}, meta.Component{Fresh: t1}, true},
+		{"equal fresh incoming shorter until", t1, t2, meta.Component{Fresh: t1, Until: t3}, true},
+		{"equal fresh incoming longer until", t1, t3, meta.Component{Fresh: t1, Until: t2}, false},
+		{"equal fresh incoming has until existing permanent", t1, t2, meta.Component{Fresh: t1}, true},
+		{"equal fresh incoming permanent existing has until", t1, time.Time{}, meta.Component{Fresh: t1, Until: t2}, false},
 	}
 
 	for _, tt := range tests {
@@ -308,8 +312,10 @@ func TestGetLocalNode_NoNode(t *testing.T) {
 }
 
 func TestGetLocalNode_WithNode(t *testing.T) {
-	w := testWorld(map[string]*pb.Entity{})
-	w.nodeEntity = &pb.Entity{Id: "node.test"}
+	node := &pb.Entity{Id: "node.test"}
+	w := testWorld(map[string]*pb.Entity{"node.test": node})
+	w.nodeID = "test"
+	w.nodeEntity = node
 
 	ctx := context.Background()
 	resp, err := w.GetLocalNode(ctx, peerRequest(&pb.GetLocalNodeRequest{}))
@@ -427,7 +433,8 @@ func TestPush_DoesNotOverwriteExistingNode(t *testing.T) {
 	w := testWorld(map[string]*pb.Entity{})
 	w.nodeID = "localnode"
 
-	ctx := context.Background()
+	// Only the federation builtin may set a foreign Controller.Node.
+	ctx := context.WithValue(context.Background(), builtinNameKey, "federation")
 	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
 		Changes: []*pb.Entity{
 			{Id: "e1", Controller: &pb.Controller{Node: proto.String("remotenode")}},
@@ -440,6 +447,21 @@ func TestPush_DoesNotOverwriteExistingNode(t *testing.T) {
 	e := w.GetHead("e1")
 	if e.Controller.Node == nil || *e.Controller.Node != "remotenode" {
 		t.Error("existing controller.Node should not be overwritten")
+	}
+}
+
+func TestPush_RejectsForeignNodeFromNonFederation(t *testing.T) {
+	w := testWorld(map[string]*pb.Entity{})
+	w.nodeID = "localnode"
+
+	ctx := context.Background()
+	_, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{
+			{Id: "e1", Controller: &pb.Controller{Node: proto.String("remotenode")}},
+		},
+	}))
+	if err == nil {
+		t.Fatal("expected rejection when non-federation caller sets foreign Controller.Node")
 	}
 }
 
@@ -649,83 +671,108 @@ func TestHardReset_ClearsAllEntities(t *testing.T) {
 	}
 }
 
-func TestHardReset_MissionKeepsAndRenames(t *testing.T) {
+func TestLoadMission_Success(t *testing.T) {
 	initBuiltins(t)
-	w := testWorld(map[string]*pb.Entity{
-		"e1":            {Id: "e1", Label: ptr("other")},
-		"mission:alpha": {Id: "mission:alpha", Label: ptr("my mission"), Artifact: &pb.ArtifactComponent{Id: "mission:alpha", ContentType: "application/gzip"}},
-	})
-
-	ctx := context.Background()
-	missionID := "mission:alpha"
-	_, err := w.HardReset(ctx, peerRequest(&pb.HardResetRequest{MissionId: &missionID}))
+	dir := t.TempDir()
+	store, err := artifacts.NewLocalStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
+	artifacts.Server = artifacts.NewArtifactServer(store, nil)
+	t.Cleanup(func() { artifacts.Server = nil })
 
-	if w.GetHead("e1") != nil {
-		t.Error("e1 should be deleted")
-	}
-	if w.GetHead("mission:alpha") != nil {
-		t.Error("original mission:alpha should be removed (renamed)")
+	var buf bytes.Buffer
+	p := missionpkg.NewPacker(&buf, time.Now())
+	p.WriteWorld([]byte("id: sensor.1\nlabel: test\ndevice:\n  state: 1\n"))
+	p.WriteIndex(missionpkg.Index{
+		MissionKit: &missionpkg.MissionKit{Layouts: map[string]string{"default": "{}"}},
+	})
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
 	}
 
-	m := w.GetHead("mission")
-	if m == nil {
-		t.Fatal("mission entity should exist under ID 'mission'")
+	ctx := context.Background()
+	artID := "test.mission.zip"
+	if err := store.Put(ctx, artID, bytes.NewReader(buf.Bytes())); err != nil {
+		t.Fatal(err)
 	}
-	if m.Label == nil || *m.Label != "my mission" {
-		t.Error("mission entity should preserve label")
+
+	w := testWorld(map[string]*pb.Entity{
+		"old.entity": {Id: "old.entity", Label: ptr("should be wiped")},
+	})
+
+	resp, err := w.LoadMission(ctx, peerRequest(&pb.LoadMissionRequest{ArtifactId: artID}))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if m.Artifact == nil || m.Artifact.ContentType != "application/gzip" {
-		t.Error("mission entity should preserve artifact component")
+	if resp.Msg.Mission == nil {
+		t.Fatal("response should have mission")
 	}
-	// artifact.id stays unchanged (points to original blob)
-	if m.Artifact.Id != "mission:alpha" {
-		t.Errorf("artifact.id should remain 'mission:alpha', got %q", m.Artifact.Id)
+	if resp.Msg.Mission.GetEntityCount() != 1 {
+		t.Errorf("entity_count: got %d, want 1", resp.Msg.Mission.GetEntityCount())
+	}
+	if resp.Msg.Error != nil {
+		t.Errorf("unexpected error: %s", *resp.Msg.Error)
+	}
+	if w.GetHead("old.entity") != nil {
+		t.Error("old entity should be wiped")
+	}
+	if w.GetHead("sensor.1") == nil {
+		t.Error("sensor.1 should exist after load")
 	}
 }
 
-func TestHardReset_MissionNotFound(t *testing.T) {
+func TestLoadMission_BadArtifact(t *testing.T) {
 	initBuiltins(t)
-	w := testWorld(map[string]*pb.Entity{
-		"e1": {Id: "e1", Label: ptr("one")},
-	})
+	dir := t.TempDir()
+	store, err := artifacts.NewLocalStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts.Server = artifacts.NewArtifactServer(store, nil)
+	t.Cleanup(func() { artifacts.Server = nil })
 
 	ctx := context.Background()
-	missionID := "nonexistent"
-	_, err := w.HardReset(ctx, peerRequest(&pb.HardResetRequest{MissionId: &missionID}))
-	if err == nil {
-		t.Fatal("expected error for missing mission entity")
+	artID := "bad.zip"
+	if err := store.Put(ctx, artID, bytes.NewReader([]byte("not a zip"))); err != nil {
+		t.Fatal(err)
 	}
-	if connect.CodeOf(err) != connect.CodeNotFound {
-		t.Errorf("expected CodeNotFound, got %v", connect.CodeOf(err))
-	}
-	// entities should NOT have been deleted since validation failed
-	if w.GetHead("e1") == nil {
-		t.Error("e1 should still exist — reset should not proceed on validation failure")
-	}
-}
 
-func TestHardReset_MissionNoArtifact(t *testing.T) {
-	initBuiltins(t)
 	w := testWorld(map[string]*pb.Entity{
-		"e1":     {Id: "e1", Label: ptr("one")},
-		"no-art": {Id: "no-art", Label: ptr("no artifact")},
+		"existing": {Id: "existing", Label: ptr("should survive")},
 	})
 
-	ctx := context.Background()
-	missionID := "no-art"
-	_, err := w.HardReset(ctx, peerRequest(&pb.HardResetRequest{MissionId: &missionID}))
+	_, err = w.LoadMission(ctx, peerRequest(&pb.LoadMissionRequest{ArtifactId: artID}))
 	if err == nil {
-		t.Fatal("expected error for entity without artifact")
+		t.Fatal("expected error for bad zip")
 	}
 	if connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Errorf("expected CodeInvalidArgument, got %v", connect.CodeOf(err))
 	}
-	// entities should NOT have been deleted
-	if w.GetHead("e1") == nil {
-		t.Error("e1 should still exist")
+	if w.GetHead("existing") == nil {
+		t.Error("existing entity should survive — bad zip should not trigger wipe")
+	}
+}
+
+func TestLoadMission_MissingArtifact(t *testing.T) {
+	initBuiltins(t)
+	dir := t.TempDir()
+	store, err := artifacts.NewLocalStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts.Server = artifacts.NewArtifactServer(store, nil)
+	t.Cleanup(func() { artifacts.Server = nil })
+
+	w := testWorld(map[string]*pb.Entity{})
+	ctx := context.Background()
+
+	_, err = w.LoadMission(ctx, peerRequest(&pb.LoadMissionRequest{ArtifactId: "nonexistent"}))
+	if err == nil {
+		t.Fatal("expected error for missing artifact")
+	}
+	if connect.CodeOf(err) != connect.CodeNotFound {
+		t.Errorf("expected CodeNotFound, got %v", connect.CodeOf(err))
 	}
 }
 

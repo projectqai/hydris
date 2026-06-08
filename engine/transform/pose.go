@@ -3,6 +3,7 @@ package transform
 import (
 	"math"
 
+	"github.com/projectqai/hydris/engine/meta"
 	pb "github.com/projectqai/proto/go"
 )
 
@@ -34,7 +35,7 @@ func (pt *PoseTransformer) Validate(head map[string]*pb.Entity, incoming *pb.Ent
 	return nil
 }
 
-func (pt *PoseTransformer) Resolve(head map[string]*pb.Entity, changedID string) (upsert []*pb.Entity, remove []string) {
+func (pt *PoseTransformer) Resolve(head map[string]*pb.Entity, changedID string, _ map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	entity := head[changedID]
 
 	// Entity expired — clean up
@@ -163,10 +164,18 @@ func (pt *PoseTransformer) resolvePolar(child *pb.Entity, p *pb.PolarOffset, par
 		absAz = math.Mod(absAz+parentYaw+360, 360)
 	}
 
-	// Always set bearing for polar offsets
+	// Preserve bearing extent fields set by ImageBboxTransformer
+	var azExtent, elExtent *float64
+	if child.Bearing != nil {
+		azExtent = child.Bearing.AzimuthExtentDeg
+		elExtent = child.Bearing.ElevationExtentDeg
+	}
+
 	azVal := absAz
 	child.Bearing = &pb.BearingComponent{
-		Azimuth: &azVal,
+		Azimuth:            &azVal,
+		AzimuthExtentDeg:   azExtent,
+		ElevationExtentDeg: elExtent,
 	}
 	if p.Elevation != nil {
 		child.Bearing.Elevation = &absEl

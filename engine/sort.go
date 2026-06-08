@@ -64,9 +64,9 @@ func compareSortField(a, b *pb.Entity, opt *pb.SortOption) int {
 
 	// classification
 	case pb.SortField_SortFieldClassificationIdentity:
-		return cmp.Compare(int32(a.GetClassification().GetIdentity()), int32(b.GetClassification().GetIdentity()))
+		return cmp.Compare(int32(a.GetClassification().GetIdentity()), int32(b.GetClassification().GetIdentity())) //nolint:staticcheck
 	case pb.SortField_SortFieldClassificationDimension:
-		return cmp.Compare(int32(a.GetClassification().GetDimension()), int32(b.GetClassification().GetDimension()))
+		return cmp.Compare(int32(a.GetClassification().GetDimension()), int32(b.GetClassification().GetDimension())) //nolint:staticcheck
 
 	// bearing
 	case pb.SortField_SortFieldBearingAzimuth:

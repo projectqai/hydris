@@ -3,10 +3,13 @@ package engine
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"sync/atomic"
 )
+
+var _ io.WriterTo = (*LogRing)(nil)
 
 const logRingSize = 4096
 
@@ -26,20 +29,31 @@ func (r *LogRing) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// ServeHTTP renders the log buffer as plain text.
-func (r *LogRing) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-
+// WriteTo streams the current ring contents to w as plain text, one line per Write.
+func (r *LogRing) WriteTo(w io.Writer) (int64, error) {
 	pos := r.pos.Load()
 	var start uint64
 	if pos > logRingSize {
 		start = pos - logRingSize
 	}
 
+	var total int64
 	for i := start; i < pos; i++ {
 		v := r.buf[i%logRingSize].Load()
-		if v != nil {
-			fmt.Fprintln(w, v.(string))
+		if v == nil {
+			continue
+		}
+		n, err := fmt.Fprintln(w, v.(string))
+		total += int64(n)
+		if err != nil {
+			return total, err
 		}
 	}
+	return total, nil
+}
+
+// ServeHTTP renders the log buffer as plain text.
+func (r *LogRing) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = r.WriteTo(w)
 }

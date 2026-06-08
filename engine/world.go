@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -24,44 +25,40 @@ import (
 	"github.com/fatih/color"
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/artifacts"
+	builtinmaps "github.com/projectqai/hydris/builtin/maps"
 	"github.com/projectqai/hydris/builtin/mediaserver"
 	"github.com/projectqai/hydris/builtin/plugins"
+	"github.com/projectqai/hydris/engine/meta"
 	"github.com/projectqai/hydris/engine/transform"
 	"github.com/projectqai/hydris/pkg/media"
 	"github.com/projectqai/hydris/pkg/metrics"
+	"github.com/projectqai/hydris/pkg/missionpkg"
 	"github.com/projectqai/hydris/pkg/muxlistener"
+	"github.com/projectqai/hydris/pkg/timesync"
 	"github.com/projectqai/hydris/pkg/version"
 	"github.com/projectqai/hydris/view"
 	pb "github.com/projectqai/proto/go"
 	"github.com/projectqai/proto/go/_goconnect"
 	"github.com/rs/cors"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
-
-// componentMeta tracks the lifetime of a single component field within an entity.
-type componentMeta struct {
-	fresh      time.Time // effective timestamp (fresh ?? from) of the push that wrote this component
-	until      time.Time // expiry time; zero means no expiry
-	noLifetime bool      // true if the push that wrote this component had no Lifetime at all
-}
 
 // entityState colocates an entity with its per-component lifetime metadata.
 type entityState struct {
 	entity     *pb.Entity
-	lifetimes  map[int32]componentMeta // proto field number → meta
-	hardExpire bool                    // set by ExpireEntity; GC removes unconditionally
+	lifetimes  map[int32]meta.Component // proto field number → meta
+	hardExpire bool                     // set by ExpireEntity; GC removes unconditionally
 }
 
 func (es *entityState) isInfinite(protoNum int32) bool {
 	m, ok := es.lifetimes[protoNum]
-	if !ok || m.noLifetime {
+	if !ok || m.NoLifetime {
 		lt := es.entity.GetLifetime()
 		return lt == nil || !lt.GetUntil().IsValid()
 	}
-	return m.until.IsZero()
+	return m.Until.IsZero()
 }
 
 // protoNumToFieldIdx maps proto field numbers to Go struct field indices for Entity.
@@ -111,6 +108,12 @@ type WorldServer struct {
 	transformers     []transform.Transformer
 	mediaTransformer *transform.MediaTransformer
 	chatTransformer  *transform.ChatTransformer
+
+	// startTime is reset on HardReset so the diagnostic uptime tracks
+	// the lifetime of the current world, not the process.
+	startTime time.Time
+
+	policyEval *PolicyEvaluator
 }
 
 func NewWorldServer() *WorldServer {
@@ -121,7 +124,9 @@ func NewWorldServer() *WorldServer {
 		headView:         make(map[string]*pb.Entity),
 		mediaTransformer: mediaTransformer,
 		chatTransformer:  transform.NewChatTransformer(),
+		startTime:        time.Now(),
 		transformers: []transform.Transformer{
+			transform.NewImageBboxTransformer(),
 			transform.NewPolarNormalizeTransformer(),
 			transform.NewPoseTransformer(),
 			transform.NewCameraTransformer(),
@@ -132,6 +137,7 @@ func NewWorldServer() *WorldServer {
 		},
 	}
 	server.transformers = append(server.transformers, server.chatTransformer)
+	server.policyEval = NewPolicyEvaluator(server)
 
 	// Start garbage collection ticker
 	go func() {
@@ -195,6 +201,9 @@ func (s *WorldServer) InitNodeIdentity() {
 		if e.Device != nil && e.Device.Node != nil && strings.HasPrefix(e.Id, "node.") {
 			s.nodeID = strings.TrimPrefix(e.Id, "node.")
 			s.nodeEntity = e
+			if e.Policy == nil {
+				e.Policy = DefaultPolicy()
+			}
 			s.fillNodeDeviceInfo(e.Device.Node)
 			if s.chatTransformer != nil {
 				s.chatTransformer.SetNodeEntityID(s.nodeEntity.Id)
@@ -216,17 +225,21 @@ func (s *WorldServer) InitNodeIdentity() {
 	}
 	s.fillNodeDeviceInfo(node)
 
+	nodeEntityID := "node." + s.nodeID
 	s.nodeEntity = &pb.Entity{
-		Id:    "node." + s.nodeID,
-		Label: &hostname,
+		Id:     nodeEntityID,
+		Label:  &hostname,
+		Symbol: &pb.SymbolComponent{MilStd2525C: "SFGPUCI--------"},
 		Device: &pb.DeviceComponent{
 			Category: proto.String("Network"),
 			State:    pb.DeviceState_DeviceStateActive,
 			Node:     node,
 		},
 		Controller: &pb.Controller{
-			Node: &s.nodeID,
+			Node:   &s.nodeID,
+			Origin: &nodeEntityID,
 		},
+		Policy: DefaultPolicy(),
 	}
 
 	s.setEntity(s.nodeEntity.Id, s.nodeEntity, nil)
@@ -299,7 +312,7 @@ func (s *WorldServer) checkForUpdate() {
 func strPtr(s string) *string { return &s }
 
 func isURLSafeID(s string) bool {
-	if len(s) == 0 {
+	if len(s) == 0 || len(s) > 250 {
 		return false
 	}
 	for _, r := range s {
@@ -324,6 +337,19 @@ func (s *WorldServer) SetWorldFile(path string) {
 // the MediaTransformer rewrote it to a proxy URL.
 func (s *WorldServer) GetSourceURL(entityID string, streamIndex int) string {
 	return s.mediaTransformer.GetSourceURL(entityID, streamIndex)
+}
+
+// SetStreamEpoch records the epoch for a stream and notifies subscribers.
+func (s *WorldServer) SetStreamEpoch(entityID string, streamIndex int, epoch time.Time) {
+	s.mediaTransformer.SetEpoch(entityID, streamIndex, epoch)
+	s.l.Lock()
+	defer s.l.Unlock()
+	if e := s.headView[entityID]; e != nil && e.Camera != nil && streamIndex < len(e.Camera.Streams) {
+		e.Camera.Streams[streamIndex].Epoch = timestamppb.New(epoch)
+	}
+	if es, ok := s.head[entityID]; ok {
+		s.bus.Dirty(entityID, es.entity, pb.EntityChange_EntityChangeUpdated)
+	}
 }
 
 func (s *WorldServer) GetHead(id string) *pb.Entity {
@@ -351,7 +377,54 @@ func (s *WorldServer) ListEntities(ctx context.Context, req *connect.Request[pb.
 	response := &pb.ListEntitiesResponse{
 		Entities: el,
 	}
+	if req.Msg.DumpInternal {
+		internal := make([]*structpb.Struct, len(el))
+		for i, e := range el {
+			if es := s.head[e.Id]; es != nil {
+				internal[i] = s.entityInternal(es)
+			}
+		}
+		response.Internal = internal
+	}
 	return connect.NewResponse(response), nil
+}
+
+func (s *WorldServer) entityInternal(es *entityState) *structpb.Struct {
+	components := map[string]interface{}{}
+	for protoNum, cm := range es.lifetimes {
+		c := map[string]interface{}{}
+		if !cm.Fresh.IsZero() {
+			c["fresh"] = cm.Fresh.Format(time.RFC3339Nano)
+		}
+		if !cm.Until.IsZero() {
+			c["until"] = cm.Until.Format(time.RFC3339Nano)
+		}
+		if cm.NoLifetime {
+			c["no_lifetime"] = true
+		}
+		if cm.Generated {
+			c["generated"] = true
+		}
+		if cm.Source != "" {
+			c["source"] = cm.Source
+		}
+		if !cm.SourceAt.IsZero() {
+			c["source_at"] = cm.SourceAt.Format(time.RFC3339Nano)
+		}
+		c["infinite"] = es.isInfinite(protoNum)
+		components[strconv.FormatInt(int64(protoNum), 10)] = c
+	}
+	lt := es.entity.GetLifetime()
+	infinite := lt == nil || !lt.GetUntil().IsValid()
+	m := map[string]interface{}{
+		"components":  components,
+		"infinite":    infinite,
+		"hard_expire": es.hardExpire,
+		"local":       s.isLocal(es.entity),
+		"persisted":   s.isPersisted(es),
+	}
+	st, _ := structpb.NewStruct(m)
+	return st
 }
 
 func (s *WorldServer) GetEntity(ctx context.Context, req *connect.Request[pb.GetEntityRequest]) (*connect.Response[pb.GetEntityResponse], error) {
@@ -365,46 +438,57 @@ func (s *WorldServer) GetEntity(ctx context.Context, req *connect.Request[pb.Get
 
 	entity := es.entity
 
-	if len(es.lifetimes) > 0 && entity.Lifetime != nil {
-		clm := make(map[int32]*pb.Lifetime, len(es.lifetimes))
-		for protoNum, cm := range es.lifetimes {
-			if protoNum == lifetimeProtoNum || protoNum < 11 {
-				continue // skip Lifetime itself and metadata fields
-			}
-			clt := &pb.Lifetime{}
-			if !cm.fresh.IsZero() {
-				clt.Fresh = timestamppb.New(cm.fresh)
-			}
-			if !cm.until.IsZero() {
-				clt.Until = timestamppb.New(cm.until)
-			}
-			clm[protoNum] = clt
-		}
-		// Temporarily attach components for serialization; cleared after.
-		// Safe because we hold the read lock and connect serializes synchronously.
-		entity.Lifetime.Components = clm
-		defer func() { entity.Lifetime.Components = nil }()
-	}
-
 	response := &pb.GetEntityResponse{
 		Entity: entity,
+	}
+	if req.Msg.DumpInternal {
+		response.Internal = s.entityInternal(es)
 	}
 	return connect.NewResponse(response), nil
 }
 
-func (s *WorldServer) GetLocalNode(ctx context.Context, req *connect.Request[pb.GetLocalNodeRequest]) (*connect.Response[pb.GetLocalNodeResponse], error) {
-	if s.nodeEntity == nil {
+func (s *WorldServer) getLocalNode(ctx context.Context) (*pb.Entity, error) {
+	if s.nodeID == "" {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no local node entity"))
 	}
-	return connect.NewResponse(&pb.GetLocalNodeResponse{Entity: s.nodeEntity, NodeId: s.nodeID}), nil
+	s.l.RLock()
+	defer s.l.RUnlock()
+	es, ok := s.head["node."+s.nodeID]
+	if !ok || es.entity == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("no local node entity"))
+	}
+
+	return es.entity, nil
 }
 
-func (s *WorldServer) TimeSync(_ context.Context, req *connect.Request[pb.TimeSyncRequest]) (*connect.Response[pb.TimeSyncResponse], error) {
-	now := timestamppb.Now()
+func (s *WorldServer) GetLocalNode(ctx context.Context, req *connect.Request[pb.GetLocalNodeRequest]) (*connect.Response[pb.GetLocalNodeResponse], error) {
+	ln, err := s.getLocalNode(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return connect.NewResponse(&pb.GetLocalNodeResponse{Entity: ln, NodeId: s.nodeID}), nil
+}
+
+func (s *WorldServer) TimeSync(ctx context.Context, req *connect.Request[pb.TimeSyncRequest]) (*connect.Response[pb.TimeSyncResponse], error) {
+	now := time.Now()
+	if pc, ok := ctx.Value(peerEntityKey).(*peerConn); ok && req.Msg.T1.IsValid() {
+		if req.Msg.T4 != nil && req.Msg.T4.IsValid() {
+			prevT1 := time.UnixMicro(pc.prevT1Us.Load())
+			prevT2 := time.UnixMicro(pc.prevT2Us.Load())
+			prevT3 := time.UnixMicro(pc.prevT3Us.Load())
+			offset, rtt := timesync.NTPSample(prevT1, prevT2, prevT3, req.Msg.T4.AsTime())
+			pc.ts.Add(offset, rtt)
+		}
+		pc.prevT1Us.Store(req.Msg.T1.AsTime().UnixMicro())
+		pc.prevT2Us.Store(now.UnixMicro())
+		pc.prevT3Us.Store(now.UnixMicro())
+	}
+	ts := timestamppb.New(now)
 	return connect.NewResponse(&pb.TimeSyncResponse{
 		T1: req.Msg.T1,
-		T2: now,
-		T3: now,
+		T2: ts,
+		T3: ts,
 	}), nil
 }
 
@@ -412,11 +496,19 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 	s.l.Lock()
 	defer s.l.Unlock()
 
+	peer := parsePeer(req.Peer().Addr)
+	pc, _ := ctx.Value(peerEntityKey).(*peerConn)
+	if pc != nil {
+		pc.pushCount.Add(1)
+	}
+	builtinName, _ := ctx.Value(builtinNameKey).(string)
+	isFederation := builtinName == "federation"
+
 	// Validate incoming entities before any merge.
 	for _, e := range req.Msg.Changes {
 		if !isURLSafeID(e.Id) {
 			return nil, connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("entity id %q must be url safe", e.Id))
+				fmt.Errorf("entity id %q must be url safe and at most 250 bytes", e.Id))
 		}
 		if e.Routing != nil {
 			for _, ch := range e.Routing.Channels {
@@ -426,9 +518,15 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 				}
 			}
 		}
-		for _, tr := range s.transformers {
-			if err := tr.Validate(s.headView, e); err != nil {
-				return nil, err
+		if !isFederation && e.Controller != nil && e.Controller.Node != nil && s.nodeID != "" && *e.Controller.Node != s.nodeID {
+			return nil, connect.NewError(connect.CodePermissionDenied,
+				fmt.Errorf("entity %s: only federation may set Controller.Node to a foreign value", e.Id))
+		}
+		if !isFederation {
+			for _, tr := range s.transformers {
+				if err := tr.Validate(s.headView, e); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -448,8 +546,12 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 			}
 		}
 
+		if es, ok := s.head[e.Id]; ok && es.hardExpire {
+			s.expireEntity(e.Id, es)
+		}
+
 		if es, ok := s.head[e.Id]; ok {
-			merged, accepted := s.mergeEntityComponents(e.Id, es, e)
+			merged, accepted := s.mergeEntityComponents(e.Id, es, e, builtinName, isFederation)
 			if !accepted {
 				continue
 			}
@@ -466,7 +568,7 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 			if e.Lifetime.Fresh == nil || !e.Lifetime.Fresh.IsValid() {
 				e.Lifetime.Fresh = e.Lifetime.From
 			}
-			s.initEntity(e, hadNoLifetime)
+			s.initEntityFrom(e, builtinName, hadNoLifetime)
 		}
 
 		// Stamp controller node after merge so we never clobber an
@@ -480,6 +582,16 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 				stored.Controller.Node = &s.nodeID
 			}
 		}
+		if stored.Controller == nil {
+			stored.Controller = &pb.Controller{}
+		}
+		if peer.local {
+			if stored.Controller.Origin == nil && s.nodeEntity != nil {
+				stored.Controller.Origin = &s.nodeEntity.Id
+			}
+		} else if pc != nil {
+			stored.Controller.Origin = &pc.entityID
+		}
 		changedIDs = append(changedIDs, e.Id)
 		if e.Config != nil {
 			configChanged = true
@@ -488,6 +600,10 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 
 	// Process replacements (full entity swap, no merge)
 	for _, e := range req.Msg.Replacements {
+		if !isFederation && e.Controller != nil && e.Controller.Node != nil && s.nodeID != "" && *e.Controller.Node != s.nodeID {
+			return nil, connect.NewError(connect.CodePermissionDenied,
+				fmt.Errorf("entity %s: only federation may set Controller.Node to a foreign value", e.Id))
+		}
 		if e.Lifetime == nil {
 			e.Lifetime = &pb.Lifetime{}
 		}
@@ -505,8 +621,18 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 				e.Controller.Node = &s.nodeID
 			}
 		}
+		if e.Controller == nil {
+			e.Controller = &pb.Controller{}
+		}
+		if peer.local {
+			if e.Controller.Origin == nil && s.nodeEntity != nil {
+				e.Controller.Origin = &s.nodeEntity.Id
+			}
+		} else if pc != nil {
+			e.Controller.Origin = &pc.entityID
+		}
 
-		s.initEntity(e)
+		s.initEntityFrom(e, builtinName)
 		changedIDs = append(changedIDs, e.Id)
 		if e.Config != nil {
 			configChanged = true
@@ -516,9 +642,14 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 	// Run transformers, then notify subscribers.
 	// Transformers must run after merge (to see latest state) but before
 	// Dirty (so subscribers see transformer-computed fields like Geo from PoseComponent).
+	// Skip transforms for remote entities — transforms already ran at origin.
 	for _, id := range changedIDs {
-		upserted, removed := transform.RunTransformers(s.transformers, s.headView, s.bus, id)
+		if s.isRemoteEntity(id) {
+			continue
+		}
+		upserted, removed := transform.RunTransformers(s.transformers, s.headView, s.bus, id, s.head[id].lifetimes)
 		s.syncTransformerResults(upserted, removed)
+		s.markGeneratedComponents(id)
 	}
 	for _, id := range changedIDs {
 		s.bus.Dirty(id, s.head[id].entity, pb.EntityChange_EntityChangeUpdated)
@@ -526,6 +657,15 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 
 	if configChanged {
 		s.notifyPersist()
+	}
+
+	if s.nodeEntity != nil {
+		for _, id := range changedIDs {
+			if id == s.nodeEntity.Id {
+				go s.policyEval.Rebuild()
+				break
+			}
+		}
 	}
 
 	response := &pb.EntityChangeResponse{
@@ -558,108 +698,165 @@ func (s *WorldServer) ExpireEntity(ctx context.Context, req *connect.Request[pb.
 
 	s.bus.Dirty(es.entity.Id, es.entity, pb.EntityChange_EntityChangeUpdated)
 
+	if es.entity.GetPolicy() != nil {
+		go s.policyEval.Rebuild()
+	}
+
 	return connect.NewResponse(&pb.ExpireEntityResponse{}), nil
 }
 
 func (s *WorldServer) HardReset(ctx context.Context, req *connect.Request[pb.HardResetRequest]) (*connect.Response[pb.HardResetResponse], error) {
-	// Only allow from localhost.
-	host, _, _ := net.SplitHostPort(req.Peer().Addr)
-	ip := net.ParseIP(host)
-	if ip != nil && !ip.IsLoopback() {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("hard reset is only callable from localhost"))
-	}
-
-	missionID := req.Msg.GetMissionId()
-
-	slog.Warn("hard reset requested", "peer", req.Peer().Addr, "mission_id", missionID)
+	slog.Warn("hard reset requested", "peer", req.Peer().Addr)
 
 	s.l.Lock()
-
-	// If a mission is requested, validate it exists and has an artifact before deleting anything.
-	var missionEntity *pb.Entity
-	if missionID != "" {
-		es, ok := s.head[missionID]
-		if !ok {
-			s.l.Unlock()
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("mission entity %q not found", missionID))
-		}
-		if es.entity.Artifact == nil {
-			s.l.Unlock()
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("mission entity %q has no artifact component", missionID))
-		}
-		missionEntity = proto.Clone(es.entity).(*pb.Entity)
-		missionEntity.Id = "mission"
-	}
-
-	// Expire every entity (except the mission) and let transformers see the removal.
 	for id, es := range s.head {
-		if missionEntity != nil && id == missionID {
-			continue
-		}
 		snapshot := es.entity
 		deleteArtifactBlob(snapshot)
 		s.deleteEntity(id)
 		for _, t := range s.transformers {
-			t.Resolve(s.headView, id)
+			t.Resolve(s.headView, id, nil)
 		}
 		s.bus.Dirty(id, snapshot, pb.EntityChange_EntityChangeExpired)
 	}
-
-	// Remove the original mission entry (under old ID) and re-insert under "mission".
-	if missionEntity != nil {
-		s.deleteEntity(missionID)
-		s.initEntity(missionEntity)
-	}
-
-	// Truncate persistence file, then write back the mission entity if present.
 	if s.worldFile != "" {
-		if missionEntity != nil {
-			yamlBytes, err := entitiesToYAML([]*pb.Entity{missionEntity})
-			if err != nil {
-				slog.Warn("failed to marshal mission entity during hard reset", "error", err)
-			} else if err := os.WriteFile(s.worldFile, yamlBytes, 0644); err != nil {
-				slog.Warn("failed to write mission entity during hard reset", "error", err)
-			}
-		} else {
-			if err := os.WriteFile(s.worldFile, nil, 0644); err != nil {
-				slog.Warn("failed to truncate world file during hard reset", "error", err)
-			}
+		if err := os.WriteFile(s.worldFile, nil, 0o644); err != nil {
+			slog.Warn("hard reset: truncate world file", "error", err)
 		}
 	}
-
 	s.l.Unlock()
 
-	// Disconnect all streaming consumers.
 	s.bus.CloseAll()
-
-	// Reset builtin HTTP handlers and restart all builtins so they
-	// re-register their entities and routes from scratch.
 	builtin.ResetHTTPHandlers()
-	builtin.RestartAll()
 
-	// Reload defaults and re-establish node identity.
 	if err := s.LoadDefaults(builtin.DefaultWorld()); err != nil {
-		slog.Warn("failed to reload defaults after hard reset", "error", err)
+		slog.Warn("hard reset: reload defaults", "error", err)
 	}
 	s.InitNodeIdentity()
 
+	builtin.RestartAll()
+
+	s.policyEval.Rebuild()
+	s.startTime = time.Now()
+
 	slog.Info("hard reset complete")
 	return connect.NewResponse(&pb.HardResetResponse{}), nil
+}
+
+func (s *WorldServer) LoadMission(ctx context.Context, req *connect.Request[pb.LoadMissionRequest]) (*connect.Response[pb.LoadMissionResponse], error) {
+	artifactID := req.Msg.GetArtifactId()
+	if artifactID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("artifact_id is required"))
+	}
+
+	slog.Warn("load mission requested", "peer", req.Peer().Addr, "artifact_id", artifactID)
+
+	if artifacts.Server == nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("artifact server not initialized"))
+	}
+	store := artifacts.Server.Local()
+	if store == nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("local artifact store not available"))
+	}
+
+	f, err := store.Open(ctx, artifactID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact %s: %w", artifactID, err))
+	}
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("stat artifact: %w", err))
+	}
+
+	unpacked, err := missionpkg.Unpack(ctx, f, stat.Size())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unpack: %w", err))
+	}
+	if unpacked.World == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("mission pack has no world.yaml"))
+	}
+
+	entities, err := ParseEntities(unpacked.World)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("parse world.yaml: %w", err))
+	}
+
+	if _, err := s.HardReset(ctx, connect.NewRequest(&pb.HardResetRequest{})); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("reset: %w", err))
+	}
+
+	var artifactCount uint32 = 0
+	var artifactTotalSize uint64 = 0
+	for _, a := range unpacked.Artifacts {
+		if err := store.Put(ctx, a.ID, bytes.NewReader(a.Data)); err != nil {
+			slog.Warn("load mission: store artifact", "id", a.ID, "error", err)
+		} else {
+			artifactCount += 1
+			artifactTotalSize += uint64(len(a.Data))
+		}
+	}
+
+	entities = adoptEntities(entities, s.nodeID)
+
+	var loadErr string
+	if _, err := s.Push(ctx, connect.NewRequest(&pb.EntityChangeRequest{Changes: entities})); err != nil {
+		loadErr = fmt.Sprintf("push entities: %v", err)
+		slog.Error("load mission: push entities failed after reset", "error", err)
+	}
+
+	appliedCount := len(entities)
+	pack := &pb.MissionPack{
+		EntityCount:       proto.Uint32(uint32(appliedCount)),
+		PackVersion:       proto.String(version.Version),
+		ImportedAt:        timestamppb.Now(),
+		ArtifactCount:     &artifactCount,
+		ArtifactTotalSize: &artifactTotalSize,
+	}
+	if unpacked.Index.MissionKit != nil {
+		pack.Layouts = unpacked.Index.MissionKit.Layouts
+	}
+
+	s.l.Lock()
+	if es, ok := s.head["node."+s.nodeID]; ok && es != nil {
+		if es.entity.Device == nil {
+			es.entity.Device = &pb.DeviceComponent{}
+		}
+		if es.entity.Device.Node == nil {
+			es.entity.Device.Node = &pb.NodeDevice{}
+		}
+		es.entity.Device.Node.Mission = pack
+	}
+	s.l.Unlock()
+
+	resp := &pb.LoadMissionResponse{Mission: pack}
+	if loadErr != "" {
+		resp.Error = &loadErr
+	}
+
+	slog.Info("load mission complete", "sent", len(entities), "applied", appliedCount, "error", loadErr)
+	return connect.NewResponse(resp), nil
 }
 
 // NewAPIMux creates an http.ServeMux with the gRPC-Connect APIs,
 // WHEP/media endpoints, healthz, and metrics registered.
 // It does NOT serve the frontend — callers can add a "/" handler for that.
 // Used by both StartEngine and the Wails desktop app.
-func NewAPIMux(engine *WorldServer, promHandler http.Handler, bridges *media.BridgeManager, logHandler ...http.Handler) *http.ServeMux {
+func NewAPIMux(engine *WorldServer, promHandler http.Handler, bridges *media.BridgeManager, ring *LogRing) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	worldPath, worldHandler := _goconnect.NewWorldServiceHandler(engine)
+	worldPath, worldHandler := _goconnect.NewWorldServiceHandler(engine,
+		connect.WithInterceptors(engine.policyEval.Interceptor()),
+	)
 	mux.Handle(worldPath, worldHandler)
 
 	if artifacts.Server != nil {
-		artPath, artHandler := _goconnect.NewArtifactServiceHandler(artifacts.Server)
+		artPath, artHandler := _goconnect.NewArtifactServiceHandler(artifacts.Server,
+			connect.WithInterceptors(engine.policyEval.Interceptor()),
+		)
 		mux.Handle(artPath, artHandler)
+
+		mux.Handle("GET /artifacts/{id}", mediaAccessControl(handleArtifactGet(engine)))
+		mux.Handle("POST /artifacts/{id}", mediaAccessControl(handleArtifactPost()))
 	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -678,18 +875,31 @@ func NewAPIMux(engine *WorldServer, promHandler http.Handler, bridges *media.Bri
 	// Plugin dev loading — localhost only.
 	mux.Handle("POST /plugin/dev", localhostOnly(http.HandlerFunc(handlePluginDev)))
 
-	whepHandler := media.NewHandler(engine, bridges)
+	whepHandler := mediaserver.NewWHEPHandler(engine.GetSourceURL, bridges)
 	mux.Handle("POST /media/whep/{entityId...}", mediaAccessControl(whepHandler))
 
-	imageHandler := media.NewImageProxyHandler(engine)
+	imageHandler := mediaserver.NewImageProxyHandler(engine.GetSourceURL)
 	mux.Handle("GET /media/image/{entityId...}", mediaAccessControl(imageHandler))
+
+	// Plugin map layers - proxies tile/image requests.
+	var tileStore builtinmaps.TileStore
+	if artifacts.Server != nil {
+		tileStore = artifacts.Server.Local()
+	}
+	mapLayerHandler := builtinmaps.NewMapLayerHandler(tileStore)
+	mux.Handle("GET /map/", mapLayerHandler)
 
 	// Mount builtin-registered HTTP handlers (e.g., webcam streams).
 	mux.Handle("/media/webcam/", builtin.HTTPHandler())
 
-	if len(logHandler) > 0 && logHandler[0] != nil {
-		mux.Handle("/logs", logHandler[0])
+	// Generic /plugin/<name>/... namespace for builtins to expose HTTP services.
+	mux.Handle("/plugin/", builtin.HTTPHandler())
+
+	if ring != nil {
+		mux.Handle("/logs", ring)
 	}
+	mux.Handle("POST /mission/export", handleMissionExport(engine, ring, exportOpts{}))
+	mux.Handle("POST /diagnostic/export", handleMissionExport(engine, ring, exportOpts{IncludeDiagnostic: true, AllEntities: true}))
 
 	return mux
 }
@@ -726,10 +936,10 @@ func localhostOnly(next http.Handler) http.Handler {
 
 // EngineConfig holds configuration for starting the engine
 type EngineConfig struct {
-	WorldFile  string
-	PolicyFile string
-	NoDefaults bool
-	LogHandler http.Handler
+	WorldFile       string
+	NoDefaults      bool
+	DisableSecurity bool
+	LogRing         *LogRing
 }
 
 // StartEngine starts the Hydris engine and returns the server address.
@@ -743,7 +953,7 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	if worldFile == "" {
 		if configDir, err := os.UserConfigDir(); err == nil {
 			dir := configDir + "/hydris"
-			if err := os.MkdirAll(dir, 0755); err == nil {
+			if err := os.MkdirAll(dir, 0o755); err == nil {
 				worldFile = dir + "/world.yaml"
 			}
 		}
@@ -773,6 +983,16 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	// Initialize stable node identity (after loading world state)
 	engine.InitNodeIdentity()
 
+	if cfg.DisableSecurity {
+		slog.Warn("~~~~~~~~~~~~~ DANGER ~~~~~~~~~~~")
+		slog.Warn("ALL SECURITY DISABLED")
+		slog.Warn("DONT DO THAT")
+		slog.Warn("~~~~~~~~~~~~~ DANGER ~~~~~~~~~~~")
+		engine.policyEval = nil
+	} else {
+		engine.policyEval.Rebuild()
+	}
+
 	// Initialize Prometheus exporter and OpenTelemetry metrics
 	promHandler, err := metrics.InitPrometheus()
 	if err != nil {
@@ -792,8 +1012,23 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 		port = "50051"
 	}
 
+	if os.Getenv("HYDRIS_SERVER") == "" {
+		os.Setenv("HYDRIS_SERVER", "http://localhost:"+port)
+	}
+
 	// Shared bridge manager for WHEP + RTSP.
 	bridges := media.NewBridgeManager()
+	bridges.OnEpoch = func(key string, epoch time.Time) {
+		parts := strings.SplitN(key, "/", 2)
+		if len(parts) != 2 {
+			return
+		}
+		idx, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return
+		}
+		engine.SetStreamEpoch(parts[0], idx, epoch)
+	}
 
 	// Set up WebRTC UDP mux so all ICE traffic goes through a single UDP port.
 	// This means only one port (the engine port) needs to be open in the firewall.
@@ -809,7 +1044,7 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create artifact store: %w", err)
 	}
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("engine")
 	if err != nil {
 		return "", fmt.Errorf("failed to create builtin client: %w", err)
 	}
@@ -817,7 +1052,7 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	artifacts.Server = artifacts.NewArtifactServer(artLocal, worldClient)
 
 	// Create HTTP handler: API endpoints + frontend on "/"
-	mux := NewAPIMux(engine, promHandler, bridges, cfg.LogHandler)
+	mux := NewAPIMux(engine, promHandler, bridges, cfg.LogRing)
 
 	webServer, err := view.NewWebServer()
 	if err != nil {
@@ -829,11 +1064,17 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 		AllowedOrigins: []string{"*"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders: []string{"*"},
+		ExposedHeaders: []string{"Content-Disposition"},
 	})
 
+	var protos http.Protocols
+	protos.SetHTTP1(true)
+	protos.SetUnencryptedHTTP2(true)
 	httpServer := &http.Server{
-		Addr:    ":" + port,
-		Handler: h2c.NewHandler(corsHandler.Handler(mux), &http2.Server{}),
+		Addr:        ":" + port,
+		Handler:     corsHandler.Handler(engine.policyEval.Middleware(mux)),
+		ConnContext: engine.ConnContext,
+		Protocols:   &protos,
 	}
 
 	// Create listener first to fail fast if port is in use
@@ -846,7 +1087,18 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	muxLn := muxlistener.New(listener)
 
 	// Start RTSP relay server on the RTSP sub-listener.
-	rtspServer := media.NewRTSPServer(engine, bridges, mediaserver.IsRemoteSharingEnabled)
+	rtspServer := media.NewRTSPServer(
+		func(entityID string) []*pb.MediaStream {
+			e := engine.GetHead(entityID)
+			if e == nil || e.Camera == nil {
+				return nil
+			}
+			return e.Camera.Streams
+		},
+		engine.GetSourceURL,
+		bridges,
+		mediaserver.IsRemoteSharingEnabled,
+	)
 	if err := rtspServer.Start(muxLn.RTSP()); err != nil {
 		return "", fmt.Errorf("failed to start RTSP server: %v", err)
 	}
@@ -874,7 +1126,7 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 
 	// Serve HTTP on the HTTP sub-listener.
 	go func() {
-		if err := httpServer.Serve(muxLn.HTTP()); err != nil && err != http.ErrServerClosed {
+		if err := httpServer.Serve(&trackingListener{muxLn.HTTP()}); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "error", err)
 			os.Exit(1)
 		}
@@ -888,8 +1140,13 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	}()
 
 	// Start in-process server for builtin services
+	var builtinProtos http.Protocols
+	builtinProtos.SetHTTP1(true)
+	builtinProtos.SetUnencryptedHTTP2(true)
 	builtinServer := &http.Server{
-		Handler: h2c.NewHandler(mux, &http2.Server{}),
+		Handler:     mux,
+		ConnContext: BuiltinConnContext,
+		Protocols:   &builtinProtos,
 	}
 	go func() {
 		if err := builtinServer.Serve(builtin.GetBuiltinListener()); err != nil && err != http.ErrServerClosed {
@@ -910,7 +1167,7 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 }
 
 // setEntity stores an entity in head and updates the headView.
-func (s *WorldServer) setEntity(id string, e *pb.Entity, lifetimes map[int32]componentMeta) {
+func (s *WorldServer) setEntity(id string, e *pb.Entity, lifetimes map[int32]meta.Component) {
 	s.head[id] = &entityState{entity: e, lifetimes: lifetimes}
 	s.headView[id] = e
 }
@@ -919,6 +1176,20 @@ func (s *WorldServer) setEntity(id string, e *pb.Entity, lifetimes map[int32]com
 func (s *WorldServer) deleteEntity(id string) {
 	delete(s.head, id)
 	delete(s.headView, id)
+}
+
+func (s *WorldServer) expireEntity(id string, es *entityState) {
+	deleteArtifactBlob(es.entity)
+	s.deleteEntity(id)
+	s.bus.Dirty(id, es.entity, pb.EntityChange_EntityChangeExpired)
+}
+
+func (s *WorldServer) isRemoteEntity(id string) bool {
+	es := s.head[id]
+	return s.nodeID != "" && es != nil &&
+		es.entity.Controller != nil &&
+		es.entity.Controller.Node != nil &&
+		*es.entity.Controller.Node != s.nodeID
 }
 
 // syncTransformerResults adds/removes transformer-generated entities in
@@ -933,6 +1204,33 @@ func (s *WorldServer) syncTransformerResults(upserted, removed []string) {
 	}
 	for _, rid := range removed {
 		delete(s.head, rid)
+	}
+}
+
+// markGeneratedComponents detects components on an entity that have no
+// lifetime entry (i.e. were set by a transformer, not by an external push)
+// and marks them as Generated in the lifetimes map.
+func (s *WorldServer) markGeneratedComponents(id string) {
+	es, ok := s.head[id]
+	if !ok {
+		return
+	}
+	v := reflect.ValueOf(es.entity).Elem()
+	for protoNum, fieldIdx := range protoNumToFieldIdx {
+		if protoNum == lifetimeProtoNum {
+			continue
+		}
+		f := v.Field(fieldIdx)
+		if f.Kind() != reflect.Pointer || f.IsNil() {
+			continue
+		}
+		if _, exists := es.lifetimes[protoNum]; exists {
+			continue
+		}
+		if es.lifetimes == nil {
+			es.lifetimes = make(map[int32]meta.Component)
+		}
+		es.lifetimes[protoNum] = meta.Component{Generated: true, NoLifetime: true, Source: "transformer", SourceAt: time.Now()}
 	}
 }
 
@@ -964,69 +1262,75 @@ func lifetimeUntil(l *pb.Lifetime) time.Time {
 // original push had no Lifetime set — components are marked accordingly so
 // they inherit the entity's lifetime from other components during merge.
 func (s *WorldServer) initEntity(e *pb.Entity, noLifetime ...bool) {
+	s.initEntityFrom(e, "", noLifetime...)
+}
+
+func (s *WorldServer) initEntityFrom(e *pb.Entity, source string, noLifetime ...bool) {
 	fresh := lifetimeTime(e.Lifetime)
 	until := lifetimeUntil(e.Lifetime)
 	nl := len(noLifetime) > 0 && noLifetime[0]
+	now := time.Now()
 
 	v := reflect.ValueOf(e).Elem()
-	meta := make(map[int32]componentMeta)
+	cms := make(map[int32]meta.Component)
 	for protoNum, fieldIdx := range protoNumToFieldIdx {
 		if protoNum == lifetimeProtoNum {
 			continue
 		}
 		f := v.Field(fieldIdx)
 		if f.Kind() == reflect.Pointer && !f.IsNil() {
-			meta[protoNum] = componentMeta{fresh: fresh, until: until, noLifetime: nl}
+			cms[protoNum] = meta.Component{Fresh: fresh, Until: until, NoLifetime: nl, Source: source, SourceAt: now}
 		}
 	}
-	if len(meta) == 0 {
-		meta = nil
+	if len(cms) == 0 {
+		cms = nil
 	}
-	s.setEntity(e.Id, e, meta)
+	s.setEntity(e.Id, e, cms)
 }
 
 // componentAccepted checks whether an incoming component should replace an existing one.
 // Rules: fresher wins; on equal freshness, shorter until wins.
-func componentAccepted(incomingFresh, incomingUntil time.Time, existing componentMeta) bool {
-	if existing.fresh.IsZero() || incomingFresh.IsZero() {
+func componentAccepted(incomingFresh, incomingUntil time.Time, existing meta.Component) bool {
+	if existing.Fresh.IsZero() || incomingFresh.IsZero() {
 		return true // missing timestamps → accept
 	}
-	if incomingFresh.After(existing.fresh) {
+	if incomingFresh.After(existing.Fresh) {
 		return true
 	}
-	if incomingFresh.Before(existing.fresh) {
+	if incomingFresh.Before(existing.Fresh) {
 		return false
 	}
 	// Identical timestamps with explicit expiry — nothing changed, reject.
 	// Both-permanent (zero until) is excluded: permanent entities may carry
 	// content updates at the same freshness.
-	if !incomingUntil.IsZero() && incomingFresh.Equal(existing.fresh) && incomingUntil.Equal(existing.until) {
+	if !incomingUntil.IsZero() && incomingFresh.Equal(existing.Fresh) && incomingUntil.Equal(existing.Until) {
 		return false
 	}
 	// Equal freshness — tiebreak: shorter until wins.
 	// Zero until means no expiry (infinite), which is the longest possible.
-	if incomingUntil.IsZero() && existing.until.IsZero() {
+	if incomingUntil.IsZero() && existing.Until.IsZero() {
 		return true // both permanent, accept
 	}
 	if incomingUntil.IsZero() {
 		return false // incoming is permanent (longer), existing has until (shorter) → keep existing
 	}
-	if existing.until.IsZero() {
+	if existing.Until.IsZero() {
 		return true // incoming has until (shorter), existing is permanent → accept
 	}
-	return !incomingUntil.After(existing.until)
+	return !incomingUntil.After(existing.Until)
 }
 
 // mergeEntityComponents performs per-component LWW merge.
 // Each non-nil pointer field in incoming is independently compared against
 // the existing component's lifetime. Returns the merged entity and whether
 // at least one component was accepted.
-func (s *WorldServer) mergeEntityComponents(entityID string, existing *entityState, incoming *pb.Entity) (*pb.Entity, bool) {
+func (s *WorldServer) mergeEntityComponents(entityID string, existing *entityState, incoming *pb.Entity, source string, isFederation bool) (*pb.Entity, bool) {
 	merged := proto.Clone(existing.entity).(*pb.Entity)
 
+	now := time.Now()
 	inFresh := lifetimeTime(incoming.Lifetime)
 	if inFresh.IsZero() {
-		inFresh = time.Now()
+		inFresh = now
 	}
 	inUntil := lifetimeUntil(incoming.Lifetime)
 
@@ -1055,9 +1359,12 @@ func (s *WorldServer) mergeEntityComponents(entityID string, existing *entitySta
 		mf.Set(sf)
 		applyComponentMergers(protoNum, merged, existing.entity)
 		if existing.lifetimes == nil {
-			existing.lifetimes = make(map[int32]componentMeta)
+			existing.lifetimes = make(map[int32]meta.Component)
 		}
-		existing.lifetimes[protoNum] = componentMeta{fresh: inFresh, until: inUntil, noLifetime: incoming.Lifetime == nil}
+		existing.lifetimes[protoNum] = meta.Component{
+			Fresh: inFresh, Until: inUntil, NoLifetime: incoming.Lifetime == nil,
+			Source: source, SourceAt: now,
+		}
 		anyAccepted = true
 	}
 
@@ -1068,20 +1375,20 @@ func (s *WorldServer) mergeEntityComponents(entityID string, existing *entitySta
 		permanent := false
 		tracked := 0
 		for _, cm := range existing.lifetimes {
-			if cm.noLifetime {
+			if cm.NoLifetime || cm.Generated {
 				continue
 			}
 			tracked++
-			if earliestFresh.IsZero() || cm.fresh.Before(earliestFresh) {
-				earliestFresh = cm.fresh
+			if earliestFresh.IsZero() || cm.Fresh.Before(earliestFresh) {
+				earliestFresh = cm.Fresh
 			}
-			if cm.fresh.After(latestFresh) {
-				latestFresh = cm.fresh
+			if cm.Fresh.After(latestFresh) {
+				latestFresh = cm.Fresh
 			}
-			if cm.until.IsZero() {
+			if cm.Until.IsZero() {
 				permanent = true
-			} else if cm.until.After(latestUntil) {
-				latestUntil = cm.until
+			} else if cm.Until.After(latestUntil) {
+				latestUntil = cm.Until
 			}
 		}
 		if tracked > 0 {

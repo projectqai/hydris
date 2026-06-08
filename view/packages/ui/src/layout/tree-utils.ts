@@ -25,8 +25,15 @@ export function validateLayoutNode(
     switch (content.type) {
       case "component": {
         if (typeof content.componentId !== "string") return null;
-        if (validComponentIds && !validComponentIds.has(content.componentId)) return null;
-        paneContent = { type: "component", componentId: content.componentId };
+        if (validComponentIds && !validComponentIds.has(content.componentId)) {
+          console.warn(`[layout] unknown widget id: ${content.componentId}`);
+          paneContent = { type: "empty", missingWidgetId: content.componentId };
+          break;
+        }
+        paneContent =
+          typeof content.entityId === "string"
+            ? { type: "component", componentId: content.componentId, entityId: content.entityId }
+            : { type: "component", componentId: content.componentId };
         break;
       }
       case "iframe": {
@@ -45,9 +52,12 @@ export function validateLayoutNode(
         paneContent = { type: "sensor", entityId: content.entityId, widgetId: content.widgetId };
         break;
       }
-      case "empty":
-        paneContent = { type: "empty" };
+      case "empty": {
+        const missingWidgetId =
+          typeof content.missingWidgetId === "string" ? content.missingWidgetId : undefined;
+        paneContent = missingWidgetId ? { type: "empty", missingWidgetId } : { type: "empty" };
         break;
+      }
       default:
         return null;
     }
@@ -148,10 +158,37 @@ export function countPanes(node: LayoutNode): number {
   return countPanes(node.first) + countPanes(node.second);
 }
 
+export function getPaneEntityId(content: PaneContent): string | undefined {
+  if (content.type === "component" || content.type === "sensor" || content.type === "camera") {
+    return content.entityId;
+  }
+  return undefined;
+}
+
+export function setPaneEntityId(content: PaneContent, entityId: string | undefined): PaneContent {
+  switch (content.type) {
+    case "component":
+      return entityId
+        ? { ...content, entityId }
+        : {
+            type: "component",
+            componentId: content.componentId,
+            ...(content.props ? { props: content.props } : {}),
+          };
+    case "sensor":
+    case "camera":
+      // sensor and camera always carry an entity, so clearing is a no-op.
+      return entityId ? { ...content, entityId } : content;
+    default:
+      return content;
+  }
+}
+
 export function getStructureKey(node: LayoutNode): string {
   if (node.type === "pane") {
     const c = node.content;
-    if (c.type === "component") return `p:${c.componentId}`;
+    if (c.type === "component")
+      return c.entityId ? `p:${c.componentId}(${c.entityId})` : `p:${c.componentId}`;
     if (c.type === "camera") return `p:cam(${c.entityId})`;
     if (c.type === "sensor") return `p:sensor(${c.entityId},${c.widgetId})`;
     if (c.type === "iframe") return `p:url(${c.url})`;

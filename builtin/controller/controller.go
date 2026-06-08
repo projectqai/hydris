@@ -7,6 +7,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -15,6 +16,11 @@ import (
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 )
+
+// ErrConflict, wrapped into a run-function's returned error with %w, tells the
+// framework to set Conflict state and stop retrying instead of treating the
+// failure as transient (e.g. the entity requires a newer hydris).
+var ErrConflict = errors.New("conflict")
 
 // RunFunc is called for each entity that has Config on this controller.
 // It should block until done or ctx is cancelled.
@@ -61,13 +67,13 @@ func WithOnUpdate(fn func(*pb.Entity)) Option {
 //
 // Use WithEntity to provide the entity template. Run will push it with
 // a heartbeat TTL and keep it alive automatically.
-func Run(ctx context.Context, entityID string, run RunFunc, opts ...Option) error {
+func Run(ctx context.Context, name string, entityID string, run RunFunc, opts ...Option) error {
 	var cfg runConfig
 	for _, o := range opts {
 		o(&cfg)
 	}
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn(name)
 	if err != nil {
 		return err
 	}
@@ -93,12 +99,10 @@ func Run(ctx context.Context, entityID string, run RunFunc, opts ...Option) erro
 	}
 
 	pushConfigurableState := func(current *pb.Entity, state pb.ConfigurableState, errMsg string, applied bool) {
-		var cfgComp *pb.ConfigurableComponent
-		if current.Configurable != nil {
-			cfgComp = proto.Clone(current.Configurable).(*pb.ConfigurableComponent)
-		} else {
-			cfgComp = &pb.ConfigurableComponent{}
+		if current.Configurable == nil {
+			return
 		}
+		cfgComp := proto.Clone(current.Configurable).(*pb.ConfigurableComponent)
 		cfgComp.State = state
 		if errMsg != "" {
 			cfgComp.Error = proto.String(errMsg)
@@ -165,6 +169,14 @@ func Run(ctx context.Context, entityID string, run RunFunc, opts ...Option) erro
 					return
 				}
 
+				// A conflict is permanent for this config — don't hot-retry,
+				// wait for the entity to change (which cancels connCtx).
+				if errors.Is(err, ErrConflict) {
+					pushConfigurableState(e, pb.ConfigurableState_ConfigurableStateConflict, err.Error(), true)
+					<-connCtx.Done()
+					return
+				}
+
 				errMsg := ""
 				if err != nil {
 					errMsg = err.Error()
@@ -218,8 +230,8 @@ func Run(ctx context.Context, entityID string, run RunFunc, opts ...Option) erro
 }
 
 // Push pushes one or more entities to the world service.
-func Push(ctx context.Context, entities ...*pb.Entity) error {
-	grpcConn, err := builtin.BuiltinClientConn()
+func Push(ctx context.Context, name string, entities ...*pb.Entity) error {
+	grpcConn, err := builtin.BuiltinClientConn(name)
 	if err != nil {
 		return err
 	}

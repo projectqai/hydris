@@ -3,24 +3,14 @@ import { ControlButton } from "@hydris/ui/controls";
 import type { Entity } from "@projectqai/proto/world";
 import { Zap } from "lucide-react-native";
 import { View } from "react-native";
-import { useShallow } from "zustand/react/shallow";
 
 import { useRunTask } from "../../../../lib/api/use-run-task";
 import { toast } from "../../../../lib/sonner";
-import { useEntityStore } from "../../store/entity-store";
+import { useEntityTaskables } from "../../hooks/use-entity-taskables";
 import { useSelectionStore } from "../../store/selection-store";
 
 function getTaskableLabel(entity: Entity): string {
   return entity.taskable?.label || entity.label || entity.id;
-}
-
-function hasContextOrAssignee(entity: Entity, targetEntityId: string): boolean {
-  if (!entity.taskable) return false;
-
-  const hasContext = entity.taskable.context.some((c) => c.entityId === targetEntityId);
-  const hasAssignee = entity.taskable.assignee.some((a) => a.entityId === targetEntityId);
-
-  return hasContext || hasAssignee;
 }
 
 function TaskableButton({ taskable }: { taskable: Entity }) {
@@ -58,21 +48,9 @@ function TaskableButton({ taskable }: { taskable: Entity }) {
 
 export function ActionsSection() {
   const selectedEntityId = useSelectionStore((s) => s.selectedEntityId);
-
-  const taskables = useEntityStore(
-    useShallow((s) => {
-      if (!selectedEntityId) return [];
-
-      const allEntities = Array.from(s.entities.values());
-      const withTaskable = allEntities.filter((e) => e.taskable);
-      const matching = withTaskable.filter((e) => hasContextOrAssignee(e, selectedEntityId));
-
-      return matching;
-    }),
-  );
+  const taskables = useEntityTaskables(selectedEntityId);
 
   if (!selectedEntityId) return null;
-
   if (taskables.length === 0) return null;
 
   return (

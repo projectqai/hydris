@@ -6,8 +6,11 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/projectqai/hydris/engine/meta"
 	pb "github.com/projectqai/proto/go"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // MediaTransformer rewrites CameraComponent stream URLs to point through
@@ -20,11 +23,14 @@ type MediaTransformer struct {
 	mu sync.RWMutex
 	// sourceURLs maps "entityID/streamIndex" → original source URL.
 	sourceURLs map[string]string
+	// epochs maps "entityID/streamIndex" → wall-clock time of first frame.
+	epochs map[string]time.Time
 }
 
 func NewMediaTransformer() *MediaTransformer {
 	return &MediaTransformer{
 		sourceURLs: make(map[string]string),
+		epochs:     make(map[string]time.Time),
 	}
 }
 
@@ -32,9 +38,10 @@ func (mt *MediaTransformer) Validate(_ map[string]*pb.Entity, _ *pb.Entity) erro
 	return nil
 }
 
-func (mt *MediaTransformer) Resolve(head map[string]*pb.Entity, changedID string) (upsert []*pb.Entity, remove []string) {
+func (mt *MediaTransformer) Resolve(head map[string]*pb.Entity, changedID string, _ map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	entity := head[changedID]
 	if entity == nil || entity.Camera == nil || len(entity.Camera.Streams) == 0 {
+		mt.clearEntity(changedID)
 		return nil, nil
 	}
 
@@ -47,6 +54,10 @@ func (mt *MediaTransformer) Resolve(head map[string]*pb.Entity, changedID string
 
 	for idx, stream := range entity.Camera.Streams {
 		key := fmt.Sprintf("%s/%d", changedID, idx)
+
+		if epoch, ok := mt.epochs[key]; ok {
+			stream.Epoch = timestamppb.New(epoch)
+		}
 
 		// If URL already points to our proxy, skip.
 		if isProxyURL(stream.Url, httpOrigin) || isProxyURL(stream.Url, rtspOrigin) {
@@ -78,12 +89,33 @@ func (mt *MediaTransformer) Resolve(head map[string]*pb.Entity, changedID string
 	return nil, nil
 }
 
-// GetSourceURL returns the original source URL for an entity's stream.
-// This is used by proxy handlers to connect to the actual camera.
+func (mt *MediaTransformer) clearEntity(entityID string) {
+	prefix := entityID + "/"
+	mt.mu.Lock()
+	defer mt.mu.Unlock()
+	for k := range mt.sourceURLs {
+		if strings.HasPrefix(k, prefix) {
+			delete(mt.sourceURLs, k)
+		}
+	}
+	for k := range mt.epochs {
+		if strings.HasPrefix(k, prefix) {
+			delete(mt.epochs, k)
+		}
+	}
+}
+
 func (mt *MediaTransformer) GetSourceURL(entityID string, streamIndex int) string {
 	mt.mu.RLock()
 	defer mt.mu.RUnlock()
 	return mt.sourceURLs[fmt.Sprintf("%s/%d", entityID, streamIndex)]
+}
+
+// SetEpoch records the wall-clock time of the first frame for a stream.
+func (mt *MediaTransformer) SetEpoch(entityID string, streamIndex int, t time.Time) {
+	mt.mu.Lock()
+	mt.epochs[fmt.Sprintf("%s/%d", entityID, streamIndex)] = t
+	mt.mu.Unlock()
 }
 
 // isProxyURL returns true if the URL's path matches a media proxy endpoint.

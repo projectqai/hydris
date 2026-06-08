@@ -291,7 +291,7 @@ func buildSensorEntity(s *weatherSensor, sensorIdx, tick int, networkEntityID st
 			Kind:       pb.MetricKind_MetricKindRadiationHazard.Enum(),
 			Unit:       pb.MetricUnit_MetricUnitMicrosievertPerHour,
 			Label:      proto.String("Dose Rate"),
-			Id:         proto.Uint32(6),
+			Id:         proto.Uint32(20),
 			MeasuredAt: now,
 			Val:        &pb.Metric_Double{Double: rate},
 			Alerting:   alert.Enum(),
@@ -330,7 +330,13 @@ func buildSensorEntity(s *weatherSensor, sensorIdx, tick int, networkEntityID st
 			Longitude: s.lon,
 			Altitude:  proto.Float64(s.alt),
 		},
-		Symbol: &pb.SymbolComponent{MilStd2525C: "SFGPE-----*****"},
+		Classification: &pb.ClassificationComponent{
+			Taxonomy: []*pb.ClassificationTaxonomy{{
+				Kind: &pb.ClassificationTaxonomy_Equipment{Equipment: &pb.EquipmentTaxonomy{
+					Sensor: &pb.EquipmentTaxonomySensor{Emplaced: &pb.EquipmentTaxonomySensorEmplaced{}},
+				}},
+			}},
+		},
 		Metric: &pb.MetricComponent{Metrics: metrics},
 		Link: &pb.LinkComponent{
 			Status:   linkStatus.Enum(),
@@ -371,7 +377,7 @@ func runSensorNetwork(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 		"update_ms", cfg.UpdateIntervalMs,
 	)
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("playground")
 	if err != nil {
 		return err
 	}

@@ -3,6 +3,8 @@
 import { useEffect } from "react";
 import { Platform, Vibration } from "react-native";
 
+import { useEntityMutation } from "../../../lib/api/use-entity-mutation";
+import { useEntityStore } from "../../aware/store/entity-store";
 import { useAlarmStore } from "../alarm-store";
 import { useAlarmAudio } from "../use-alarm-audio";
 import { useAlarmEffects } from "../use-alarm-effects";
@@ -14,6 +16,7 @@ export function AlarmOverlay() {
   useAlarmEffects();
   const topAlarm = useAlarmStore((s) => s.getTopAlarm());
   const acknowledge = useAlarmStore((s) => s.acknowledge);
+  const { pushDeviceConfig } = useEntityMutation();
   const player = useAlarmAudio();
   const isActive = !!topAlarm;
 
@@ -33,7 +36,17 @@ export function AlarmOverlay() {
     };
   }, [isActive, player]);
 
+  const handleAcknowledge = (sensorId: string) => {
+    acknowledge(sensorId);
+    const entity = useEntityStore.getState().entities.get(sensorId);
+    if (!entity) return;
+    const configValue = entity.config?.value ?? entity.configurable?.value;
+    pushDeviceConfig(entity, { ...((configValue ?? {}) as object), cooldown: true }).catch(
+      () => {},
+    );
+  };
+
   if (!topAlarm) return null;
 
-  return <AlarmModal alarm={topAlarm} onAcknowledge={() => acknowledge(topAlarm.sensorId)} />;
+  return <AlarmModal alarm={topAlarm} onAcknowledge={() => handleAcknowledge(topAlarm.sensorId)} />;
 }

@@ -78,6 +78,7 @@ func (s *WorldServer) setTaskExecution(entity *pb.Entity, req *connect.Request[p
 		Task:     entity.Id,
 		State:    pb.TaskExecutionState_TaskExecutionStatePending,
 		Priority: req.Msg.Priority,
+		Target:   req.Msg.Target,
 	}
 	entity.Lifetime.Fresh = timestamppb.Now()
 
@@ -105,11 +106,13 @@ func (s *WorldServer) runTaskPriorityQueue(entity *pb.Entity, req *connect.Reque
 		Lifetime: &pb.Lifetime{
 			From: now,
 		},
+		Routing:    &pb.Routing{Channels: []*pb.Channel{{}}},
 		Controller: entity.Controller,
 		TaskExecution: &pb.TaskExecutionComponent{
 			Task:     entity.Id,
 			State:    pb.TaskExecutionState_TaskExecutionStatePending,
 			Priority: req.Msg.Priority,
+			Target:   req.Msg.Target,
 		},
 	}
 
@@ -137,6 +140,7 @@ func (s *WorldServer) runTaskSpawn(entity *pb.Entity) (*connect.Response[pb.RunT
 		Lifetime: &pb.Lifetime{
 			From: now,
 		},
+		Routing:    &pb.Routing{Channels: []*pb.Channel{{}}},
 		Controller: entity.Controller,
 		TaskExecution: &pb.TaskExecutionComponent{
 			Task:  entity.Id,

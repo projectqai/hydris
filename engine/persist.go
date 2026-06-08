@@ -64,7 +64,7 @@ func (s *WorldServer) LoadDefaults(b []byte) error {
 		}
 
 		if es, ok := s.head[e.Id]; ok {
-			merged, accepted := s.mergeEntityComponents(e.Id, es, e)
+			merged, accepted := s.mergeEntityComponents(e.Id, es, e, "persist", false)
 			if !accepted {
 				continue
 			}
@@ -165,6 +165,46 @@ func (s *WorldServer) isLocal(e *pb.Entity) bool {
 	return s.nodeID != "" && e.Controller != nil && e.Controller.Node != nil && *e.Controller.Node == s.nodeID
 }
 
+func (s *WorldServer) isPersisted(es *entityState) bool {
+	e := es.entity
+	if !s.isLocal(e) {
+		return false
+	}
+	if s.nodeEntity != nil && (e.Controller == nil || e.Controller.Origin == nil || *e.Controller.Origin != s.nodeEntity.Id) {
+		return false
+	}
+	if lt := e.GetLifetime(); lt != nil && lt.GetUntil().IsValid() {
+		return false
+	}
+	return e.Config != nil || e.Device != nil || e.Artifact != nil || e.Policy != nil ||
+		(e.Geo != nil && es.isInfinite(11))
+}
+
+// persistableStub returns a copy of the entity containing only its durable
+// components — the subset that survives a FlushToFile/LoadFromFile round-trip.
+// Caller must hold s.l. Transient components (Track, Sensor, ...) and
+// transformer-generated derivatives are dropped.
+func (es *entityState) persistableStub() *pb.Entity {
+	e := es.entity
+	stub := &pb.Entity{Id: e.Id, Label: e.Label, Controller: e.Controller, Lifetime: e.Lifetime}
+	if e.Config != nil {
+		stub.Config = e.Config
+	}
+	if e.Device != nil {
+		stub.Device = e.Device
+	}
+	if e.Artifact != nil {
+		stub.Artifact = e.Artifact
+	}
+	if e.Geo != nil && es.isInfinite(11) {
+		stub.Geo = e.Geo
+	}
+	if e.Policy != nil {
+		stub.Policy = e.Policy
+	}
+	return stub
+}
+
 // FlushToFile writes the current head state to the world file atomically.
 // Only local entities (controller.node == this node) are persisted, and only
 // the config and device components are kept. Entities with lifetime.until
@@ -177,36 +217,10 @@ func (s *WorldServer) FlushToFile() error {
 	s.l.RLock()
 	entities := make([]*pb.Entity, 0, len(s.head))
 	for _, es := range s.head {
-		e := es.entity
-		if !s.isLocal(e) {
+		if !s.isPersisted(es) {
 			continue
 		}
-
-		hasSomething := false
-
-		stub := &pb.Entity{Id: e.Id, Label: e.Label, Controller: e.Controller, Lifetime: e.Lifetime}
-		if e.Config != nil {
-			stub.Config = e.Config
-			hasSomething = true
-		}
-		if e.Device != nil {
-			stub.Device = e.Device
-			hasSomething = true
-		}
-		if e.Artifact != nil {
-			stub.Artifact = e.Artifact
-			hasSomething = true
-		}
-		if e.Geo != nil && es.isInfinite(11) {
-			stub.Geo = e.Geo
-			hasSomething = true
-		}
-
-		if !hasSomething {
-			continue
-		}
-
-		entities = append(entities, stub)
+		entities = append(entities, es.persistableStub())
 	}
 	s.l.RUnlock()
 

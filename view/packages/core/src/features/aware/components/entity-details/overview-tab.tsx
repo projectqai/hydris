@@ -9,7 +9,6 @@ import {
   ArrowUp,
   Compass,
   Copy,
-  Gauge,
   MapPin,
   Mountain,
   PauseCircle,
@@ -29,10 +28,11 @@ import { formatAltitude, formatTime } from "../../../../lib/api/use-track-utils"
 import { toast } from "../../../../lib/sonner";
 import { useCameraPaneContext } from "../../camera-pane-context";
 import { usePIPContext } from "../../pip-context";
-import { useEntityStore } from "../../store/entity-store";
+import { selectDetectionsByDetector, useEntityStore } from "../../store/entity-store";
 import {
   calculateCourseFromVelocity,
   calculateGroundSpeed,
+  calculateHeadingFromOrientation,
   calculateVerticalRate,
   formatAcceleration,
   formatAngularRate,
@@ -215,6 +215,14 @@ function PositionEditor({ entity }: PositionEditorProps) {
       </View>
       <InfoRow icon={MapPin} label="Coordinates" value={coordString} mono />
       <InfoRow icon={Mountain} label="Altitude" value={formatAltitude(entity.geo.altitude)} mono />
+      {entity.orientation && (
+        <InfoRow
+          icon={RotateCw}
+          label="Heading"
+          value={formatCourse(calculateHeadingFromOrientation(entity.orientation))}
+          mono
+        />
+      )}
       {/* Edit position functionality disabled can't edit track positions
       <Pressable
         onPress={startEditing}
@@ -260,10 +268,9 @@ function KinematicsSection({ entity }: { entity: Entity }) {
   const velocityEnu = entity.kinematics?.velocityEnu;
   const accelerationEnu = entity.kinematics?.accelerationEnu;
   const angularVelocity = entity.kinematics?.angularVelocityBody;
-  const courseFromBearing = entity.bearing?.azimuth;
 
   const groundSpeed = calculateGroundSpeed(velocityEnu);
-  const courseFromVelocity = calculateCourseFromVelocity(velocityEnu);
+  const course = calculateCourseFromVelocity(velocityEnu);
   const verticalRate = calculateVerticalRate(velocityEnu);
 
   const showVelocityEnu = hasEnuData(velocityEnu);
@@ -287,20 +294,7 @@ function KinematicsSection({ entity }: { entity: Entity }) {
             mono
           />
         )}
-        <InfoRow
-          icon={Compass}
-          label="Course"
-          value={formatCourse(courseFromBearing ?? courseFromVelocity)}
-          mono
-        />
-        {courseFromBearing !== undefined && courseFromVelocity !== undefined && (
-          <InfoRow
-            icon={Gauge}
-            label="Track (velocity)"
-            value={formatCourse(courseFromVelocity)}
-            mono
-          />
-        )}
+        <InfoRow icon={Compass} label="Course" value={formatCourse(course)} mono />
       </View>
 
       {showVelocityEnu && velocityEnu && (
@@ -359,16 +353,7 @@ export function OverviewTab({ entity }: OverviewTabProps) {
   const liveMetrics = useEntityStore(
     (s) => s.entities.get(entity.id)?.metric?.metrics ?? EMPTY_METRICS,
   );
-  const sensorDetections = useEntityStore(
-    useShallow((s) => {
-      const result: Entity[] = [];
-      for (const id of s.detectionEntityIds) {
-        const e = s.entities.get(id);
-        if (e?.detection?.detectorEntityId === entity.id) result.push(e);
-      }
-      return result;
-    }),
-  );
+  const sensorDetections = useEntityStore(useShallow(selectDetectionsByDetector(entity.id)));
 
   useAnimatedReaction(
     () => rightPanelCollapsed.value,

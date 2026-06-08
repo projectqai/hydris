@@ -324,7 +324,7 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 
 	serviceID := controllerName + ".service"
 
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:    serviceID,
 		Label: proto.String("TAK"),
 		Controller: &pb.Controller{
@@ -335,11 +335,31 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 		},
 		Configurable: &pb.ConfigurableComponent{
 			SupportedDeviceClasses: []*pb.DeviceClassOption{
-				{Class: "tcp_server", Label: "TCP Server"},
-				{Class: "tcp_client", Label: "TCP Client"},
-				{Class: "udp_send", Label: "UDP Send"},
-				{Class: "udp_receive", Label: "UDP Receive"},
-				{Class: "multicast", Label: "Multicast"},
+				{
+					Class:       "tcp_server",
+					Label:       "TCP Server",
+					Description: "Listen for TAK clients (e.g. ATAK/WinTAK) to connect over TCP. Each connected client receives CoT for the configured entities and can push CoT back.",
+				},
+				{
+					Class:       "tcp_client",
+					Label:       "TCP Client",
+					Description: "Connect outbound to a TAK server (e.g. FreeTAKServer, TAKServer) over TCP. Use this to publish hydris's view into an existing TAK network.",
+				},
+				{
+					Class:       "udp_send",
+					Label:       "UDP Send",
+					Description: "Send CoT as UDP unicast to a single address. Use this for simple one-way feeds to a fixed UDP listener.",
+				},
+				{
+					Class:       "udp_receive",
+					Label:       "UDP Receive",
+					Description: "Listen for inbound CoT on a UDP port. Use this to ingest CoT from devices that send via UDP.",
+				},
+				{
+					Class:       "multicast",
+					Label:       "Multicast",
+					Description: "Send and/or receive CoT on a UDP multicast group. Use this for local-network TAK mesh discovery (default 239.2.3.1:6969).",
+				},
 			},
 		},
 		Interactivity: &pb.InteractivityComponent{
@@ -357,8 +377,8 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 		{Class: "multicast", Label: "Multicast", Schema: multicastSchema},
 	}
 
-	return controller.WatchChildren(ctx, serviceID, controllerName, classes, func(ctx context.Context, entityID string) error {
-		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+	return controller.WatchChildren(ctx, controllerName, serviceID, controllerName, classes, func(ctx context.Context, entityID string) error {
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			ready()
 			switch entity.Device.GetClass() {
 			case "tcp_server":

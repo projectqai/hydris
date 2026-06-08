@@ -1,3 +1,4 @@
+import { headerIconSize, useMeasuredScale } from "@hydris/ui/lib/widget-scale";
 import { Image } from "expo-image";
 import { RefreshCw } from "lucide-react-native";
 import { useState } from "react";
@@ -17,6 +18,7 @@ function isValidImageSrc(src: string): boolean {
 
 export function ImageStream({ url, objectFit = "cover" }: StreamComponentProps) {
   const [key, setKey] = useState(() => Date.now());
+  const { scale, onLayout } = useMeasuredScale();
   const [connectionState, setConnectionState] = useState<ConnectionState>(
     isValidImageSrc(url) ? "connecting" : "failed",
   );
@@ -24,8 +26,10 @@ export function ImageStream({ url, objectFit = "cover" }: StreamComponentProps) 
     isValidImageSrc(url) ? null : "Invalid image source",
   );
 
+  const refreshIconSize = headerIconSize(scale) - 2;
+
   return (
-    <View className="relative size-full bg-black/20">
+    <View className="relative size-full bg-black/20" onLayout={onLayout}>
       {isValidImageSrc(url) && (
         <Image
           key={key}
@@ -56,15 +60,17 @@ export function ImageStream({ url, objectFit = "cover" }: StreamComponentProps) 
         }}
       />
       {connectionState === "connected" && (
-        <Pressable
-          onPress={() => setKey((k) => k + 1)}
-          hitSlop={12}
-          accessibilityLabel="Refresh image"
-          accessibilityRole="button"
-          className="absolute right-2 bottom-2 z-10 rounded-full bg-black/50 p-1.5 active:opacity-50"
-        >
-          <RefreshCw size={14} color="white" />
-        </Pressable>
+        <View className="absolute right-2 bottom-2 z-10 items-center justify-center rounded bg-black/35 p-1">
+          <Pressable
+            onPress={() => setKey((k) => k + 1)}
+            hitSlop={12}
+            accessibilityLabel="Refresh image"
+            accessibilityRole="button"
+            className="hover:bg-glass-hover active:bg-surface-overlay/12 -m-1 rounded p-1"
+          >
+            <RefreshCw size={refreshIconSize} color="white" strokeWidth={1.5} />
+          </Pressable>
+        </View>
       )}
     </View>
   );

@@ -49,6 +49,13 @@ func setupWebSocket(loop *eventloop.EventLoop, vm *goja.Runtime) {
 				}
 			}
 			listeners[event] = remaining
+
+			// W3C on<event> handler property (onopen, onmessage, onerror, onclose).
+			if h := obj.Get("on" + event); h != nil {
+				if cb, ok := goja.AssertFunction(h); ok {
+					_, _ = cb(obj, args...)
+				}
+			}
 		}
 
 		obj.Set("addEventListener", addEventListener)

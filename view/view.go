@@ -8,10 +8,10 @@ import (
 )
 
 //go:embed all:apps/foss/build
-var dist embed.FS
+var Dist embed.FS
 
 func NewWebServer() (http.Handler, error) {
-	distFS, err := fs.Sub(dist, "apps/foss/build")
+	distFS, err := fs.Sub(Dist, "apps/foss/build")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get dist subdirectory: %w", err)
 	}

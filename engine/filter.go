@@ -81,6 +81,20 @@ func entityHasComponent(entity *pb.Entity, field uint32) bool {
 		return entity.Chat != nil
 	case pb.EntityComponent_EntityComponentArtifact:
 		return entity.Artifact != nil
+	case pb.EntityComponent_EntityComponentAssembly:
+		return entity.Assembly != nil
+	case pb.EntityComponent_EntityComponentMapLayer:
+		return entity.MapLayer != nil
+	case pb.EntityComponent_EntityComponentManualControl:
+		return entity.ManualControl != nil
+	case pb.EntityComponent_EntityComponentTargetManualControl:
+		return entity.TargetManualControl != nil
+	case pb.EntityComponent_EntityComponentLease:
+		return entity.Lease != nil
+	case pb.EntityComponent_EntityComponentRouting:
+		return entity.Routing != nil
+	case pb.EntityComponent_EntityComponentGnss:
+		return entity.Gnss != nil
 	}
 	return false
 }

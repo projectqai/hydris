@@ -25,7 +25,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	serviceID := controllerName + ".service"
 
 	pushSchema := func() {
-		_ = controller.Push(ctx, &pb.Entity{
+		_ = controller.Push(ctx, controllerName, &pb.Entity{
 			Id:    serviceID,
 			Label: proto.String("Artifact Storage"),
 			Controller: &pb.Controller{
@@ -50,7 +50,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	// backend enum stays up to date in the UI.
 	OnStoresChanged(pushSchema)
 
-	return controller.Run(ctx, serviceID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+	return controller.Run(ctx, controllerName, serviceID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 		if Server == nil {
 			return nil
 		}

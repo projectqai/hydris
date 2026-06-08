@@ -31,7 +31,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 
 	logger.Info("network scanner started")
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("netscan")
 	if err != nil {
 		return fmt.Errorf("grpc connect: %w", err)
 	}
@@ -48,7 +48,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	controllerName := "netscan"
 
 	// Push service entity.
-	if err := controller.Push(ctx, &pb.Entity{
+	if err := controller.Push(ctx, controllerName, &pb.Entity{
 		Id:    "netscan.service",
 		Label: proto.String("Network Scanner"),
 		Controller: &pb.Controller{
@@ -79,7 +79,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		})
 	}
 
-	return controller.RunPolled(ctx, "netscan.service", func(ctx context.Context, entity *pb.Entity) (time.Duration, error) {
+	return controller.RunPolled(ctx, controllerName, "netscan.service", func(ctx context.Context, entity *pb.Entity) (time.Duration, error) {
 		var lastSnapshotSize int
 
 		for snapshot := range scanNetwork(ctx, logger, func(fraction float64) {

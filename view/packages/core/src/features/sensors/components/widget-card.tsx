@@ -2,9 +2,10 @@
 
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
+import { headerIconSize, useMeasuredScale } from "@hydris/ui/lib/widget-scale";
 import { BellOff, Lock, TriangleAlert, Wifi, WifiOff, X } from "lucide-react-native";
 import type { PropsWithChildren } from "react";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Pressable, Text, View } from "react-native";
 import Animated, {
   cancelAnimation,
@@ -15,7 +16,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 import type { CardStatus, ConnectionState, SignalStrength } from "../types";
-import { BASE, computeScale, ScaleContext } from "./scale-context";
+import { BASE, ScaleContext } from "./scale-context";
 import { VignetteGlow } from "./vignette-glow";
 
 type WidgetCardProps = PropsWithChildren<{
@@ -111,30 +112,17 @@ export function WidgetCard({
   const t = useThemeColors();
   const pulseStyle = useDisconnectPulse(status);
   const reconnectPulse = useReconnectPulse(connectionState);
-  const [scale, setScale] = useState(() => computeScale(400, 400));
+  const { scale, onLayout } = useMeasuredScale();
   const signal = useSignalInfo(connectionState, signalStrength, t);
 
   const nameFontSize = Math.max(12, Math.round(BASE.labelText * scale.body));
-  const iconSize = Math.round(nameFontSize * 1.25);
+  const iconSize = headerIconSize(scale);
   const metaFontSize = Math.max(10, Math.round(BASE.smallText * scale.body));
 
   return (
     <Animated.View style={[{ flex: 1 }, pulseStyle]}>
       <View
-        onLayout={(e) => {
-          const { width, height } = e.nativeEvent.layout;
-          const next = computeScale(width, height);
-          // Skip re-render when clamped scale fields are unchanged; layout
-          // events fire many times per resize but most produce identical scale.
-          setScale((prev) =>
-            prev.hero === next.hero &&
-            prev.body === next.body &&
-            prev.element === next.element &&
-            prev.padding === next.padding
-              ? prev
-              : next,
-          );
-        }}
+        onLayout={onLayout}
         className={cn(
           "border-background bg-background flex-1 border",
           status === "alarm" && "border-red",
@@ -156,7 +144,7 @@ export function WidgetCard({
             >
               <Text
                 className="font-sans-semibold text-foreground/80 min-w-0 shrink"
-                style={{ fontSize: Math.max(12, Math.round(BASE.labelText * scale.body)) }}
+                style={{ fontSize: nameFontSize }}
                 numberOfLines={1}
               >
                 {sensorName}

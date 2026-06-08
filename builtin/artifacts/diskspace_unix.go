@@ -18,8 +18,8 @@ func (s *LocalStore) checkDiskSpace() error {
 		return fmt.Errorf("cannot determine disk usage for %s: zero blocks (refusing write)", s.dataDir)
 	}
 	usedPct := float64(stat.Blocks-stat.Bfree) / float64(stat.Blocks)
-	if usedPct >= 0.80 {
-		return fmt.Errorf("disk usage %.0f%% >= 80%% for %s (refusing write)", usedPct*100, s.dataDir)
+	if usedPct >= 0.90 {
+		return fmt.Errorf("disk usage %.0f%% >= 90%% for %s (refusing write)", usedPct*100, s.dataDir)
 	}
 	return nil
 }

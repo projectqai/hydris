@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"sync"
 
@@ -88,19 +89,16 @@ func (s *ArtifactServer) DownloadArtifact(
 		return err
 	}
 
-	// If the artifact only has external locations, no blob to stream.
-	if len(art.Location) > 0 {
-		return nil
-	}
-
-	// Stream blob data.
+	// Stream blob data if available locally.
 	store := s.getStore()
 	rc, err := store.Get(ctx, art.Id)
 	if err != nil && store != s.local {
-		// Read fallback to local store.
 		rc, err = s.local.Get(ctx, art.Id)
 	}
 	if err != nil {
+		if len(art.Location) > 0 {
+			return nil
+		}
 		return connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact data not found: %w", err))
 	}
 	defer rc.Close()
@@ -143,61 +141,65 @@ func (s *ArtifactServer) UploadArtifact(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("first message must contain entity id"))
 	}
 
-	// Verify the entity exists and has an artifact component.
-	resp, err := s.world.GetEntity(ctx, &pb.GetEntityRequest{Id: entityID})
-	if err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("entity not found: %w", err))
-	}
-	if resp.Entity == nil || resp.Entity.Artifact == nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("entity %s has no artifact component", entityID))
-	}
-	artID := resp.Entity.Artifact.Id
-
-	// Collect all chunks (first message may also contain a chunk).
+	// Collect chunks into a buffer; first message may also contain one.
 	var buf bytes.Buffer
-	h := sha256.New()
-	w := io.MultiWriter(&buf, h)
-
 	if chunk := first.GetChunk(); len(chunk) > 0 {
-		if _, err := w.Write(chunk); err != nil {
-			return nil, err
-		}
+		buf.Write(chunk)
 	}
-
 	for stream.Receive() {
 		if chunk := stream.Msg().GetChunk(); len(chunk) > 0 {
-			if _, err := w.Write(chunk); err != nil {
-				return nil, err
-			}
+			buf.Write(chunk)
 		}
 	}
 	if err := stream.Err(); err != nil {
 		return nil, err
 	}
 
-	// Write to store.
-	store := s.getStore()
-	if err := store.Put(ctx, artID, &buf); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("store artifact: %w", err))
+	if err := s.WriteArtifact(ctx, entityID, &buf); err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&pb.UploadArtifactResponse{}), nil
+}
+
+// WriteArtifact stores body as the payload of entityID's artifact component
+// and updates the entity's sha256 and size. Shared by the gRPC UploadArtifact
+// handler and the HTTP POST /artifacts/{id} handler.
+func (s *ArtifactServer) WriteArtifact(ctx context.Context, entityID string, body io.Reader) error {
+	resp, err := s.world.GetEntity(ctx, &pb.GetEntityRequest{Id: entityID})
+	if err != nil {
+		return connect.NewError(connect.CodeNotFound, fmt.Errorf("entity not found: %w", err))
+	}
+	if resp.Entity == nil || resp.Entity.Artifact == nil {
+		return connect.NewError(connect.CodeNotFound, fmt.Errorf("entity %s has no artifact component", entityID))
+	}
+	artID := resp.Entity.Artifact.Id
+
+	hw := &hashSizeWriter{h: sha256.New()}
+	if err := s.getStore().Put(ctx, artID, io.TeeReader(body, hw)); err != nil {
+		return connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("store artifact: %w", err))
 	}
 
-	// Update entity with sha256 and size.
-	hash := hex.EncodeToString(h.Sum(nil))
-	size := int64(buf.Len())
+	sum := hex.EncodeToString(hw.h.Sum(nil))
+	size := hw.n
 	if _, err := s.world.Push(ctx, &pb.EntityChangeRequest{
 		Changes: []*pb.Entity{{
-			Id: entityID,
-			Artifact: &pb.ArtifactComponent{
-				Id:        artID,
-				Sha256:    &hash,
-				SizeBytes: &size,
-			},
+			Id:       entityID,
+			Artifact: &pb.ArtifactComponent{Id: artID, Sha256: &sum, SizeBytes: &size},
 		}},
 	}); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update artifact metadata: %w", err))
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("update artifact metadata: %w", err))
 	}
+	return nil
+}
 
-	return connect.NewResponse(&pb.UploadArtifactResponse{}), nil
+type hashSizeWriter struct {
+	h hash.Hash
+	n int64
+}
+
+func (w *hashSizeWriter) Write(p []byte) (int, error) {
+	w.n += int64(len(p))
+	return w.h.Write(p)
 }
 
 // DeleteBlob deletes the blob for an artifact ID from the active store.

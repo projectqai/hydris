@@ -47,6 +47,7 @@ export function createLabelLayer({ data, visible, baseLayer = "dark" }: LabelLay
     fontFamily: "Inter, sans-serif",
     fontWeight: "normal",
     fontSettings: { sdf: true, buffer: 8, cutoff: 0.15 },
+    characterSet: "auto",
     outlineWidth: config.width,
     outlineColor: config.outline,
     pickable: false,

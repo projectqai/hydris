@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 )
@@ -64,19 +65,60 @@ var LocalPermissions Permissions
 // on the main engine port without needing separate listeners.
 var sharedMux sync.Mutex
 var currentMux = http.NewServeMux()
+var registeredPatterns = make(map[string]bool)
 
 // Handle registers an HTTP handler on the shared builtin mux.
+// Duplicate patterns on the same mux are silently ignored so builtins
+// can call this unconditionally on every restart.
 func Handle(pattern string, handler http.Handler) {
 	sharedMux.Lock()
 	defer sharedMux.Unlock()
+	if registeredPatterns[pattern] {
+		return
+	}
 	currentMux.Handle(pattern, handler)
+	registeredPatterns[pattern] = true
 }
 
 // HandleFunc registers an HTTP handler function on the shared builtin mux.
+// Duplicate patterns on the same mux are silently ignored.
 func HandleFunc(pattern string, handler http.HandlerFunc) {
 	sharedMux.Lock()
 	defer sharedMux.Unlock()
+	if registeredPatterns[pattern] {
+		return
+	}
 	currentMux.HandleFunc(pattern, handler)
+	registeredPatterns[pattern] = true
+}
+
+// PluginHandle mounts handler under /plugin/<name>/<pattern>.
+// Each builtin owns the /plugin/<name>/ namespace; pick stable sub-paths.
+// Pattern may include go 1.22+ method/wildcard syntax (e.g. "GET /cam/{id}").
+func PluginHandle(name, pattern string, handler http.Handler) {
+	Handle(pluginPattern(name, pattern), handler)
+}
+
+// PluginHandleFunc is the func variant of PluginHandle.
+func PluginHandleFunc(name, pattern string, handler http.HandlerFunc) {
+	HandleFunc(pluginPattern(name, pattern), handler)
+}
+
+// PluginPath returns the canonical /plugin/<name>/<rest> URL path.
+func PluginPath(name, rest string) string {
+	return "/plugin/" + name + "/" + strings.TrimPrefix(rest, "/")
+}
+
+func pluginPattern(name, pattern string) string {
+	method, rest, hasMethod := strings.Cut(pattern, " ")
+	if !hasMethod {
+		method, rest = "", pattern
+	}
+	full := "/plugin/" + name + "/" + strings.TrimPrefix(rest, "/")
+	if method != "" {
+		return method + " " + full
+	}
+	return full
 }
 
 // HTTPHandler returns a handler that delegates to the current shared mux.
@@ -96,6 +138,7 @@ func ResetHTTPHandlers() {
 	sharedMux.Lock()
 	defer sharedMux.Unlock()
 	currentMux = http.NewServeMux()
+	registeredPatterns = make(map[string]bool)
 }
 
 const bufSize = 1024 * 1024
@@ -118,11 +161,26 @@ func BuiltinDialer() grpc.DialOption {
 	})
 }
 
-func BuiltinClientConn() (*grpc.ClientConn, error) {
+// builtinCreds injects the builtin name as per-RPC metadata so the engine
+// can identify which builtin is making each call.
+type builtinCreds struct {
+	name string
+}
+
+func (b builtinCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
+	return map[string]string{"x-builtin-name": b.name}, nil
+}
+
+func (b builtinCreds) RequireTransportSecurity() bool { return false }
+
+var _ credentials.PerRPCCredentials = builtinCreds{}
+
+func BuiltinClientConn(name string) (*grpc.ClientConn, error) {
 	return grpc.NewClient(
 		"passthrough:///bufconn",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		BuiltinDialer(),
+		grpc.WithPerRPCCredentials(builtinCreds{name: name}),
 	)
 }
 

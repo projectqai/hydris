@@ -6,6 +6,7 @@ export type VideoStreamProps = {
   url: string;
   protocol: VideoProtocol;
   objectFit?: "contain" | "cover";
+  cameraEntityId?: string;
 };
 
 export type StreamComponentProps = {

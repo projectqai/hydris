@@ -4,11 +4,11 @@ import type { SharedValue } from "react-native-reanimated";
 export type PaneId = string;
 
 export type PaneContent =
-  | { type: "component"; componentId: string; props?: Record<string, unknown> }
+  | { type: "component"; componentId: string; entityId?: string; props?: Record<string, unknown> }
   | { type: "iframe"; url: string }
   | { type: "camera"; entityId: string }
   | { type: "sensor"; entityId: string; widgetId: string }
-  | { type: "empty" };
+  | { type: "empty"; missingWidgetId?: string };
 
 export type SplitLayout = {
   type: "split";
@@ -90,4 +90,5 @@ export type LayoutEditingContextValue = {
   pickerState: WidgetPickerState;
   openPicker: (path: NodePath, currentContent: PaneContent) => void;
   closePicker: () => void;
+  openEntityPicker: (path: NodePath, content: PaneContent) => void;
 };

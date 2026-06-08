@@ -268,7 +268,7 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 
 	serviceEntityID := controllerName + ".service"
 
-	if err := controller.Push(ctx,
+	if err := controller.Push(ctx, controllerName,
 		&pb.Entity{
 			Id:    serviceEntityID,
 			Label: proto.String("Space Track"),
@@ -280,7 +280,11 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 			},
 			Configurable: &pb.ConfigurableComponent{
 				SupportedDeviceClasses: []*pb.DeviceClassOption{
-					{Class: "orbits", Label: "Orbit Tracker"},
+					{
+						Class:       "orbits",
+						Label:       "Orbit Tracker",
+						Description: "Fetch TLEs from space-track.org and propagate satellite orbits as entities. Use this to display the position of known satellites in the world.",
+					},
 				},
 			},
 			Interactivity: &pb.InteractivityComponent{
@@ -295,8 +299,8 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		{Class: "orbits", Label: "Orbit Tracker", Schema: orbitSchema},
 	}
 
-	return controller.WatchChildren(ctx, serviceEntityID, controllerName, classes, func(ctx context.Context, entityID string) error {
-		return controller.Run(ctx, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+	return controller.WatchChildren(ctx, controllerName, serviceEntityID, controllerName, classes, func(ctx context.Context, entityID string) error {
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			ready()
 			return runTracker(ctx, logger, entity)
 		})
@@ -320,7 +324,7 @@ func runTracker(ctx context.Context, logger *slog.Logger, entity *pb.Entity) err
 		"tleRefresh", trackerConfig.TLERefreshSeconds,
 		"tle", trackerConfig.TLESource)
 
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("spacetrack")
 	if err != nil {
 		return fmt.Errorf("gRPC connection: %w", err)
 	}

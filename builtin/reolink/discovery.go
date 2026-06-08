@@ -2,13 +2,10 @@ package reolink
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"net"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/netscan"
 	"github.com/projectqai/hydris/goclient"
@@ -20,10 +17,8 @@ func isReolinkVendor(vendor string) bool {
 	return strings.Contains(strings.ToLower(vendor), "reolink")
 }
 
-// watchNetscanForCameras watches all DeviceComponent entities and creates
-// reolink.device.* child entities for those matching the Reolink vendor.
 func watchNetscanForCameras(ctx context.Context, logger *slog.Logger) {
-	grpcConn, err := builtin.BuiltinClientConn()
+	grpcConn, err := builtin.BuiltinClientConn("reolink")
 	if err != nil {
 		logger.Error("netscan watcher: failed to connect", "error", err)
 		return
@@ -34,7 +29,7 @@ func watchNetscanForCameras(ctx context.Context, logger *slog.Logger) {
 
 	stream, err := goclient.WatchEntitiesWithRetry(ctx, client, &pb.ListEntitiesRequest{
 		Filter: &pb.EntityFilter{
-			Component: []uint32{50}, // DeviceComponent
+			Component: []uint32{50},
 		},
 	})
 	if err != nil {
@@ -42,7 +37,7 @@ func watchNetscanForCameras(ctx context.Context, logger *slog.Logger) {
 		return
 	}
 
-	known := make(map[string]string) // netscan entity ID -> reolink device entity ID
+	known := make(map[string]string)
 
 	defer func() {
 		for _, childID := range known {
@@ -68,7 +63,6 @@ func watchNetscanForCameras(ctx context.Context, logger *slog.Logger) {
 
 		entity := event.Entity
 
-		// Skip entities owned by this controller.
 		if entity.Controller != nil && entity.Controller.GetId() == controllerName {
 			continue
 		}
@@ -131,8 +125,12 @@ func watchNetscanForCameras(ctx context.Context, logger *slog.Logger) {
 							Host: proto.String(ip),
 						},
 					},
-					Symbol: &pb.SymbolComponent{
-						MilStd2525C: "SFGPE-----",
+					Classification: &pb.ClassificationComponent{
+						Taxonomy: []*pb.ClassificationTaxonomy{{
+							Kind: &pb.ClassificationTaxonomy_Equipment{Equipment: &pb.EquipmentTaxonomy{
+								Sensor: &pb.EquipmentTaxonomySensor{Kind: &pb.EquipmentTaxonomySensor_ElectroOptical{ElectroOptical: &pb.EquipmentTaxonomySensorElectroOptical{}}},
+							}},
+						}},
 					},
 				}},
 			}); err != nil {
@@ -144,10 +142,6 @@ func watchNetscanForCameras(ctx context.Context, logger *slog.Logger) {
 
 		case pb.EntityChange_EntityChangeUnobserved, pb.EntityChange_EntityChangeExpired:
 			if _, exists := known[entity.Id]; exists {
-				// Only forget the mapping so the device can be re-discovered
-				// if netscan picks it up again. Don't expire the reolink device
-				// — netscan can be unreliable and the camera controller manages
-				// its own lifecycle.
 				logger.Info("netscan device gone, forgetting mapping",
 					"netscanEntity", entity.Id,
 					"reolinkEntity", known[entity.Id],
@@ -158,184 +152,148 @@ func watchNetscanForCameras(ctx context.Context, logger *slog.Logger) {
 	}
 }
 
-const (
-	wsDiscoveryAddr = "239.255.255.250:3702"
-	wsDiscoveryTTL  = 120 * time.Second
-)
-
-func wsDiscoveryProbeMessage() string {
-	msgID := uuid.New().String()
-	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
-            xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
-            xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery"
-            xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
-  <e:Header>
-    <w:MessageID>uuid:%s</w:MessageID>
-    <w:To>urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>
-    <w:Action>http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action>
-  </e:Header>
-  <e:Body>
-    <d:Probe>
-      <d:Types>dn:NetworkVideoTransmitter</d:Types>
-    </d:Probe>
-  </e:Body>
-</e:Envelope>`, msgID)
-}
-
-func parseXAddrsFromResponse(data string) []string {
-	var addrs []string
-	for _, chunk := range strings.Split(data, "XAddrs>") {
-		if !strings.Contains(chunk, "http") {
-			continue
-		}
-		idx := strings.Index(chunk, "</")
-		if idx < 0 {
-			idx = len(chunk)
-		}
-		for _, addr := range strings.Fields(chunk[:idx]) {
-			addr = strings.TrimSpace(addr)
-			if strings.HasPrefix(addr, "http://") || strings.HasPrefix(addr, "https://") {
-				addrs = append(addrs, addr)
-			}
-		}
-	}
-	return addrs
-}
-
-func extractIPFromXAddr(xaddr string) string {
-	xaddr = strings.TrimPrefix(xaddr, "http://")
-	xaddr = strings.TrimPrefix(xaddr, "https://")
-	host, _, _ := net.SplitHostPort(xaddr)
-	if host != "" {
-		return host
-	}
-	if idx := strings.Index(xaddr, "/"); idx > 0 {
-		return xaddr[:idx]
-	}
-	return xaddr
-}
-
-// runWSDiscovery sends periodic WS-Discovery multicast probes and creates
-// device entities for discovered cameras. Only cameras whose MAC resolves
-// to a Reolink vendor via netscan are kept.
-func runWSDiscovery(ctx context.Context, logger *slog.Logger) {
-	grpcConn, err := builtin.BuiltinClientConn()
+func watchDiscoveredCameras(ctx context.Context, logger *slog.Logger) {
+	grpcConn, err := builtin.BuiltinClientConn("reolink")
 	if err != nil {
-		logger.Error("ws-discovery: failed to connect", "error", err)
+		logger.Error("discovery watcher: failed to connect", "error", err)
 		return
 	}
 	defer func() { _ = grpcConn.Close() }()
 
 	client := pb.NewWorldServiceClient(grpcConn)
 
-	ticker := time.NewTicker(60 * time.Second)
-	defer ticker.Stop()
+	stream, err := goclient.WatchEntitiesWithRetry(ctx, client, &pb.ListEntitiesRequest{
+		Filter: &pb.EntityFilter{
+			Component: []uint32{50},
+		},
+	})
+	if err != nil {
+		logger.Error("discovery watcher: failed to watch", "error", err)
+		return
+	}
 
-	known := make(map[string]struct{})
+	known := make(map[string]string)
+
+	defer func() {
+		for _, childID := range known {
+			expCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, _ = client.ExpireEntity(expCtx, &pb.ExpireEntityRequest{Id: childID})
+			cancel()
+		}
+	}()
 
 	for {
-		discovered := probeOnvifDevices(ctx, logger)
+		event, err := stream.Recv()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			logger.Error("discovery watcher: stream error", "error", err)
+			return
+		}
 
-		var entities []*pb.Entity
-		for _, xaddr := range discovered {
-			ip := extractIPFromXAddr(xaddr)
+		if event.Entity == nil {
+			continue
+		}
+
+		entity := event.Entity
+
+		if entity.Controller != nil && entity.Controller.GetId() == controllerName {
+			continue
+		}
+
+		switch event.T {
+		case pb.EntityChange_EntityChangeUpdated:
+			if entity.Lifetime != nil && entity.Lifetime.Until != nil &&
+				!entity.Lifetime.Until.AsTime().After(time.Now()) {
+				continue
+			}
+
+			if entity.Device == nil || entity.Device.Ip == nil {
+				continue
+			}
+			ip := entity.Device.Ip.GetHost()
 			if ip == "" {
 				continue
 			}
 
-			mac := netscan.LookupMAC(ip)
+			if _, exists := known[entity.Id]; exists {
+				continue
+			}
+
+			// Skip if already identified as non-Reolink via MAC vendor.
+			if entity.Device.Ethernet != nil && entity.Device.Ethernet.GetVendor() != "" &&
+				!isReolinkVendor(entity.Device.Ethernet.GetVendor()) {
+				continue
+			}
+
+			cfg := getServiceConfig()
+			manufacturer, _, _, err := getDeviceInfo(ip, cfg.Username, cfg.Password)
+			if err != nil {
+				continue
+			}
+			if !isReolinkVendor(manufacturer) {
+				continue
+			}
+
+			mac := ""
+			if entity.Device.Ethernet != nil {
+				mac = strings.ReplaceAll(strings.ToLower(entity.Device.Ethernet.GetMacAddress()), ":", "")
+			}
+			if mac == "" {
+				mac = netscan.LookupMAC(ip)
+			}
 			name := mac
 			if name == "" {
 				name = strings.ReplaceAll(ip, ".", "_")
 			}
-			entityID := fmt.Sprintf("%s.device.%s", controllerName, name)
+			childEntityID := controllerName + ".device." + name
 
-			if _, exists := known[entityID]; exists {
+			logger.Info("Reolink camera found via discovery",
+				"entityID", entity.Id,
+				"ip", ip,
+			)
+
+			if _, err := client.Push(ctx, &pb.EntityChangeRequest{
+				Changes: []*pb.Entity{{
+					Id:    childEntityID,
+					Label: proto.String("Reolink Camera " + ip),
+					Controller: &pb.Controller{
+						Id: proto.String(controllerName),
+					},
+					Device: &pb.DeviceComponent{
+						Parent:      proto.String(controllerName + ".service"),
+						Composition: []string{entity.Id},
+						Class:       proto.String("camera"),
+						Category:    proto.String("Cameras"),
+						State:       pb.DeviceState_DeviceStatePending,
+						Ip: &pb.IpDevice{
+							Host: proto.String(ip),
+						},
+					},
+					Classification: &pb.ClassificationComponent{
+						Taxonomy: []*pb.ClassificationTaxonomy{{
+							Kind: &pb.ClassificationTaxonomy_Equipment{Equipment: &pb.EquipmentTaxonomy{
+								Sensor: &pb.EquipmentTaxonomySensor{Kind: &pb.EquipmentTaxonomySensor_ElectroOptical{ElectroOptical: &pb.EquipmentTaxonomySensorElectroOptical{}}},
+							}},
+						}},
+					},
+				}},
+			}); err != nil {
+				logger.Error("failed to push reolink device", "entityID", entity.Id, "error", err)
 				continue
 			}
-			known[entityID] = struct{}{}
 
-			entities = append(entities, &pb.Entity{
-				Id:    entityID,
-				Label: proto.String("Reolink Camera " + ip),
-				Controller: &pb.Controller{
-					Id: proto.String(controllerName),
-				},
-				Device: &pb.DeviceComponent{
-					Parent:   proto.String(controllerName + ".service"),
-					Class:    proto.String("camera"),
-					Category: proto.String("Cameras"),
-					State:    pb.DeviceState_DeviceStatePending,
-					Ip: &pb.IpDevice{
-						Host: proto.String(ip),
-					},
-				},
-				Symbol: &pb.SymbolComponent{
-					MilStd2525C: "SFGPE-----",
-				},
-			})
-		}
+			known[entity.Id] = childEntityID
 
-		if len(entities) > 0 {
-			if _, err := client.Push(ctx, &pb.EntityChangeRequest{Changes: entities}); err != nil {
-				logger.Error("ws-discovery: failed to push entities", "error", err)
-			} else {
-				logger.Info("ws-discovery: pushed discovered cameras", "count", len(entities))
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-func probeOnvifDevices(ctx context.Context, logger *slog.Logger) []string {
-	addr, err := net.ResolveUDPAddr("udp4", wsDiscoveryAddr)
-	if err != nil {
-		logger.Error("ws-discovery: resolve addr", "error", err)
-		return nil
-	}
-
-	conn, err := net.ListenUDP("udp4", nil)
-	if err != nil {
-		logger.Error("ws-discovery: listen", "error", err)
-		return nil
-	}
-	defer conn.Close() //nolint:errcheck // best-effort UDP cleanup
-
-	msg := []byte(wsDiscoveryProbeMessage())
-	if _, err := conn.WriteToUDP(msg, addr); err != nil {
-		logger.Error("ws-discovery: send probe", "error", err)
-		return nil
-	}
-
-	deadline := time.Now().Add(3 * time.Second)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
-	_ = conn.SetReadDeadline(deadline)
-
-	seen := make(map[string]bool)
-	var xaddrs []string
-	buf := make([]byte, 8192)
-
-	for {
-		n, _, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			break
-		}
-		for _, xaddr := range parseXAddrsFromResponse(string(buf[:n])) {
-			ip := extractIPFromXAddr(xaddr)
-			if !seen[ip] {
-				seen[ip] = true
-				xaddrs = append(xaddrs, xaddr)
+		case pb.EntityChange_EntityChangeUnobserved, pb.EntityChange_EntityChangeExpired:
+			if _, exists := known[entity.Id]; exists {
+				logger.Info("discovered device gone, forgetting mapping",
+					"discoveredEntity", entity.Id,
+					"reolinkEntity", known[entity.Id],
+				)
+				delete(known, entity.Id)
 			}
 		}
 	}
-
-	return xaddrs
 }

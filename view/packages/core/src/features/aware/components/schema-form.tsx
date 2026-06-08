@@ -9,13 +9,14 @@ import {
   ControlStepper,
   ToggleSwitch,
 } from "@hydris/ui/controls";
+import { ConfirmDialog } from "@hydris/ui/dialogs/confirm-dialog";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import { ChevronDown, Eye, EyeOff } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TextInput } from "react-native";
-import { Alert, Platform, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 
 type BaseField = {
   key: string;
@@ -26,7 +27,7 @@ type BaseField = {
   readOnly?: boolean;
   group?: string;
   order?: number;
-  pattern?: string;
+  patternRegex?: RegExp;
 };
 
 type BooleanField = BaseField & {
@@ -78,6 +79,17 @@ function bool(v: unknown): boolean | undefined {
   return typeof v === "boolean" ? v : undefined;
 }
 
+// Returns undefined if the pattern is missing or not a valid regex. Schemas
+// come from external sources so we can't crash validation over a bad pattern.
+function compilePattern(pattern: string | undefined): RegExp | undefined {
+  if (!pattern) return undefined;
+  try {
+    return new RegExp(pattern);
+  } catch {
+    return undefined;
+  }
+}
+
 export function parseJsonSchema(schema: JsonObject): ParsedSchema {
   const properties = schema.properties;
   if (!properties || typeof properties !== "object" || Array.isArray(properties))
@@ -117,7 +129,7 @@ export function parseJsonSchema(schema: JsonObject): ParsedSchema {
       readOnly: bool(p.readOnly),
       group: str(p["ui:group"]),
       order: num(p["ui:order"]),
-      pattern: str(p.pattern),
+      patternRegex: compilePattern(str(p.pattern)),
     };
 
     // oneOf takes priority — works on any type
@@ -137,9 +149,10 @@ export function parseJsonSchema(schema: JsonObject): ParsedSchema {
 
     // bare enum → convert to oneOf shape
     if (Array.isArray(p.enum)) {
-      const options = (p.enum as unknown[])
-        .filter((v): v is string => typeof v === "string")
-        .map((v) => ({ value: v, label: v || "None" }));
+      const options: { value: string; label: string }[] = [];
+      for (const v of p.enum as unknown[]) {
+        if (typeof v === "string") options.push({ value: v, label: v || "None" });
+      }
       fields.push({
         ...base,
         type: "oneOf",
@@ -744,14 +757,8 @@ function validateDraft(fields: FieldDescriptor[], draft: DraftValue): Record<str
           errors[field.key] = `minimum ${field.minLength} characters`;
         } else if (field.maxLength != null && v.length > field.maxLength) {
           errors[field.key] = `maximum ${field.maxLength} characters`;
-        } else if (field.pattern && v) {
-          try {
-            if (!new RegExp(field.pattern).test(v)) {
-              errors[field.key] = "does not match expected format";
-            }
-          } catch {
-            // invalid regex in schema — skip validation
-          }
+        } else if (field.patternRegex && v && !field.patternRegex.test(v)) {
+          errors[field.key] = "does not match expected format";
         }
       }
     } else if (field.type === "unknown") {
@@ -774,24 +781,26 @@ function renderField(
   updateField: (key: string, v: unknown) => void,
   errors: Record<string, string>,
   onSubmitEditing?: () => void,
+  formDisabled?: boolean,
 ) {
   const error = errors[field.key];
-  switch (field.type) {
+  const effectiveField = formDisabled ? ({ ...field, readOnly: true } as FieldDescriptor) : field;
+  switch (effectiveField.type) {
     case "boolean":
       return (
         <BooleanFieldComponent
-          field={field}
-          value={draft[field.key] as boolean}
-          onChange={(v) => updateField(field.key, v)}
+          field={effectiveField}
+          value={draft[effectiveField.key] as boolean}
+          onChange={(v) => updateField(effectiveField.key, v)}
           error={error}
         />
       );
     case "string":
       return (
         <StringFieldComponent
-          field={field}
-          value={(draft[field.key] as string) ?? ""}
-          onChange={(v) => updateField(field.key, v)}
+          field={effectiveField}
+          value={(draft[effectiveField.key] as string) ?? ""}
+          onChange={(v) => updateField(effectiveField.key, v)}
           error={error}
           onSubmitEditing={onSubmitEditing}
         />
@@ -799,9 +808,9 @@ function renderField(
     case "number":
       return (
         <NumberFieldComponent
-          field={field}
-          value={draft[field.key]}
-          onChange={(v) => updateField(field.key, v)}
+          field={effectiveField}
+          value={draft[effectiveField.key]}
+          onChange={(v) => updateField(effectiveField.key, v)}
           error={error}
           onSubmitEditing={onSubmitEditing}
         />
@@ -809,22 +818,22 @@ function renderField(
     case "oneOf":
       return (
         <OneOfFieldComponent
-          field={field}
-          value={String(draft[field.key] ?? "")}
-          onChange={(v) => updateField(field.key, v)}
+          field={effectiveField}
+          value={String(draft[effectiveField.key] ?? "")}
+          onChange={(v) => updateField(effectiveField.key, v)}
           error={error}
         />
       );
     case "unknown":
       return (
         <UnknownFieldComponent
-          field={field}
+          field={effectiveField}
           value={
-            typeof draft[field.key] === "string"
-              ? (draft[field.key] as string)
-              : JSON.stringify(draft[field.key], null, 2)
+            typeof draft[effectiveField.key] === "string"
+              ? (draft[effectiveField.key] as string)
+              : JSON.stringify(draft[effectiveField.key], null, 2)
           }
-          onChange={(v) => updateField(field.key, v)}
+          onChange={(v) => updateField(effectiveField.key, v)}
           error={error}
         />
       );
@@ -854,6 +863,7 @@ export function SchemaForm({
   isPending,
   isConfigured,
   extraActions,
+  disabled,
 }: {
   schema: JsonObject;
   value: JsonObject | undefined;
@@ -862,6 +872,7 @@ export function SchemaForm({
   isPending: boolean;
   isConfigured: boolean;
   extraActions?: ReactNode;
+  disabled?: boolean;
 }) {
   const submitRef = useRef<() => void>(() => {});
   const parsed = useMemo(() => parseJsonSchema(schema), [schema]);
@@ -869,6 +880,8 @@ export function SchemaForm({
   const [draft, setDraft] = useState<DraftValue>(() => buildInitialDraft(parsed.fields, value));
   const [touched, setTouched] = useState<Set<string>>(() => new Set());
   const [submitted, setSubmitted] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
+  const [dangerousConfirm, setDangerousConfirm] = useState<{ message: string } | null>(null);
 
   // Sync draft from server value, but only when the user hasn't touched the form.
   // This prevents live entity stream updates from clobbering in-progress edits.
@@ -892,7 +905,7 @@ export function SchemaForm({
   const dirty = isDirty(parsed.fields, draft, value);
   const errors = validateDraft(parsed.fields, draft);
   const hasErrors = Object.keys(errors).length > 0;
-  const enabled = (dirty || !isConfigured) && !hasErrors;
+  const enabled = (dirty || !isConfigured) && !hasErrors && !disabled;
 
   const visibleErrors = useMemo(() => {
     if (submitted) return errors;
@@ -911,19 +924,17 @@ export function SchemaForm({
 
     const dangerousField = getDangerousChanges(parsed.fields, draft, value);
     if (dangerousField) {
-      Alert.alert("Confirm", dangerousField.confirm!, [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Continue",
-          style: "destructive",
-          onPress: () => onSubmit(draftToJsonObject(parsed.fields, draft)),
-        },
-      ]);
+      setDangerousConfirm({ message: dangerousField.confirm! });
       return;
     }
 
     await onSubmit(draftToJsonObject(parsed.fields, draft));
   }, [enabled, parsed.fields, draft, value, onSubmit]);
+
+  const confirmDangerous = useCallback(() => {
+    setDangerousConfirm(null);
+    void onSubmit(draftToJsonObject(parsed.fields, draft));
+  }, [parsed.fields, draft, onSubmit]);
 
   submitRef.current = handleSubmit;
 
@@ -935,7 +946,14 @@ export function SchemaForm({
         {sections.map((section) => {
           const content = section.fields.map((field, i) => (
             <Fragment key={field.key}>
-              {renderField(field, draft, updateField, visibleErrors, () => submitRef.current())}
+              {renderField(
+                field,
+                draft,
+                updateField,
+                visibleErrors,
+                () => submitRef.current(),
+                disabled,
+              )}
               {i < section.fields.length - 1 && <View className="bg-surface-overlay/6 h-px" />}
             </Fragment>
           ));
@@ -968,28 +986,41 @@ export function SchemaForm({
       />
 
       {onRemove && isConfigured && (
-        <ControlButton
-          onPress={() => {
-            if (Platform.OS === "web") {
-              if (window.confirm("Remove configuration? The device will return to its defaults."))
-                onRemove();
-            } else {
-              Alert.alert("Remove configuration", "The device will return to its defaults.", [
-                { text: "Cancel", style: "cancel" },
-                { text: "Remove", style: "destructive", onPress: onRemove },
-              ]);
-            }
-          }}
-          label="Remove configuration"
-          hoverVariant="destructive"
-          disabled={isPending}
-          size="lg"
-          fullWidth
-          labelClassName="font-mono text-xs font-semibold uppercase"
-          className="mt-2"
-          accessibilityLabel="Remove configuration"
-        />
+        <>
+          <ControlButton
+            onPress={() => setRemoveOpen(true)}
+            label="Remove configuration"
+            hoverVariant="destructive"
+            disabled={isPending}
+            size="lg"
+            fullWidth
+            labelClassName="font-mono text-xs font-semibold uppercase"
+            className="mt-2"
+            accessibilityLabel="Remove configuration"
+          />
+          <ConfirmDialog
+            visible={removeOpen}
+            title="Remove configuration"
+            message="The device will return to its defaults."
+            confirmLabel="Remove"
+            destructive
+            onCancel={() => setRemoveOpen(false)}
+            onConfirm={() => {
+              setRemoveOpen(false);
+              onRemove();
+            }}
+          />
+        </>
       )}
+      <ConfirmDialog
+        visible={dangerousConfirm !== null}
+        title="Confirm"
+        message={dangerousConfirm?.message}
+        confirmLabel="Continue"
+        destructive
+        onCancel={() => setDangerousConfirm(null)}
+        onConfirm={confirmDangerous}
+      />
     </View>
   );
 }

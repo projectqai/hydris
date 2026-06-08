@@ -19,8 +19,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -124,8 +122,12 @@ func startWorldOnBufconn(t *testing.T) *engine.WorldServer {
 	worldPath, worldHandler := _goconnect.NewWorldServiceHandler(eng)
 	mux.Handle(worldPath, worldHandler)
 
+	var protos http.Protocols
+	protos.SetHTTP1(true)
+	protos.SetUnencryptedHTTP2(true)
 	srv := &http.Server{
-		Handler: h2c.NewHandler(mux, &http2.Server{}),
+		Handler:   mux,
+		Protocols: &protos,
 	}
 	go func() {
 		if err := srv.Serve(builtin.GetBuiltinListener()); err != nil && err != http.ErrServerClosed {

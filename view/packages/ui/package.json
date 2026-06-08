@@ -14,10 +14,12 @@
     "./panels": "./src/panels/resizable-panel.tsx",
     "./widgets/time-widget": "./src/widgets/time-widget.tsx",
     "./sheets/floating-sheet": "./src/sheets/floating-sheet.tsx",
+    "./dialogs/confirm-dialog": "./src/dialogs/confirm-dialog.tsx",
     "./controls": "./src/controls/index.ts",
     "./lib/utils": "./src/lib/utils.ts",
     "./lib/platform": "./src/lib/platform.ts",
     "./lib/theme": "./src/lib/theme.tsx",
+    "./lib/widget-scale": "./src/lib/widget-scale.ts",
     "./badge": "./src/badge.tsx",
     "./empty-state": "./src/empty-state.tsx",
     "./info-row": "./src/info-row.tsx",
@@ -38,12 +40,15 @@
     "./top-bar/customize-help-icon": "./src/top-bar/customize-help-icon.tsx",
     "./top-bar/placement-help-icon": "./src/top-bar/placement-help-icon.tsx",
     "./action-button": "./src/action-button.tsx",
-    "./middle-truncate-text": "./src/middle-truncate-text.tsx"
+    "./middle-truncate-text": "./src/middle-truncate-text.tsx",
+    "./radial-menu": "./src/radial-menu/radial-menu.tsx",
+    "./radial-menu/types": "./src/radial-menu/types.ts"
   },
   "scripts": {
     "lint": "eslint .",
     "type-check": "tsc --noEmit",
-    "test": "jest --passWithNoTests"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@hydris/tailwind-config": "workspace:*",
@@ -72,15 +77,19 @@
     "react-dom": "catalog:",
     "react-native": "catalog:",
     "react-native-web": "catalog:",
+    "vitest": "^3.2.4",
     "zustand": "^5.0.12"
   },
   "peerDependencies": {
+    "expo-image": "*",
     "expo-linear-gradient": "*",
     "lucide-react-native": "*",
     "react": "*",
     "react-native": "*",
     "react-native-gesture-handler": "*",
     "react-native-reanimated": "*",
+    "react-native-svg": "*",
+    "react-native-worklets": "*",
     "react-native-web": "*",
     "zustand": "*"
   },

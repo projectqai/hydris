@@ -1,6 +1,9 @@
 package transform
 
-import pb "github.com/projectqai/proto/go"
+import (
+	"github.com/projectqai/hydris/engine/meta"
+	pb "github.com/projectqai/proto/go"
+)
 
 // Transformer is a callback-based interface for managing derived entities.
 // Transformers watch pushes and GC events to maintain generated entities
@@ -10,8 +13,11 @@ type Transformer interface {
 	Validate(head map[string]*pb.Entity, incoming *pb.Entity) error
 
 	// Resolve is called AFTER an entity is merged into head.
+	// components contains per-component metadata for the changed entity,
+	// keyed by proto field number. Transformers can check Generated to know
+	// whether a component was set by another transformer or externally pushed.
 	// Returns entities to upsert and entity IDs to delete.
-	Resolve(head map[string]*pb.Entity, changedID string) (upsert []*pb.Entity, remove []string)
+	Resolve(head map[string]*pb.Entity, changedID string, components map[int32]meta.Component) (upsert []*pb.Entity, remove []string)
 }
 
 // Bus is an interface for the subset of engine.Bus that transformers need.
@@ -22,12 +28,12 @@ type Bus interface {
 // RunTransformers runs all transformers for a changed entity, applying upserts and
 // removes to head and notifying the bus. Returns the IDs of upserted and removed
 // entities so callers can sync secondary stores.
-func RunTransformers(transformers []Transformer, head map[string]*pb.Entity, bus Bus, changedID string) (upserted, removed []string) {
+func RunTransformers(transformers []Transformer, head map[string]*pb.Entity, bus Bus, changedID string, components map[int32]meta.Component) (upserted, removed []string) {
 	changedIDs := []string{changedID}
 	for _, t := range transformers {
 		var newIDs []string
 		for _, id := range changedIDs {
-			upsert, remove := t.Resolve(head, id)
+			upsert, remove := t.Resolve(head, id, components)
 			for _, e := range upsert {
 				head[e.Id] = e
 				bus.Dirty(e.Id, e, pb.EntityChange_EntityChangeUpdated)

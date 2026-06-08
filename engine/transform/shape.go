@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"connectrpc.com/connect"
+	"github.com/projectqai/hydris/engine/meta"
 	pb "github.com/projectqai/proto/go"
 )
 
@@ -48,7 +49,7 @@ func (st *ShapeTransformer) Validate(head map[string]*pb.Entity, incoming *pb.En
 	return nil
 }
 
-func (st *ShapeTransformer) Resolve(head map[string]*pb.Entity, changedID string) (upsert []*pb.Entity, remove []string) {
+func (st *ShapeTransformer) Resolve(head map[string]*pb.Entity, changedID string, _ map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	entity := head[changedID]
 
 	// Entity expired — clean up
@@ -78,16 +79,18 @@ func (st *ShapeTransformer) Resolve(head map[string]*pb.Entity, changedID string
 		st.resolveShape(head, changedID, entity)
 	}
 
-	// If entity is a parent, re-resolve all dependent shapes
+	// If entity is a parent, re-resolve all dependent shapes and return
+	// them as upserts so bus.Dirty is called and subscribers see the update.
 	if children, ok := st.byParent[changedID]; ok {
 		for _, childID := range children {
 			if child := head[childID]; child != nil && child.LocalShape != nil && child.LocalShape.RelativeTo != "" {
 				st.resolveShape(head, childID, child)
+				upsert = append(upsert, child)
 			}
 		}
 	}
 
-	return nil, nil
+	return upsert, nil
 }
 
 func (st *ShapeTransformer) resolveShape(head map[string]*pb.Entity, shapeID string, shape *pb.Entity) {

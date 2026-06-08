@@ -15,7 +15,6 @@ import (
 	"github.com/projectqai/hydris/cli"
 	"github.com/projectqai/hydris/engine"
 	"github.com/projectqai/hydris/pkg/executil"
-	_ "github.com/projectqai/hydris/view"
 	"github.com/spf13/cobra"
 
 	"github.com/pkg/browser"
@@ -24,31 +23,47 @@ import (
 func init() {
 	cli.CMD.Flags().Bool("view", false, "open builtin webview")
 	cli.CMD.Flags().StringP("world", "w", "", "world state file to load on startup and periodically flush to")
-	cli.CMD.Flags().String("policy", "", "path to OPA policy file (.rego) for access control")
 	cli.CMD.Flags().Bool("disable-local-serial", false, "disable discovery of local serial ports")
 	cli.CMD.Flags().Bool("allow-netscan", false, "allow scanning the local network for devices")
 	cli.CMD.Flags().Bool("no-defaults", false, "do not load builtin default world entities")
 	cli.CMD.Flags().StringSlice("allow-path", nil, "allow file access to additional paths (e.g. for TLS certificates)")
 	cli.CMD.Flags().StringSlice("plugin", nil, "plugins to run (local .ts/.js files or OCI image refs)")
+	cli.CMD.Flags().String("server", "", "proxy to remote server (host:port, ssh://user@host, or ssh://host)")
+	cli.CMD.Flags().String("wireguard", "", "path to WireGuard config (use with --server host:port)")
+	cli.CMD.Flags().Bool("disable-all-security-i-know-what-i-am-doing", false, "disable the policy engine entirely")
 
 	cli.CMD.RunE = func(cmd *cobra.Command, args []string) error {
 		all, _ := cmd.Flags().GetBool("all")
 		enableView, _ := cmd.Flags().GetBool("view")
+
+		remoteServer, _ := cmd.Flags().GetString("server")
+		if remoteServer != "" {
+			wgConfig, _ := cmd.Flags().GetString("wireguard")
+			addr, err := cli.StartProxyServer(remoteServer, wgConfig)
+			if err != nil {
+				return err
+			}
+			if all || enableView {
+				_ = browser.OpenURL("http://" + addr)
+			}
+			select {}
+		}
+
 		worldFile, _ := cmd.Flags().GetString("world")
-		policyFile, _ := cmd.Flags().GetString("policy")
 		disableSerial, _ := cmd.Flags().GetBool("disable-local-serial")
 		allowNetscan, _ := cmd.Flags().GetBool("allow-netscan")
 		noDefaults, _ := cmd.Flags().GetBool("no-defaults")
 		allowPaths, _ := cmd.Flags().GetStringSlice("allow-path")
 		plugins, _ := cmd.Flags().GetStringSlice("plugin")
+		disableSecurity, _ := cmd.Flags().GetBool("disable-all-security-i-know-what-i-am-doing")
 
 		ctx := context.Background()
 
 		serverAddr, err := engine.StartEngine(ctx, engine.EngineConfig{
-			WorldFile:  worldFile,
-			PolicyFile: policyFile,
-			NoDefaults: noDefaults,
-			LogHandler: logging.Ring,
+			WorldFile:       worldFile,
+			NoDefaults:      noDefaults,
+			DisableSecurity: disableSecurity,
+			LogRing:         logging.Ring,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

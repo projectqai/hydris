@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +23,8 @@ import (
 	"github.com/rodaine/table"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/structpb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -63,7 +66,8 @@ func init() {
 	lsCmd.Flags().StringVar(&filterTaskableContext, "taskable-context", "", "filter by taskable context entity ID")
 	lsCmd.Flags().StringVar(&filterTaskableAssignee, "taskable-assignee", "", "filter by taskable assignee entity ID")
 	lsCmd.Flags().StringVar(&filterBBox, "bbox", "", "filter by bounding box: lon1,lat1,lon2,lat2")
-	lsCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table, yaml, json")
+	lsCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table, yaml, json, csv")
+	lsCmd.Flags().BoolP("internal", "i", false, "include engine-internal metadata (json output only)")
 
 	watchCmd := &cobra.Command{
 		Use:     "watch",
@@ -82,6 +86,7 @@ func init() {
 		Args:  cobra.ExactArgs(1),
 		RunE:  runGet,
 	}
+	getCmd.Flags().BoolP("internal", "i", false, "include engine-internal metadata")
 
 	putCmd := &cobra.Command{
 		Use:     "put [file or -]",
@@ -138,15 +143,13 @@ func init() {
 	ECCMD.AddCommand(editCmd)
 	ECCMD.AddCommand(rmCmd)
 	ECCMD.AddCommand(confCmd)
-	var resetMissionID string
 	resetCmd := &cobra.Command{
 		Use:   "reset",
 		Short: "hard reset: atomically clear all entities, persistence, and HTTP connections",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runReset(cmd, args, resetMissionID)
+			return runReset(cmd, args)
 		},
 	}
-	resetCmd.Flags().StringVar(&resetMissionID, "mission", "", "artifact entity ID to keep as the active mission")
 
 	ECCMD.AddCommand(clearCmd)
 	ECCMD.AddCommand(dtCmd)
@@ -397,7 +400,8 @@ func runLS(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	req := &pb.ListEntitiesRequest{Filter: filter}
+	includeInternal, _ := cmd.Flags().GetBool("internal")
+	req := &pb.ListEntitiesRequest{Filter: filter, DumpInternal: includeInternal}
 
 	resp, err := client.ListEntities(context.Background(), req)
 	if err != nil {
@@ -409,12 +413,14 @@ func runLS(cmd *cobra.Command, args []string) error {
 	case "yaml":
 		return printEntitiesYAML(resp.Entities)
 	case "json":
-		return printEntitiesJSON(resp.Entities)
+		return printEntitiesJSON(resp.Entities, resp.Internal)
+	case "csv":
+		return printEntitiesCSV(resp.Entities)
 	case "table":
 		printEntitiesTable(resp.Entities, localNodeID)
 		return nil
 	default:
-		return fmt.Errorf("unknown output format: %s (use: table, yaml, json)", outputFormat)
+		return fmt.Errorf("unknown output format: %s (use: table, yaml, json, csv)", outputFormat)
 	}
 }
 
@@ -603,6 +609,96 @@ func printEntitiesTable(entities []*pb.Entity, localNodeID string) {
 	tbl.Print()
 }
 
+func flattenProto(numPrefix []int, prefix string, msg protoreflect.Message, out map[string]string, order map[string][]int) {
+	msg.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		key := prefix + string(fd.Name())
+		path := append(append([]int{}, numPrefix...), int(fd.Number()))
+		switch {
+		case fd.IsList():
+			list := v.List()
+			vals := make([]string, list.Len())
+			for i := 0; i < list.Len(); i++ {
+				vals[i] = fmt.Sprint(list.Get(i).Interface())
+			}
+			out[key] = strings.Join(vals, ";")
+			order[key] = path
+		case fd.IsMap():
+			m := v.Map()
+			var parts []string
+			m.Range(func(k protoreflect.MapKey, v protoreflect.Value) bool {
+				parts = append(parts, fmt.Sprintf("%s=%s", k, v))
+				return true
+			})
+			out[key] = strings.Join(parts, ";")
+			order[key] = path
+		case fd.Kind() == protoreflect.MessageKind || fd.Kind() == protoreflect.GroupKind:
+			sub := v.Message()
+			if sub.Descriptor().FullName() == "google.protobuf.Timestamp" {
+				secs := sub.Get(sub.Descriptor().Fields().ByName("seconds")).Int()
+				nanos := sub.Get(sub.Descriptor().Fields().ByName("nanos")).Int()
+				t := time.Unix(secs, nanos).UTC()
+				out[key] = t.Format("2006-01-02 15:04:05")
+				order[key] = path
+			} else {
+				flattenProto(path, key+".", sub, out, order)
+			}
+		case fd.Kind() == protoreflect.EnumKind:
+			out[key] = string(fd.Enum().Values().ByNumber(v.Enum()).Name())
+			order[key] = path
+		default:
+			out[key] = fmt.Sprint(v.Interface())
+			order[key] = path
+		}
+		return true
+	})
+}
+
+func printEntitiesCSV(entities []*pb.Entity) error {
+	var allColumns []string
+	columnSet := map[string]bool{}
+	columnOrder := map[string][]int{}
+	var rows []map[string]string
+
+	for _, entity := range entities {
+		if entity == nil {
+			continue
+		}
+		row := make(map[string]string)
+		order := map[string][]int{}
+		flattenProto(nil, "", entity.ProtoReflect(), row, order)
+		for k := range row {
+			if !columnSet[k] {
+				columnSet[k] = true
+				allColumns = append(allColumns, k)
+				columnOrder[k] = order[k]
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	sort.Slice(allColumns, func(i, j int) bool {
+		a, b := columnOrder[allColumns[i]], columnOrder[allColumns[j]]
+		for k := 0; k < len(a) && k < len(b); k++ {
+			if a[k] != b[k] {
+				return a[k] < b[k]
+			}
+		}
+		return len(a) < len(b)
+	})
+
+	w := csv.NewWriter(os.Stdout)
+	_ = w.Write(allColumns)
+	for _, row := range rows {
+		rec := make([]string, len(allColumns))
+		for i, col := range allColumns {
+			rec[i] = row[col]
+		}
+		_ = w.Write(rec)
+	}
+	w.Flush()
+	return w.Error()
+}
+
 func printEntitiesYAML(entities []*pb.Entity) error {
 	for i, entity := range entities {
 		yamlBytes, err := protoToYAML(entity)
@@ -617,17 +713,14 @@ func printEntitiesYAML(entities []*pb.Entity) error {
 	return nil
 }
 
-func printEntitiesJSON(entities []*pb.Entity) error {
-	marshaler := protojson.MarshalOptions{
-		UseProtoNames:   true,
-		EmitUnpopulated: false,
-		Indent:          "  ",
-	}
-
-	// Output as JSON array
+func printEntitiesJSON(entities []*pb.Entity, internal []*structpb.Struct) error {
 	fmt.Println("[")
 	for i, entity := range entities {
-		jsonBytes, err := marshaler.Marshal(entity)
+		var meta *structpb.Struct
+		if i < len(internal) {
+			meta = internal[i]
+		}
+		jsonBytes, err := entityJSON(entity, meta)
 		if err != nil {
 			return fmt.Errorf("failed to marshal entity %s: %w", entity.Id, err)
 		}
@@ -711,29 +804,88 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	}
 }
 
-func runGet(cmd *cobra.Command, args []string) error {
-	client := pb.NewWorldServiceClient(conn)
-	entityID := args[0]
-
-	resp, err := client.GetEntity(context.Background(), &pb.GetEntityRequest{
-		Id: entityID,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to get entity: %w", err)
+var entityFieldNames = func() map[string]string {
+	m := make(map[string]string)
+	fields := (*pb.Entity)(nil).ProtoReflect().Descriptor().Fields()
+	for i := 0; i < fields.Len(); i++ {
+		fd := fields.Get(i)
+		m[fmt.Sprintf("%d", fd.Number())] = string(fd.Name())
 	}
+	return m
+}()
 
+func resolveComponentNames(meta map[string]json.RawMessage) {
+	raw, ok := meta["components"]
+	if !ok {
+		return
+	}
+	var components map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &components); err != nil {
+		return
+	}
+	resolved := make(map[string]json.RawMessage, len(components))
+	for num, v := range components {
+		if name, ok := entityFieldNames[num]; ok {
+			resolved[name] = v
+		} else {
+			resolved[num] = v
+		}
+	}
+	if b, err := json.Marshal(resolved); err == nil {
+		meta["components"] = b
+	}
+}
+
+func entityJSON(entity *pb.Entity, internal *structpb.Struct) ([]byte, error) {
 	marshaler := protojson.MarshalOptions{
 		UseProtoNames:   true,
 		EmitUnpopulated: false,
 		Indent:          "  ",
 	}
+	jsonBytes, err := marshaler.Marshal(entity)
+	if err != nil {
+		return nil, err
+	}
+	if internal == nil {
+		return jsonBytes, nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(jsonBytes, &m); err != nil {
+		return nil, err
+	}
+	metaBytes, err := marshaler.Marshal(internal)
+	if err != nil {
+		return nil, err
+	}
+	var metaMap map[string]json.RawMessage
+	if err := json.Unmarshal(metaBytes, &metaMap); err == nil {
+		resolveComponentNames(metaMap)
+		if b, err := json.Marshal(metaMap); err == nil {
+			metaBytes = b
+		}
+	}
+	m["_meta"] = metaBytes
+	return json.MarshalIndent(m, "", "  ")
+}
 
-	jsonBytes, err := marshaler.Marshal(resp.Entity)
+func runGet(cmd *cobra.Command, args []string) error {
+	client := pb.NewWorldServiceClient(conn)
+	entityID := args[0]
+	includeInternal, _ := cmd.Flags().GetBool("internal")
+
+	resp, err := client.GetEntity(context.Background(), &pb.GetEntityRequest{
+		Id:           entityID,
+		DumpInternal: includeInternal,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get entity: %w", err)
+	}
+
+	out, err := entityJSON(resp.Entity, resp.Internal)
 	if err != nil {
 		return fmt.Errorf("failed to marshal entity: %w", err)
 	}
-
-	fmt.Println(string(jsonBytes))
+	fmt.Println(string(out))
 	return nil
 }
 
@@ -957,20 +1109,11 @@ func runClear(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func runReset(cmd *cobra.Command, args []string, missionID string) error {
+func runReset(cmd *cobra.Command, args []string) error {
 	client := pb.NewWorldServiceClient(conn)
-	req := &pb.HardResetRequest{}
-	if missionID != "" {
-		req.MissionId = &missionID
-	}
-	_, err := client.HardReset(context.Background(), req)
-	if err != nil {
+	if _, err := client.HardReset(context.Background(), &pb.HardResetRequest{}); err != nil {
 		return fmt.Errorf("hard reset failed: %w", err)
 	}
-	if missionID != "" {
-		fmt.Printf("Hard reset complete (mission: %s)\n", missionID)
-	} else {
-		fmt.Println("Hard reset complete")
-	}
+	fmt.Println("Hard reset complete")
 	return nil
 }

@@ -2,8 +2,10 @@ package plugin
 
 import (
 	"archive/tar"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -111,7 +113,7 @@ func pullImage(ref name.Reference) (v1.Image, error) {
 // entities in the hydris world service. Falls back to authn.DefaultKeychain
 // when the world service is unreachable.
 func registryKeychain() authn.Keychain {
-	conn, err := builtin.BuiltinClientConn()
+	conn, err := builtin.BuiltinClientConn("plugin")
 	if err != nil {
 		slog.Warn("registry keychain: cannot connect to world service, using default keychain", "error", err)
 		return authn.DefaultKeychain
@@ -183,6 +185,29 @@ func TestRegistryAuth(registry, username, password string) error {
 	return nil
 }
 
+// OCIImage is a pulled OCI image (alias for v1.Image).
+type OCIImage = v1.Image
+
+// PullOCIImage pulls an OCI image from the remote registry with auth.
+func PullOCIImage(ref string) (OCIImage, error) {
+	parsed, err := name.ParseReference(ref)
+	if err != nil {
+		return nil, fmt.Errorf("invalid image reference %q: %w", ref, err)
+	}
+	return pullImage(parsed)
+}
+
+// ExtractPluginTarGz extracts a gzip-compressed plugin tar into a temp dir,
+// returning the directory path. The caller must remove the directory when done.
+func ExtractPluginTarGz(r io.Reader) (string, error) {
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return "", fmt.Errorf("gzip open: %w", err)
+	}
+	defer func() { _ = gz.Close() }()
+	return extractTar(gz)
+}
+
 // extractPlugin extracts the plugin layer from an OCI image into a temp dir.
 func extractPlugin(img v1.Image) (string, error) {
 	layers, err := img.Layers()
@@ -198,13 +223,16 @@ func extractPlugin(img v1.Image) (string, error) {
 		return "", fmt.Errorf("uncompress layer: %w", err)
 	}
 	defer rc.Close()
+	return extractTar(rc)
+}
 
+func extractTar(r io.Reader) (string, error) {
 	dir, err := os.MkdirTemp(TempDir, "hydris-plugin-*")
 	if err != nil {
 		return "", err
 	}
 
-	tr := tar.NewReader(rc)
+	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -214,7 +242,6 @@ func extractPlugin(img v1.Image) (string, error) {
 			os.RemoveAll(dir)
 			return "", fmt.Errorf("tar read: %w", err)
 		}
-		// Only extract regular files, skip directories and anything with path traversal.
 		if hdr.Typeflag != tar.TypeReg || strings.Contains(hdr.Name, "..") {
 			continue
 		}
@@ -234,6 +261,11 @@ func extractPlugin(img v1.Image) (string, error) {
 	return dir, nil
 }
 
+// ErrIncompatibleVersion is wrapped into the error CheckHydrisVersion returns
+// when the running hydris is outside a plugin's engines.hydris range, so the
+// run path can treat it as a conflict rather than a transient failure.
+var ErrIncompatibleVersion = errors.New("incompatible hydris version")
+
 // CheckHydrisVersion validates the given hydris version against the
 // engines.hydris semver range from package.json.
 func CheckHydrisVersion(pkg *Package, hydrisVersion string) error {
@@ -251,7 +283,7 @@ func CheckHydrisVersion(pkg *Package, hydrisVersion string) error {
 		return fmt.Errorf("invalid engines.hydris range %q: %w", pkg.Hydris.Compat, err)
 	}
 	if !rng(cur) {
-		return fmt.Errorf("plugin requires hydris %s (running %s)", pkg.Hydris.Compat, hydrisVersion)
+		return fmt.Errorf("requires hydris %s (running %s): %w", pkg.Hydris.Compat, hydrisVersion, ErrIncompatibleVersion)
 	}
 	return nil
 }

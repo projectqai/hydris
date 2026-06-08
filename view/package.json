@@ -6,7 +6,7 @@
     "@expo/metro": "^55.1.0",
     "@expo/metro-runtime": "~55.0.10",
     "@types/react": "~19.2.10",
-    "@projectqai/proto": "^0.0.50",
+    "@projectqai/proto": "^0.0.63",
     "@types/react-dom": "~19.2.0",
     "babel-preset-expo": "~55.0.8",
     "eslint": "^9.39.1",
@@ -16,6 +16,7 @@
     "expo-build-properties": "~55.0.13",
     "expo-clipboard": "~55.0.13",
     "expo-constants": "~55.0.15",
+    "expo-document-picker": "~55.0.13",
     "expo-font": "~55.0.6",
     "expo-audio": "~55.0.14",
     "expo-haptics": "~55.0.14",
@@ -35,6 +36,7 @@
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-native": "0.83.6",
+    "react-native-blob-util": "^0.24.9",
     "react-native-css-interop": "^0.2.1",
     "react-native-gesture-handler": "~2.30.0",
     "react-native-keyboard-controller": "1.20.7",
@@ -105,8 +107,5 @@
   },
   "trustedDependencies": [
     "@shopify/react-native-skia"
-  ],
-  "dependencies": {
-    "@projectqai/proto": "^0.0.50"
-  }
+  ]
 }

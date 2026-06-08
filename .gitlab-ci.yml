@@ -70,9 +70,6 @@ vet:
     - go install golang.org/x/vuln/cmd/govulncheck@latest
   script:
     - make vet
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-    - if: $CI_MERGE_REQUEST_ID
 
 deeptest:
   stage: build
@@ -85,9 +82,6 @@ deeptest:
     - *base-setup
   script:
     - make deeptest
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-    - if: $CI_MERGE_REQUEST_ID
 
 cli:
   stage: build
@@ -106,9 +100,6 @@ cli:
     paths:
       - bin/
     expire_in: 7 days
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-    - if: $CI_COMMIT_TAG
 
 desktop:
   stage: build
@@ -127,9 +118,6 @@ desktop:
     paths:
       - bin/
     expire_in: 7 days
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-    - if: $CI_COMMIT_TAG
 
 android:
   stage: build
@@ -150,9 +138,6 @@ android:
     paths:
       - view/apps/foss/android/app/build/outputs/apk/release/app-release.apk
     expire_in: 7 days
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-    - if: $CI_COMMIT_TAG
 
 docker:
   stage: package
@@ -173,8 +158,12 @@ docker:
     - docker buildx create --use --name multiarch --driver docker-container --driver-opt network=host
   script:
     - |
-      cp bin/hydris-cli-linux-amd64-* bin/hydris-amd64
-      cp bin/hydris-cli-linux-arm64-* bin/hydris-arm64
+      tar -xJf bin/hydris-cli-linux-amd64-*.tar.xz -C bin
+      rm bin/hydris-cli-linux-amd64-*.tar.xz
+      mv bin/hydris-cli-linux-amd64-* bin/hydris-amd64
+      tar -xJf bin/hydris-cli-linux-arm64-*.tar.xz -C bin
+      rm bin/hydris-cli-linux-arm64-*.tar.xz
+      mv bin/hydris-cli-linux-arm64-* bin/hydris-arm64
       chmod +x bin/hydris-amd64 bin/hydris-arm64
     - VERSION=$(git describe --tags --always)
     - |
@@ -184,6 +173,9 @@ docker:
       fi
       docker buildx build --platform linux/amd64,linux/arm64 \
         $TAGS --push .
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
 
 release:
   stage: package

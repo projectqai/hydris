@@ -8,12 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/projectqai/hydris/engine"
 	pb "github.com/projectqai/proto/go"
 	_goconnect "github.com/projectqai/proto/go/_goconnect"
 
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -45,7 +46,10 @@ func startTestNode(t *testing.T) *testNode {
 	eng.SetNodeID(syntheticID)
 
 	mux := http.NewServeMux()
-	worldPath, worldHandler := _goconnect.NewWorldServiceHandler(eng)
+	pe := engine.NewPolicyEvaluator(eng)
+	worldPath, worldHandler := _goconnect.NewWorldServiceHandler(eng,
+		connect.WithInterceptors(pe.Interceptor()),
+	)
 	mux.Handle(worldPath, worldHandler)
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -54,8 +58,13 @@ func startTestNode(t *testing.T) *testNode {
 	}
 	addr := listener.Addr().String()
 
+	var protos http.Protocols
+	protos.SetHTTP1(true)
+	protos.SetUnencryptedHTTP2(true)
 	srv := &http.Server{
-		Handler: h2c.NewHandler(mux, &http2.Server{}),
+		Handler:     mux,
+		ConnContext: engine.BuiltinConnContext,
+		Protocols:   &protos,
 	}
 	go func() { _ = srv.Serve(listener) }()
 	t.Cleanup(func() { _ = srv.Close() })
@@ -98,6 +107,15 @@ func (n *testNode) has(t *testing.T, id string) bool {
 	return n.get(t, id) != nil
 }
 
+// testFederationCreds injects x-builtin-name: federation so the engine
+// allows pushing entities with a foreign Controller.Node.
+type testFederationCreds struct{}
+
+func (testFederationCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
+	return map[string]string{"x-builtin-name": "federation"}, nil
+}
+func (testFederationCreds) RequireTransportSecurity() bool { return false }
+
 // simulatePushSync performs one push federation cycle: read all entities from
 // src, apply filterForFederation with srcNodeID, push accepted ones to dst.
 func simulatePushSync(t *testing.T, src, dst *testNode, srcNodeID string, ttl time.Duration) {
@@ -108,7 +126,10 @@ func simulatePushSync(t *testing.T, src, dst *testNode, srcNodeID string, ttl ti
 	}
 	defer func() { _ = conn.Close() }()
 
-	dstConn, err := goclient.Connect(dst.addr)
+	dstConn, err := grpc.NewClient(dst.addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithPerRPCCredentials(testFederationCreds{}),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

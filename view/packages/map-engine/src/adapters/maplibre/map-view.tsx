@@ -4,7 +4,7 @@ import "./overrides.css";
 import type { Layer, PickingInfo } from "@deck.gl/core";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import type { FeatureCollection } from "geojson";
-import type { StyleSpecification } from "maplibre-gl";
+import type { MapMouseEvent, MapTouchEvent, StyleSpecification } from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import type { MapRef, ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { Map as MapGL, ScaleControl, useControl } from "react-map-gl/maplibre";
@@ -34,6 +34,8 @@ import { isShapeVisible, type ShapeVisibilityContext } from "../../utils/shape-v
 
 const SECTOR_MIN_ZOOM = 12;
 const OVERLAP_ZOOM_TOLERANCE = 2;
+
+const API_BASE = process.env.EXPO_PUBLIC_HYDRIS_API_URL ?? "";
 
 // Copied from maplibre's ScaleControl so ring gaps match the scale bar exactly
 function getDecimalRoundNum(d: number): number {
@@ -65,9 +67,16 @@ type DeckGLOverlayProps = {
   pickingRadius?: number;
   onClick?: (info: PickingInfo) => void;
   onHover?: (info: PickingInfo) => void;
+  onOverlayReady?: (overlay: MapboxOverlay) => void;
 };
 
-function DeckGLOverlay({ layers, pickingRadius, onClick, onHover }: DeckGLOverlayProps) {
+function DeckGLOverlay({
+  layers,
+  pickingRadius,
+  onClick,
+  onHover,
+  onOverlayReady,
+}: DeckGLOverlayProps) {
   const overlay = useControl(
     () =>
       new MapboxOverlay({
@@ -81,7 +90,14 @@ function DeckGLOverlay({ layers, pickingRadius, onClick, onHover }: DeckGLOverla
         deviceProps: { debug: false },
       }),
   );
-  overlay.setProps({ layers, pickingRadius, onClick, onHover });
+  useEffect(() => {
+    onOverlayReady?.(overlay);
+  }, [overlay, onOverlayReady]);
+  try {
+    overlay.setProps({ layers, pickingRadius, onClick, onHover });
+  } catch {
+    // map state is mid-rebuild after gl context loss; next render picks up
+  }
   return null;
 }
 
@@ -170,8 +186,17 @@ export type MapViewProps = {
   trackHistoryVisible?: boolean;
   rangeRingCenter?: GeoPosition | null;
   rangeRingsActive?: boolean;
+  hiddenMapLayerIds?: ReadonlySet<string>;
+  mapLayerOpacityOverrides?: Readonly<Record<string, number>>;
   onEntityClick?: (id: string | null) => void | Promise<void>;
   onMapClick?: (lat: number, lng: number) => void | Promise<void>;
+  onRadialRequest?: (
+    entityId: string | null,
+    screenX: number,
+    screenY: number,
+    lat: number,
+    lng: number,
+  ) => void | Promise<void>;
   onReady?: () => void | Promise<void>;
   onActionsReady?: (actions: MapActions) => void;
   onTrackingLost?: () => void | Promise<void>;
@@ -195,8 +220,11 @@ export function MapView({
   trackHistoryVisible = false,
   rangeRingCenter = null,
   rangeRingsActive = false,
+  hiddenMapLayerIds,
+  mapLayerOpacityOverrides,
   onEntityClick,
   onMapClick,
+  onRadialRequest,
   onReady,
   onActionsReady,
   onTrackingLost,
@@ -216,6 +244,9 @@ export function MapView({
   onEntityClickRef.current = onEntityClick;
   const onMapClickRef = useRef(onMapClick);
   onMapClickRef.current = onMapClick;
+  const onRadialRequestRef = useRef(onRadialRequest);
+  onRadialRequestRef.current = onRadialRequest;
+  const overlayRef = useRef<MapboxOverlay | null>(null);
   const actionsReadyCalledRef = useRef(false);
   const shapesCollectionRef = useRef<FeatureCollection<ShapeFeature["geometry"], ShapeProperties>>({
     type: "FeatureCollection",
@@ -244,11 +275,82 @@ export function MapView({
     }
   }, [selectedId]);
 
+  // Enter on selected entity opens radial at entity's position.
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== "Enter") return;
+      if (!selectedId) return;
+      const entity = entityMap.get(selectedId);
+      if (!entity?.position) return;
+      const map = mapRef.current?.getMap();
+      if (!map) return;
+      const p = map.project([entity.position.lng, entity.position.lat]);
+      onRadialRequestRef.current?.(selectedId, p.x, p.y, entity.position.lat, entity.position.lng);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [selectedId, entityMap]);
+
+  // Open radial for whatever is under the pointer.
+  // Right click on web, long press on touch (manual for Android).
+  const setupRadialTriggers = (map: ReturnType<NonNullable<typeof mapRef.current>["getMap"]>) => {
+    const fire = (e: MapMouseEvent | MapTouchEvent) => {
+      const info = overlayRef.current?.pickObject({ x: e.point.x, y: e.point.y, radius: 8 });
+      const id = (info?.object as { entity?: { id: string } } | null)?.entity?.id ?? null;
+      onRadialRequestRef.current?.(id, e.point.x, e.point.y, e.lngLat.lat, e.lngLat.lng);
+    };
+
+    let holdTimer: ReturnType<typeof setTimeout> | undefined;
+    const cancelHold = () => clearTimeout(holdTimer);
+
+    map.on("contextmenu", (e) => {
+      e.preventDefault();
+      // the same right-click otherwise bubbles to the radial's dismiss listener
+      // and closes the menu it just opened. only surfaces on Windows, which
+      // fires contextmenu on mouse-up after that listener is already live.
+      e.originalEvent.stopPropagation();
+      fire(e);
+    });
+    map.on("touchstart", (e) => {
+      cancelHold();
+      holdTimer = setTimeout(() => fire(e), 450);
+    });
+    map.on("touchmove", cancelHold);
+    map.on("touchend", cancelHold);
+  };
+
   const handleMapLoad = () => {
     onReady?.();
 
     if (actionsReadyCalledRef.current) return;
     actionsReadyCalledRef.current = true;
+
+    // TODO: remove when upstream is fixed. maplibre-gl _resizeInternal reads
+    // _containerDimensions twice. if clientWidth changes between the reads,
+    // canvas/painter get sized to value A and transform to value B, rendering
+    // a thin strip with the rest black until something else triggers a resize.
+    // cache the first read.
+    const map = mapRef.current?.getMap();
+    if (map) {
+      type Internals = {
+        _resizeInternal: (constrainTransform?: boolean) => void;
+        _containerDimensions: () => [number, number];
+      };
+      const internal = map as unknown as Internals;
+      const origResize = internal._resizeInternal.bind(internal);
+      const origDims = internal._containerDimensions.bind(internal);
+      internal._resizeInternal = (constrainTransform) => {
+        const cached = origDims();
+        internal._containerDimensions = () => cached;
+        try {
+          origResize(constrainTransform);
+        } finally {
+          internal._containerDimensions = origDims;
+        }
+      };
+
+      setupRadialTriggers(map);
+    }
 
     const actions: MapActions = {
       flyTo: (position, options) => {
@@ -280,7 +382,7 @@ export function MapView({
 
   useEffect(() => {
     if (trackedId) {
-      if (trackedEntity) {
+      if (trackedEntity?.position) {
         const pos = trackedEntity.position;
         const lastPos = lastTrackedPositionRef.current;
 
@@ -301,6 +403,90 @@ export function MapView({
       lastTrackedPositionRef.current = null;
     }
   }, [trackedId, trackedEntity, onTrackingLost]);
+
+  // Sync plugin-published map layers with the underlying maplibre map
+  const mountedMapLayersRef = useRef(new Map<string, string>());
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+
+    const ensure = () => {
+      const wanted = new Set<string>();
+
+      // Sort by zIndex so higher renders on top
+      const mapLayers = [...entityMap.values()]
+        .flatMap((e) => (e.mapLayer ? [{ id: e.id, layer: e.mapLayer }] : []))
+        .sort((a, b) => {
+          const za = a.layer.zIndex ?? 0;
+          const zb = b.layer.zIndex ?? 0;
+          return za === zb ? a.id.localeCompare(b.id) : za - zb;
+        });
+
+      for (const { id, layer } of mapLayers) {
+        if (hiddenMapLayerIds?.has(id)) continue;
+        wanted.add(id);
+
+        const sourceId = `plugin-map-layer-${id}`;
+        const layerId = sourceId;
+        // Remount map layers when bbox changes
+        const signature =
+          layer.kind === "tiles"
+            ? layer.url
+            : `${layer.url}|${layer.west},${layer.south},${layer.east},${layer.north}`;
+        const lastSignature = mountedMapLayersRef.current.get(id);
+        const opacity = mapLayerOpacityOverrides?.[id] ?? (layer.opacity || 1);
+
+        if (lastSignature && lastSignature !== signature) {
+          if (map.getLayer(layerId)) map.removeLayer(layerId);
+          if (map.getSource(sourceId)) map.removeSource(sourceId);
+          mountedMapLayersRef.current.delete(id);
+        }
+
+        if (!map.getSource(sourceId)) {
+          // Backend proxies tile/image requests under a fixed path
+          if (layer.kind === "tiles") {
+            map.addSource(sourceId, {
+              type: "raster",
+              tiles: [`${API_BASE}/map/${id}/{z}/{x}/{y}.png`],
+              tileSize: 256,
+            });
+          } else {
+            map.addSource(sourceId, {
+              type: "image",
+              url: `${API_BASE}/map/${id}/image`,
+              coordinates: [
+                [layer.west!, layer.north!],
+                [layer.east!, layer.north!],
+                [layer.east!, layer.south!],
+                [layer.west!, layer.south!],
+              ],
+            });
+          }
+          map.addLayer({
+            id: layerId,
+            type: "raster",
+            source: sourceId,
+            paint: { "raster-opacity": opacity },
+          });
+          mountedMapLayersRef.current.set(id, signature);
+        } else {
+          map.setPaintProperty(layerId, "raster-opacity", opacity);
+        }
+      }
+
+      // Drop layers for hidden entities
+      for (const id of [...mountedMapLayersRef.current.keys()]) {
+        if (wanted.has(id)) continue;
+        const sourceId = `plugin-map-layer-${id}`;
+        if (map.getLayer(sourceId)) map.removeLayer(sourceId);
+        if (map.getSource(sourceId)) map.removeSource(sourceId);
+        mountedMapLayersRef.current.delete(id);
+      }
+    };
+
+    if (map.isStyleLoaded()) ensure();
+    else map.once("load", ensure);
+  }, [entityMap, lastChange?.version, hiddenMapLayerIds, mapLayerOpacityOverrides]);
 
   const version = lastChange?.version ?? 0;
   if (version !== lastShapeVersionRef.current) {
@@ -378,14 +564,14 @@ export function MapView({
 
   const handleAssemblyExpand = (rootId: string) => {
     const root = entityMap.get(rootId);
-    if (!root) return;
+    if (!root?.position) return;
 
     let minLat = root.position.lat;
     let maxLat = root.position.lat;
     let minLng = root.position.lng;
     let maxLng = root.position.lng;
     for (const e of entityMap.values()) {
-      if (e.assemblyParentId === rootId) {
+      if (e.assemblyParentId === rootId && e.position) {
         minLat = Math.min(minLat, e.position.lat);
         maxLat = Math.max(maxLat, e.position.lat);
         minLng = Math.min(minLng, e.position.lng);
@@ -704,6 +890,9 @@ export function MapView({
           pickingRadius={8}
           onClick={handleClick}
           onHover={handleHover}
+          onOverlayReady={(overlay) => {
+            overlayRef.current = overlay;
+          }}
         />
         <ScaleControl position="bottom-right" maxWidth={100} unit="metric" />
       </MapGL>
