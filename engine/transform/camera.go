@@ -30,9 +30,13 @@ func NewCameraTransformer() *CameraTransformer {
 	}
 }
 
+func (ct *CameraTransformer) Reindex(_ map[string]*pb.Entity, _ string) {}
+
 func (ct *CameraTransformer) Validate(head map[string]*pb.Entity, incoming *pb.Entity) error {
 	return nil
 }
+
+func (ct *CameraTransformer) Name() string { return "camera" }
 
 func (ct *CameraTransformer) Resolve(head map[string]*pb.Entity, changedID string, components map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	// If the changed entity is a focal point, re-resolve the owning camera.

@@ -20,7 +20,7 @@ import {
   Tag,
   Wifi,
 } from "lucide-react-native";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 
 import { formatTime } from "../../../../lib/api/use-track-utils";
 import { toast } from "../../../../lib/sonner";
@@ -155,51 +155,44 @@ export function InfoTab({ entity }: InfoTabProps) {
   }
 
   return (
-    <ScrollView className="flex-1">
-      <View>
-        {entity.symbol && (
-          <View className="px-3 pt-3 pb-2">
-            <View className="mb-1 flex-row items-center justify-between">
-              <Text className="text-foreground/75 text-11 font-mono tracking-widest uppercase">
-                Military Symbol
-              </Text>
-              <Pressable
-                onPress={copyMilSymbol}
-                hitSlop={8}
-                accessibilityLabel="Copy military symbol"
-                accessibilityRole="button"
-                className="hover:opacity-70 active:opacity-50"
-              >
-                <Copy size={12} color={t.iconMuted} strokeWidth={2} />
-              </Pressable>
-            </View>
-            <InfoRow label="MIL-STD-2525C" value={entity.symbol.milStd2525C} />
-          </View>
-        )}
-
-        {entity.lifetime && (
-          <View className="border-foreground/10 border-t px-3 pt-3 pb-2">
-            <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
-              Lifetime
+    <View>
+      {entity.symbol && (
+        <View className="px-3 pt-3 pb-2">
+          <View className="mb-1 flex-row items-center justify-between">
+            <Text className="text-foreground/75 text-11 font-mono tracking-widest uppercase">
+              Military Symbol
             </Text>
-            {entity.lifetime.from && (
-              <InfoRow icon={Calendar} label="From" value={formatTime(entity.lifetime.from)} mono />
-            )}
-            {entity.lifetime.until && (
-              <InfoRow
-                icon={Calendar}
-                label="Until"
-                value={formatTime(entity.lifetime.until)}
-                mono
-              />
-            )}
+            <Pressable
+              onPress={copyMilSymbol}
+              hitSlop={8}
+              accessibilityLabel="Copy military symbol"
+              accessibilityRole="button"
+              className="hover:opacity-70 active:opacity-50"
+            >
+              <Copy size={12} color={t.iconMuted} strokeWidth={2} />
+            </Pressable>
           </View>
-        )}
+          <InfoRow label="MIL-STD-2525C" value={entity.symbol.milStd2525C} />
+        </View>
+      )}
 
-        <LinkSection entity={entity} />
-        <PowerSection entity={entity} />
-        <DeviceSection entity={entity} />
-      </View>
-    </ScrollView>
+      {entity.lifetime && (
+        <View className="border-foreground/10 border-t px-3 pt-3 pb-2">
+          <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
+            Lifetime
+          </Text>
+          {entity.lifetime.from && (
+            <InfoRow icon={Calendar} label="From" value={formatTime(entity.lifetime.from)} mono />
+          )}
+          {entity.lifetime.until && (
+            <InfoRow icon={Calendar} label="Until" value={formatTime(entity.lifetime.until)} mono />
+          )}
+        </View>
+      )}
+
+      <LinkSection entity={entity} />
+      <PowerSection entity={entity} />
+      <DeviceSection entity={entity} />
+    </View>
   );
 }

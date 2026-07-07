@@ -1,5 +1,6 @@
 "use no memo";
 
+import { canDockListDetail } from "@hydris/ui/command-palette/list-detail-drawer";
 import {
   currentMode,
   initialPaletteState,
@@ -35,17 +36,20 @@ import Animated, {
 import { toast } from "../../../../lib/sonner";
 import { useFilePicker } from "../../../../lib/use-file-picker";
 import { useMissionHealthStore } from "../../../mission-pack/mission-health-store";
+import { uploadMbtiles } from "../../../mission-pack/upload-mbtiles";
 import { useMissionPack } from "../../../mission-pack/use-mission-pack";
 import { Z } from "../../constants";
 import { useVersionLabel } from "../../store/version-store";
 import { buildCommands, type LayoutActions } from "./command-registry";
 import { CATEGORIES, getTrailSegments, type TrailSegment } from "./palette-helpers";
+import { AssetReadinessView } from "./views/asset-readiness-view";
 import { CommandGroupView } from "./views/command-group-view";
-import { ConfigView, WIDE_BREAKPOINT } from "./views/config-view";
+import { ConfigView } from "./views/config-view";
 import { DiagnosticExportView } from "./views/diagnostic-export-view";
 import { DimensionView } from "./views/dimension-view";
 import { EntityActionsView } from "./views/entity-actions-view";
 import { LocationSearchView } from "./views/location-search-view";
+import { MissionExportView } from "./views/mission-export-view";
 import { MissionHealthView } from "./views/mission-health-view";
 import { RootView } from "./views/root-view";
 
@@ -61,8 +65,11 @@ function getSearchPlaceholder(mode: PaletteMode): string | null {
       return "Search by id or name...";
     case "command-group":
       return `Search ${mode.groupLabel.toLowerCase()}...`;
+    case "asset-readiness":
+      return "Search assets...";
     case "mission-health":
     case "diagnostic-export":
+    case "mission-export":
       return null;
     default:
       return null;
@@ -160,22 +167,28 @@ export function CommandPalette({
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
 
   const isCompact = windowWidth < 640;
-  const isWide = windowWidth >= WIDE_BREAKPOINT;
+  // dock decision keys off the modal's content width, not the raw window width.
+  const configMaxWidth = Math.min(1600, windowWidth * 0.98);
+  const isWide = canDockListDetail(configMaxWidth);
   const isConfigMode = mode.kind === "config";
   const configEntityId = mode.kind === "config" ? mode.entityId : undefined;
+  const isListDetailMode = isConfigMode || mode.kind === "asset-readiness";
 
   const [treeOpen, setTreeOpen] = useState(
     () => isWide || !(initialMode?.kind === "config" ? initialMode.entityId : undefined),
   );
+  // only the top-of-stack view stays mounted, so its local state is dropped on
+  // push. the selected asset is kept here to survive navigating away and back.
+  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+
   useEffect(() => {
-    if (isConfigMode) setTreeOpen(isWide || !configEntityId);
-  }, [isConfigMode, configEntityId, isWide]);
+    if (isListDetailMode) setTreeOpen(isWide || !configEntityId);
+  }, [isListDetailMode, configEntityId, isWide]);
 
   let normalMaxWidth = 560;
   if (isCompact) normalMaxWidth = windowWidth - 16;
   else if (windowWidth >= 1536) normalMaxWidth = 800;
   else if (windowWidth >= 1280) normalMaxWidth = 720;
-  const configMaxWidth = Math.min(1600, windowWidth * 0.98);
 
   const normalMarginTop = isCompact ? 8 : windowHeight * 0.1;
   const configMarginTop = isCompact ? 8 : windowHeight * 0.02;
@@ -190,8 +203,8 @@ export function CommandPalette({
 
   const configProgress = useSharedValue(0);
   useEffect(() => {
-    configProgress.value = withTiming(isConfigMode ? 1 : 0, { duration: 280 });
-  }, [isConfigMode]);
+    configProgress.value = withTiming(isListDetailMode ? 1 : 0, { duration: 280 });
+  }, [isListDetailMode]);
 
   const dialogAnimatedStyle = useAnimatedStyle(() => {
     const p = configProgress.value;
@@ -233,7 +246,15 @@ export function CommandPalette({
           toast.error("Could not open files");
         }
       },
-      exportPack: missionPack.exportPack,
+      importMbtilesFromPicker: async () => {
+        try {
+          const file = await pickFile({ accept: ".mbtiles" });
+          if (file) await uploadMbtiles(file);
+        } catch (err) {
+          console.error("[mbtiles] file picker failed", err);
+          toast.error("Could not open files");
+        }
+      },
     }),
     [missionPack, pickFile],
   );
@@ -245,7 +266,7 @@ export function CommandPalette({
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
-    if (isCompact || isConfigMode) {
+    if (isCompact || isListDetailMode) {
       inputRef.current?.blur();
       return () => {
         previousFocusRef.current?.focus();
@@ -256,7 +277,7 @@ export function CommandPalette({
       clearTimeout(t);
       previousFocusRef.current?.focus();
     };
-  }, [isCompact, isConfigMode]);
+  }, [isCompact, isListDetailMode]);
 
   const handleClose = useCallback(() => {
     clearSavedHighlights();
@@ -320,7 +341,7 @@ export function CommandPalette({
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
-    if (!hasSearchInput || isCompact || isConfigMode) return;
+    if (!hasSearchInput || isCompact || isListDetailMode) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key.length !== 1) return;
@@ -330,7 +351,7 @@ export function CommandPalette({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [hasSearchInput, isCompact, isConfigMode]);
+  }, [hasSearchInput, isCompact, isListDetailMode]);
 
   return (
     <Animated.View
@@ -485,10 +506,12 @@ export function CommandPalette({
               segments={trailSegments}
               dispatch={dispatch}
               leading={
-                isConfigMode ? (
+                isListDetailMode ? (
                   <Pressable
                     onPress={() => setTreeOpen((v) => !v)}
-                    accessibilityLabel={treeOpen ? "Hide device list" : "Show device list"}
+                    accessibilityLabel={`${treeOpen ? "Hide" : "Show"} ${
+                      isConfigMode ? "device" : "asset"
+                    } list`}
                     tabIndex={-1}
                     hitSlop={8}
                     className="bg-surface-overlay/10 hover:bg-glass-hover mr-1.5 rounded p-0.5"
@@ -502,7 +525,7 @@ export function CommandPalette({
           </>
         )}
 
-        <View style={isConfigMode ? { flex: 1 } : { height: contentHeight }}>
+        <View style={isListDetailMode ? { flex: 1 } : { height: contentHeight }}>
           {mode.kind === "root" && (
             <RootView
               query={state.query}
@@ -538,13 +561,27 @@ export function CommandPalette({
           {mode.kind === "config" && (
             <ConfigView
               entityId={mode.entityId}
+              focusCategory={mode.focusCategory}
               query={state.query}
+              isWide={isWide}
               treeOpen={treeOpen}
               onTreeOpenChange={setTreeOpen}
             />
           )}
+          {mode.kind === "asset-readiness" && (
+            <AssetReadinessView
+              dispatch={dispatch}
+              query={state.query}
+              isWide={isWide}
+              treeOpen={treeOpen}
+              onTreeOpenChange={setTreeOpen}
+              selectedId={selectedAssetId}
+              onSelect={setSelectedAssetId}
+            />
+          )}
           {mode.kind === "mission-health" && <MissionHealthView onClose={handleClose} />}
           {mode.kind === "diagnostic-export" && <DiagnosticExportView onClose={handleClose} />}
+          {mode.kind === "mission-export" && <MissionExportView onClose={handleClose} />}
         </View>
 
         {showFooter && (

@@ -12,7 +12,9 @@ import * as DropdownMenu from "zeego/dropdown-menu";
 
 import { ENTITY_NAV_PARAMS, useUrlParams } from "../../lib/use-url-params";
 import { EntityCard } from "./entity-track-card";
+import { usePlacement } from "./placement-context";
 import {
+  hasSortValue,
   selectAssetCount,
   selectAssets,
   selectTrackCount,
@@ -22,11 +24,13 @@ import {
 import {
   DEFAULT_SORT,
   type ListMode,
+  type ListSortField,
   type SortConfig,
   useLeftPanelStore,
 } from "./store/left-panel-store";
 import { useMapEngine } from "./store/map-engine-store";
 import { useSelectionStore } from "./store/selection-store";
+import { useStoreHydrated } from "./store/use-store-hydrated";
 
 export function CollapsedStats() {
   const t = useThemeColors();
@@ -62,27 +66,30 @@ const TABS = [
   { id: "assets" as const, label: "Assets" },
 ];
 
-const SORT_OPTIONS: { field: SortField; label: string }[] = [
+const SORT_OPTIONS: { field: ListSortField; label: string }[] = [
   { field: SortField.SortFieldLabel, label: "Name" },
   { field: SortField.SortFieldPriority, label: "Priority" },
   { field: SortField.SortFieldLifetimeFresh, label: "Last Updated" },
   { field: SortField.SortFieldLifetimeFrom, label: "Created" },
   { field: SortField.SortFieldGeoAltitude, label: "Altitude" },
   { field: SortField.SortFieldClassificationIdentity, label: "Identity" },
+  { field: SortField.SortFieldClassificationDimension, label: "Dimension" },
   { field: SortField.SortFieldBearingAzimuth, label: "Bearing" },
   { field: SortField.SortFieldLinkLastSeen, label: "Last Seen" },
   { field: SortField.SortFieldLinkQuality, label: "Link Quality" },
   { field: SortField.SortFieldPowerBatteryCharge, label: "Battery" },
+  { field: "readiness", label: "Readiness" },
   { field: SortField.SortFieldDeviceState, label: "Device State" },
 ];
 
-function getSortLabel(field: SortField): string {
+function getSortLabel(field: ListSortField): string {
   return SORT_OPTIONS.find((o) => o.field === field)?.label ?? "Name";
 }
 
 const PAGE_SIZE = 200;
 
 export function LeftPanelContent() {
+  const hydrated = useStoreHydrated(useLeftPanelStore.persist);
   const listMode = useLeftPanelStore((s) => s.listMode);
   const setListMode = useLeftPanelStore((s) => s.setListMode);
   const sort = useLeftPanelStore((s) => s.sort);
@@ -92,6 +99,7 @@ export function LeftPanelContent() {
   const select = useSelectionStore((s) => s.select);
   const selectedEntityId = useSelectionStore((s) => s.selectedEntityId);
   const mapEngine = useMapEngine();
+  const { isPlacing } = usePlacement();
   const { clearParams } = useUrlParams();
   const t = useThemeColors();
 
@@ -126,7 +134,7 @@ export function LeftPanelContent() {
       select(null);
     } else {
       select(entity.id);
-      if (entity.geo) {
+      if (entity.geo && !isPlacing) {
         const currentZoom = mapEngine.getView()?.zoom ?? 10;
         const targetZoom = Math.max(currentZoom, 14);
         mapEngine.flyTo(
@@ -151,7 +159,19 @@ export function LeftPanelContent() {
   );
   const hasMore = displayedEntities.length < entities.length;
 
+  const availableSortOptions = useMemo(() => {
+    if (entities.length === 0) return SORT_OPTIONS;
+    return SORT_OPTIONS.filter(
+      (option) =>
+        option.field === sort.field || entities.some((e) => hasSortValue(e, option.field)),
+    );
+  }, [entities, sort.field]);
+
   const SortIcon = sort.descending ? ArrowDownAZ : ArrowUpAZ;
+
+  if (!hydrated) {
+    return <View className="flex-1 select-none" />;
+  }
 
   return (
     <View className="flex-1 select-none">
@@ -182,7 +202,7 @@ export function LeftPanelContent() {
             align="end"
             className="border-border/50 bg-card min-w-[180px] overflow-hidden rounded-lg border py-1 shadow-lg outline-none"
           >
-            {SORT_OPTIONS.map((option) => {
+            {availableSortOptions.map((option) => {
               const isActive = sort.field === option.field;
               return (
                 <DropdownMenu.CheckboxItem

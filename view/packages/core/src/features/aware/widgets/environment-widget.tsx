@@ -1,10 +1,10 @@
+import { TileFrame } from "@hydris/ui/tile-frame";
 import { MetricKind } from "@projectqai/proto/metrics";
 import { Leaf } from "lucide-react-native";
 
-import type { MetricCategoryWidgetConfig } from "./metric-category-widget";
-import { MetricCategoryWidget } from "./metric-category-widget";
+import { MetricTile, type MetricTileConfig } from "./metric-tile";
 
-export const ENVIRONMENT_CONFIG: MetricCategoryWidgetConfig = {
+export const ENVIRONMENT_CONFIG: MetricTileConfig = {
   title: "Environment",
   icon: Leaf,
   categories: ["environmental", "airQuality"],
@@ -19,5 +19,9 @@ export const ENVIRONMENT_CONFIG: MetricCategoryWidgetConfig = {
 };
 
 export function EnvironmentWidget() {
-  return <MetricCategoryWidget config={ENVIRONMENT_CONFIG} />;
+  return (
+    <TileFrame>
+      <MetricTile config={ENVIRONMENT_CONFIG} />
+    </TileFrame>
+  );
 }

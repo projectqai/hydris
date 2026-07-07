@@ -157,7 +157,7 @@ func packArtifacts(ctx context.Context, p *missionpkg.Packer, entities []*pb.Ent
 		if e.Artifact == nil {
 			continue
 		}
-		id := e.Artifact.Id
+		id := e.Artifact.Id //nolint:staticcheck // SA1019: Artifact.Id migration pending
 		if id == "" || seen[id] {
 			continue
 		}

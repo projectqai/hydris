@@ -2,7 +2,22 @@ import { Badge } from "@hydris/ui/badge";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import type { Entity } from "@projectqai/proto/world";
-import { Clock, Compass, Mountain, Navigation, Radio, Ruler, Zap } from "lucide-react-native";
+import { DeviceState } from "@projectqai/proto/world";
+import {
+  Circle,
+  CircleAlert,
+  CircleCheck,
+  CircleX,
+  Clock,
+  Compass,
+  MapPin,
+  Mountain,
+  Navigation,
+  Radio,
+  Ruler,
+  Wifi,
+  Zap,
+} from "lucide-react-native";
 import { useColorScheme } from "nativewind";
 import type { ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
@@ -16,12 +31,20 @@ import {
 } from "../../lib/api/use-track-utils";
 import { selectSelfGeo, useEntityStore } from "./store/entity-store";
 import {
+  deriveAssetReadiness,
+  gateValue,
+  type ReadinessGate,
+  worstBlocker,
+} from "./utils/asset-readiness";
+import { formatDeviceState } from "./utils/format-entity";
+import {
   calculateCourseFromVelocity,
   calculateGroundSpeed,
   calculateHeadingFromOrientation,
   formatDistance,
   haversineDistance,
 } from "./utils/format-kinematics";
+import { READINESS_VISUAL } from "./utils/readiness-display";
 
 type CardRootProps = {
   isSelected?: boolean;
@@ -102,6 +125,48 @@ function SourceItem({ icon: Icon, value }: { icon: typeof Radio; value: string }
   );
 }
 
+const DEVICE_STATE_VISUAL: Record<
+  DeviceState,
+  { icon: typeof Circle; colorKey: "iconMuted" | "pendingForeground" | "redForeground" }
+> = {
+  [DeviceState.DeviceStateActive]: { icon: CircleCheck, colorKey: "iconMuted" },
+  [DeviceState.DeviceStatePending]: { icon: Circle, colorKey: "pendingForeground" },
+  [DeviceState.DeviceStateDegraded]: { icon: CircleAlert, colorKey: "pendingForeground" },
+  [DeviceState.DeviceStateFailed]: { icon: CircleX, colorKey: "redForeground" },
+};
+
+function StatusItem({ state }: { state: DeviceState }) {
+  const t = useThemeColors();
+  const { icon: Icon, colorKey } = DEVICE_STATE_VISUAL[state];
+  const color = t[colorKey];
+  const isActive = state === DeviceState.DeviceStateActive;
+  return (
+    <View className="flex-row items-center gap-1">
+      <Icon size={11} color={color} strokeWidth={1.5} />
+      <Text
+        className={cn("font-sans-medium text-11", isActive && "text-foreground/80")}
+        style={isActive ? undefined : { color }}
+      >
+        {formatDeviceState(state).label}
+      </Text>
+    </View>
+  );
+}
+
+function ReadinessBlockerItem({ entity, gate }: { entity: Entity; gate: ReadinessGate }) {
+  const t = useThemeColors();
+  const Icon = gate.key === "link" ? Wifi : MapPin;
+  const color = t[READINESS_VISUAL[gate.status].colorKey];
+  return (
+    <View className="flex-row items-center gap-1">
+      <Icon size={11} color={color} strokeWidth={1.5} />
+      <Text className="font-sans-medium text-11" style={{ color }}>
+        {gateValue(entity, gate)}
+      </Text>
+    </View>
+  );
+}
+
 export const EntityCardParts = {
   Root: CardRoot,
   Header: CardHeader,
@@ -125,6 +190,7 @@ export function EntityCard({ entity, isSelected, onPress }: EntityCardProps) {
   const heading = calculateHeadingFromOrientation(entity.orientation);
   const speed = calculateGroundSpeed(entity.kinematics?.velocityEnu);
   const source = entity.controller?.id;
+  const blocker = worstBlocker(deriveAssetReadiness(entity));
   const selfGeo = useEntityStore(selectSelfGeo);
   const distance = selfGeo && entity.geo ? haversineDistance(selfGeo, entity.geo) : undefined;
 
@@ -139,6 +205,11 @@ export function EntityCard({ entity, isSelected, onPress }: EntityCardProps) {
         }
       />
       <CardRow>
+        {blocker && blocker.key !== "device" ? (
+          <ReadinessBlockerItem entity={entity} gate={blocker} />
+        ) : (
+          entity.device && <StatusItem state={entity.device.state} />
+        )}
         {heading !== undefined && <DataItem icon={Navigation} value={`${heading.toFixed(0)}°`} />}
         {course !== undefined && <DataItem icon={Compass} value={`${course.toFixed(0)}°`} />}
         <DataItem icon={Mountain} value={altitude} />

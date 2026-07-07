@@ -3,6 +3,7 @@
 import { ControlButton } from "@hydris/ui/controls";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
+import { Tag } from "@hydris/ui/tag";
 import { ChevronDown, Columns3Cog, PanelsTopLeft } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
@@ -125,11 +126,7 @@ export function LayoutMenu({
                       {preset.name}
                     </Text>
                     {Platform.OS === "web" && PRESET_KEYBINDS[preset.id] && (
-                      <View className="bg-surface-overlay/6 h-4 items-center justify-center rounded px-1">
-                        <Text className="text-11 text-on-surface/70 font-mono leading-none">
-                          {PRESET_KEYBINDS[preset.id]}
-                        </Text>
-                      </View>
+                      <Tag>{PRESET_KEYBINDS[preset.id]}</Tag>
                     )}
                   </Pressable>
                   {i < PRESETS.length - 1 && <View className="bg-surface-overlay/6 mx-2 h-px" />}

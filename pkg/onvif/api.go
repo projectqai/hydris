@@ -390,7 +390,7 @@ func soapRequest(url, body, user, pass string) ([]byte, error) {
 	return validateSOAPResponse(data, resp)
 }
 
-func digestAuthHeader(method, rawURL, user, pass, wwwAuth string) string {
+func DigestAuthHeader(method, rawURL, user, pass, wwwAuth string) string {
 	params := parseDigestChallenge(wwwAuth)
 	realm := params["realm"]
 	digestNonce := params["nonce"]
@@ -428,7 +428,7 @@ func digestAuthHeader(method, rawURL, user, pass, wwwAuth string) string {
 }
 
 func soapRequestDigest(url, body, user, pass string, challengeResp *http.Response) ([]byte, error) {
-	authHeader := digestAuthHeader("POST", url, user, pass, challengeResp.Header.Get("WWW-Authenticate"))
+	authHeader := DigestAuthHeader("POST", url, user, pass, challengeResp.Header.Get("WWW-Authenticate"))
 
 	envelope := soapEnvelope(body, "", "")
 	req, err := http.NewRequest("POST", url, strings.NewReader(envelope))
@@ -478,7 +478,7 @@ func DigestPost(rawURL, user, pass, contentType string, body []byte) ([]byte, er
 		return nil, err
 	}
 	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Authorization", digestAuthHeader("POST", rawURL, user, pass, wwwAuth))
+	req.Header.Set("Authorization", DigestAuthHeader("POST", rawURL, user, pass, wwwAuth))
 
 	resp2, err := client.Do(req)
 	if err != nil {
@@ -518,7 +518,7 @@ func DigestGet(rawURL, user, pass string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", digestAuthHeader("GET", rawURL, user, pass, wwwAuth))
+	req.Header.Set("Authorization", DigestAuthHeader("GET", rawURL, user, pass, wwwAuth))
 
 	resp2, err := client.Do(req)
 	if err != nil {

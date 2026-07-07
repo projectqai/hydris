@@ -867,7 +867,7 @@ func processHDT(ctx context.Context, logger *slog.Logger, hdt nmea.HDT, worldCli
 
 	state.lastHeadingHDT = time.Now()
 
-	rad := hdt.Heading * math.Pi / 180.0
+	rad := -hdt.Heading * math.Pi / 180.0
 	halfRad := rad / 2.0
 
 	entity := selfBaseEntity(controllerName, trackerID, config)
@@ -1018,7 +1018,7 @@ func processOSD(ctx context.Context, logger *slog.Logger, osd nmea.OSD, worldCli
 	acceptHeading := acceptSource(config.SelfHeadingSource, "osd", []time.Time{state.lastHeadingHDT}, config.EntityExpirySeconds)
 	if acceptHeading && osd.Heading >= 0 && osd.Heading < 360 {
 		state.lastHeadingOSD = time.Now()
-		rad := osd.Heading * math.Pi / 180.0
+		rad := -osd.Heading * math.Pi / 180.0
 		halfRad := rad / 2.0
 		entity.Orientation = &pb.OrientationComponent{
 			Orientation: &pb.Quaternion{
@@ -1126,7 +1126,7 @@ func processAISVessel(ctx context.Context, logger *slog.Logger, vessel *AISVesse
 
 		if vessel.Heading >= 0 && vessel.Heading < 360 &&
 			acceptSource(config.SelfHeadingSource, "ais", []time.Time{state.lastHeadingHDT, state.lastHeadingOSD}, config.EntityExpirySeconds) {
-			rad := float64(vessel.Heading) * math.Pi / 180.0
+			rad := -float64(vessel.Heading) * math.Pi / 180.0
 			halfRad := rad / 2.0
 			entity.Orientation = &pb.OrientationComponent{
 				Orientation: &pb.Quaternion{
@@ -1399,7 +1399,7 @@ func VesselToEntity(vessel *AISVessel, controllerName string, trackerID string, 
 	}
 
 	if vessel.Heading >= 0 && vessel.Heading < 360 {
-		rad := float64(vessel.Heading) * math.Pi / 180.0
+		rad := -float64(vessel.Heading) * math.Pi / 180.0
 		halfRad := rad / 2.0
 		entity.Orientation = &pb.OrientationComponent{
 			Orientation: &pb.Quaternion{

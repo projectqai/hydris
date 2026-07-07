@@ -13,14 +13,12 @@ import (
 )
 
 type WHEPHandler struct {
-	getSourceURL media.GetSourceURLFunc
-	bridges      *media.BridgeManager
+	bridges *media.BridgeManager
 }
 
-func NewWHEPHandler(getSourceURL media.GetSourceURLFunc, bridges *media.BridgeManager) *WHEPHandler {
+func NewWHEPHandler(bridges *media.BridgeManager) *WHEPHandler {
 	return &WHEPHandler{
-		getSourceURL: getSourceURL,
-		bridges:      bridges,
+		bridges: bridges,
 	}
 }
 
@@ -62,11 +60,6 @@ func (h *WHEPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	cam := entity.Camera.Streams[cameraIndex]
 
-	sourceURL := h.getSourceURL(entityID, cameraIndex)
-	if sourceURL == "" {
-		sourceURL = cam.Url
-	}
-
 	offerSDP, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "failed to read offer", http.StatusBadRequest)
@@ -74,9 +67,9 @@ func (h *WHEPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bridgeKey := entityID + "/" + strconv.Itoa(cameraIndex)
-	bridge, err := h.bridges.GetOrCreate(bridgeKey, sourceURL)
+	bridge, err := h.bridges.GetOrCreate(bridgeKey, cam.Url)
 	if err != nil {
-		slog.Error("whep: failed to create bridge", "key", bridgeKey, "error", err)
+		slog.Error("whep: failed to create bridge", "entity", entityID, "stream", cameraIndex, "url", cam.Url, "error", err)
 		http.Error(w, "failed to connect to camera", http.StatusBadGateway)
 		return
 	}

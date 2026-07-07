@@ -15,12 +15,8 @@ import { ENTITY_NAV_PARAMS, useUrlParams } from "../../../../../lib/use-url-para
 import { useEntityStore } from "../../../store/entity-store";
 import { useMapEngine } from "../../../store/map-engine-store";
 import { useSelectionStore } from "../../../store/selection-store";
-import {
-  getConfigState,
-  getConfigStateBadgeVariant,
-  getEntityIcon,
-} from "../../../utils/entity-helpers";
-import { classifyEntity, getBattleDimension, getFunctionCategory } from "../palette-helpers";
+import { getConfigStateBadge, getEntityIcon } from "../../../utils/entity-helpers";
+import { classifyEntity, getAssetCategory, getBattleDimension } from "../palette-helpers";
 import { searchEntities } from "../palette-search";
 
 type ListItem =
@@ -53,7 +49,7 @@ export function DimensionView({
     if (classifyEntity(entity) !== category) continue;
     const match =
       category === "assets"
-        ? getFunctionCategory(entity) === dimension
+        ? getAssetCategory(entity) === dimension
         : getBattleDimension(entity) === dimension;
     if (!match) continue;
     dimensionEntities.set(id, entity);
@@ -144,7 +140,7 @@ export function DimensionView({
               );
             }
             const entity = item.entity;
-            const configState = getConfigState(entity);
+            const configBadge = getConfigStateBadge(entity);
             const Icon = getEntityIcon(entity);
             const isHighlighted = index === highlightedIndex;
 
@@ -174,9 +170,9 @@ export function DimensionView({
                     </Text>
                   )}
                 </View>
-                {configState && (
-                  <Badge variant={getConfigStateBadgeVariant(configState)} size="sm">
-                    {configState}
+                {configBadge && (
+                  <Badge variant={configBadge.variant} size="sm">
+                    {configBadge.label}
                   </Badge>
                 )}
               </Pressable>

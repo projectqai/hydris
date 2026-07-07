@@ -24,13 +24,21 @@ type TabsProps = {
   currentTab?: string;
   onTabChange?: (tabName: string) => void;
   disableHover?: boolean;
+  fill?: boolean;
 };
 
 export function Tab({ children }: TabProps) {
   return <>{children}</>;
 }
 
-export function Tabs({ children, initialTab, currentTab, onTabChange, disableHover }: TabsProps) {
+export function Tabs({
+  children,
+  initialTab,
+  currentTab,
+  onTabChange,
+  disableHover,
+  fill = true,
+}: TabsProps) {
   const t = useThemeColors();
   const childrenArray = (Array.isArray(children) ? children : [children]).filter(
     (child): child is ReactElement<TabProps> => Boolean(child),
@@ -71,7 +79,7 @@ export function Tabs({ children, initialTab, currentTab, onTabChange, disableHov
   const activeChild = childrenArray.find((child) => child.props.name === activeTab);
 
   return (
-    <View className="flex-1">
+    <View className={fill ? "flex-1" : undefined}>
       <View className="border-border/50 border-b">
         <ScrollView
           ref={scrollRef}
@@ -135,7 +143,7 @@ export function Tabs({ children, initialTab, currentTab, onTabChange, disableHov
           })}
         </ScrollView>
       </View>
-      <View className="flex-1">{activeChild?.props.children}</View>
+      <View className={fill ? "flex-1" : undefined}>{activeChild?.props.children}</View>
     </View>
   );
 }

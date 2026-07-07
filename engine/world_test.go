@@ -41,7 +41,7 @@ func TestMergeEntityComponents(t *testing.T) {
 		Lifetime: &pb.Lifetime{From: timestamppb.New(time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))},
 	}
 
-	merged, accepted := w.mergeEntityComponents("e1", w.head["e1"], src, "test", false)
+	merged, accepted := w.mergeEntityComponents("e1", w.head["e1"], src, meta.Component{Builtin: "test"})
 	if !accepted {
 		t.Fatal("expected merge to accept components")
 	}
@@ -76,7 +76,7 @@ func TestMergeEntityComponents_EmptySrc(t *testing.T) {
 		Lifetime: &pb.Lifetime{From: timestamppb.New(time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))},
 	}
 
-	_, accepted := w.mergeEntityComponents("e1", w.head["e1"], src, "test", false)
+	_, accepted := w.mergeEntityComponents("e1", w.head["e1"], src, meta.Component{Builtin: "test"})
 	if accepted {
 		t.Error("merge with no components should not accept anything")
 	}

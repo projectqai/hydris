@@ -1,7 +1,8 @@
 "use no memo";
 
+import { useThemeColors } from "@hydris/ui/lib/theme";
 import { useColorScheme } from "nativewind";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { View } from "react-native";
 
 import { MapAttribution } from "../../map-search";
@@ -14,18 +15,19 @@ import {
   useEntityStore,
 } from "../../store/entity-store";
 import {
+  clearFlyToTarget,
   registerMapRef,
   setCurrentView,
   unregisterMapRef,
   useMapEngineStore,
 } from "../../store/map-engine-store";
-import { useMapStore, useMapStoreHydrated } from "../../store/map-store";
+import { useMapStore } from "../../store/map-store";
 import { useOverlayStore } from "../../store/overlay-store";
 import { useRadialMenuStore } from "../../store/radial-menu-store";
 import { useRangeRingStore } from "../../store/range-ring-store";
 import { useSelectionStore } from "../../store/selection-store";
+import { useStoreHydrated } from "../../store/use-store-hydrated";
 import { buildDelta, buildDeltaChunked } from "../../utils/transform-entities";
-import { PlacementOverlay } from "../placement-overlay";
 import { RadialMenuController } from "../radial-menu/radial-menu-controller";
 import { MapControls } from "./map-controls";
 
@@ -47,8 +49,10 @@ export function MapPane() {
   const entities = useEntityStore((state) => state.entities);
   const lastChange = useEntityStore(selectLastChange);
   const detectionEntityIds = useEntityStore(selectDetectionEntityIds);
-  const baseLayer = useMapStore((state) => state.layer);
-  const hydrated = useMapStoreHydrated();
+  const offlineBasemapId = useMapStore((state) => state.offlineBasemapId);
+  const layer = useMapStore((state) => state.layer);
+  const baseLayer = offlineBasemapId && entities.has(offlineBasemapId) ? offlineBasemapId : layer;
+  const hydrated = useStoreHydrated(useMapStore.persist);
   const tracks = useOverlayStore((state) => state.tracks);
   const sensors = useOverlayStore((state) => state.sensors);
   const visualization = useOverlayStore((state) => state.visualization);
@@ -59,6 +63,11 @@ export function MapPane() {
   const primaryRef = useMapEngineStore((s) => s.primaryRef);
   const isPrimary = primaryRef === localRef;
   const { isPlacing } = usePlacement();
+  const t = useThemeColors();
+  const placementCoordColors = useMemo(
+    () => ({ bg: t.paneHeaderBg, border: t.borderSubtle, text: t.foreground }),
+    [t.paneHeaderBg, t.borderSubtle, t.foreground],
+  );
 
   useEffect(() => {
     registerMapRef(localRef);
@@ -183,6 +192,7 @@ export function MapPane() {
         visualization.shapes,
         visualization.detections,
         visualization.trackHistory,
+        visualization.clustering,
       );
     };
     push();
@@ -196,6 +206,7 @@ export function MapPane() {
     visualization.shapes,
     visualization.detections,
     visualization.trackHistory,
+    visualization.clustering,
   ]);
 
   useEffect(() => {
@@ -305,6 +316,9 @@ export function MapPane() {
           shapesVisible={visualization.shapes}
           detectionsVisible={visualization.detections}
           trackHistoryVisible={visualization.trackHistory}
+          clusteringEnabled={visualization.clustering}
+          isPlacing={isPlacing && isPrimary}
+          placementCoordColors={placementCoordColors}
           onEntityClick={handleEntityClick}
           onMapClick={handleMapClick}
           onRadialRequest={async (entityId, screenX, screenY, lat, lng) => {
@@ -323,6 +337,8 @@ export function MapPane() {
             localViewRef.current = { lat, lng, zoom };
             if (isPrimary) {
               setCurrentView(lat, lng, zoom);
+              // drop the consumed target so a layout remount can't re-fire it
+              if (useMapEngineStore.getState().flyToTarget) clearFlyToTarget();
               if (viewPersistTimer.current) clearTimeout(viewPersistTimer.current);
               viewPersistTimer.current = setTimeout(() => {
                 useMapStore.getState().setSavedView({ lat, lng, zoom });
@@ -338,7 +354,6 @@ export function MapPane() {
         <MapControls mapRef={localRef} viewRef={localViewRef} />
         <MapAttribution />
       </View>
-      {isPlacing && isPrimary && <PlacementOverlay />}
       {isPrimary && <RadialMenuController />}
     </View>
   );

@@ -7,7 +7,7 @@ import * as Clipboard from "expo-clipboard";
 import { Copy, Eye, Info, MapPin, SquareStack } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { createContext, useContext, useEffect, useState } from "react";
-import { Pressable, View } from "react-native";
+import { Pressable, ScrollView, View } from "react-native";
 
 import {
   getEntityName,
@@ -48,7 +48,7 @@ function Root({ entity, children }: { entity: Entity; children: ReactNode }) {
   );
 }
 
-function Header({ children }: { children?: ReactNode }) {
+function Header() {
   const t = useThemeColors();
   const { entity, entityName, status } = useEntityDetails();
 
@@ -81,7 +81,7 @@ function Header({ children }: { children?: ReactNode }) {
 
       <Pressable
         onPress={() => copyToClipboard(entity.id)}
-        className="mt-3 mb-2.5 flex-row items-center gap-1.5 active:opacity-70"
+        className="mt-3 flex-row items-center gap-1.5 active:opacity-70"
         hitSlop={8}
         accessibilityLabel="Copy entity ID"
         accessibilityRole="button"
@@ -91,10 +91,12 @@ function Header({ children }: { children?: ReactNode }) {
         </View>
         <Copy size={12} color={t.iconMuted} strokeWidth={2} />
       </Pressable>
-
-      {children}
     </View>
   );
+}
+
+function Body({ children }: { children: ReactNode }) {
+  return <ScrollView className="flex-1">{children}</ScrollView>;
 }
 
 function DetailTabs() {
@@ -105,12 +107,6 @@ function DetailTabs() {
 
   const hasLocationTab = !!(entity.bearing || entity.geo?.covariance);
   const hasInfoTab = !!(entity.symbol || entity.lifetime);
-  const availableTabs = [
-    "overview",
-    ...(hasLocationTab ? ["location"] : []),
-    ...(hasInfoTab ? ["info"] : []),
-    "components",
-  ];
 
   const initialTab = params.tab ?? storedTab ?? "overview";
   const [activeTab, setActiveTab] = useState(() => {
@@ -123,10 +119,16 @@ function DetailTabs() {
   }, [storedTab, clearInitialTab]);
 
   useEffect(() => {
+    const availableTabs = [
+      "overview",
+      ...(hasLocationTab ? ["location"] : []),
+      ...(hasInfoTab ? ["info"] : []),
+      "components",
+    ];
     if (params.tab && !availableTabs.includes(params.tab)) {
       toast.error(`Tab "${params.tab}" not available for this entity`);
     }
-  }, [params.tab, availableTabs]);
+  }, [params.tab, hasLocationTab, hasInfoTab]);
 
   const handleTabChange = (tabName: string) => {
     setActiveTab(tabName);
@@ -134,7 +136,7 @@ function DetailTabs() {
   };
 
   return (
-    <Tabs currentTab={activeTab} onTabChange={handleTabChange} disableHover>
+    <Tabs currentTab={activeTab} onTabChange={handleTabChange} disableHover fill={false}>
       <Tab name="overview" title="Overview" subtitle="Overview" icon={Eye}>
         <OverviewTab entity={entity} />
       </Tab>
@@ -160,5 +162,6 @@ export { useEntityDetails };
 export const EntityDetails = {
   Root,
   Header,
+  Body,
   Tabs: DetailTabs,
 };

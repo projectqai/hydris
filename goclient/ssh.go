@@ -2,6 +2,8 @@ package goclient
 
 import (
 	"context"
+	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -63,6 +65,34 @@ func findByte(s string, b byte) int {
 	return -1
 }
 
+// knownHostKeyAlgorithms returns the host-key algorithms pinned for addr in
+// the known_hosts database, in no particular order. It probes the callback
+// with a throwaway key: on a known host this yields a *knownhosts.KeyError
+// whose Want lists every key we already trust. Returns nil for unknown hosts
+// (or the insecure callback), leaving negotiation at Go's defaults.
+func knownHostKeyAlgorithms(cb ssh.HostKeyCallback, addr string) []string {
+	dummy, err := ssh.NewPublicKey(ed25519.PublicKey(make([]byte, ed25519.PublicKeySize)))
+	if err != nil {
+		return nil
+	}
+	host, _, _ := net.SplitHostPort(addr)
+	remote := &net.TCPAddr{IP: net.ParseIP(host)}
+
+	var keyErr *knownhosts.KeyError
+	if !errors.As(cb(addr, remote, dummy), &keyErr) {
+		return nil
+	}
+	var algos []string
+	seen := map[string]bool{}
+	for _, k := range keyErr.Want {
+		if t := k.Key.Type(); !seen[t] {
+			seen[t] = true
+			algos = append(algos, t)
+		}
+	}
+	return algos
+}
+
 // NewSSHTunnel establishes an SSH connection to the given destination
 // (user@host:port) using the SSH agent and default key files.
 func NewSSHTunnel(destination string) (*SSHTunnel, error) {
@@ -110,10 +140,18 @@ func NewSSHTunnel(destination string) (*SSHTunnel, error) {
 	// case-insensitive (RFC 4251 §6) and ssh-keyscan lowercases them.
 	host = strings.ToLower(host)
 	addr := net.JoinHostPort(host, port)
+
+	// Unlike OpenSSH, Go does not order host-key negotiation by what we
+	// already trust, so the server may offer a key type we have no entry
+	// for and knownhosts reports a spurious mismatch. Constrain negotiation
+	// to the algorithms actually pinned for this host.
+	hostKeyAlgos := knownHostKeyAlgorithms(hostKeyCallback, addr)
+
 	client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
-		User:            sshUser,
-		Auth:            authMethods,
-		HostKeyCallback: hostKeyCallback,
+		User:              sshUser,
+		Auth:              authMethods,
+		HostKeyCallback:   hostKeyCallback,
+		HostKeyAlgorithms: hostKeyAlgos,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("SSH dial %s: %w", addr, err)

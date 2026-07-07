@@ -3,10 +3,12 @@ import type { LayoutNode } from "@hydris/ui/layout/types";
 import type { LucideIcon } from "lucide-react-native";
 import {
   Activity,
+  Blocks,
   Download,
   Eye,
   Layout,
   Link2,
+  ListChecks,
   Lock,
   Map,
   MapPin,
@@ -31,6 +33,7 @@ import { useOverlayStore } from "../../store/overlay-store";
 import { resetWorld } from "../../store/reset-world";
 import { useSelectionStore } from "../../store/selection-store";
 import { useThemeStore } from "../../store/theme-store";
+import { PLUGINS_CATEGORY } from "../configuration-modal/use-config-tree";
 
 export type Command = {
   id: string;
@@ -66,8 +69,16 @@ export type LayoutActions = {
 
 export type MissionPackActions = {
   importFromPicker: () => Promise<void>;
-  exportPack: () => Promise<void>;
+  importMbtilesFromPicker: () => Promise<void>;
 };
+
+// shown at the top of the commands list, in this order
+export const PINNED_COMMAND_IDS = [
+  "world-mission-import",
+  "manage-plugins",
+  "configuration",
+  "world-reset",
+];
 
 export function buildCommands(layout: LayoutActions, missionPack: MissionPackActions): Command[] {
   const commands: Command[] = [
@@ -79,6 +90,15 @@ export function buildCommands(layout: LayoutActions, missionPack: MissionPackAct
       category: "configuration",
       action: () => {},
       mode: { kind: "config" },
+    },
+    {
+      id: "manage-plugins",
+      label: "Manage plugins",
+      description: "Browse and configure plugins",
+      icon: Blocks,
+      category: "configuration",
+      action: () => {},
+      mode: { kind: "config", focusCategory: PLUGINS_CATEGORY },
     },
 
     // Display
@@ -335,7 +355,7 @@ export function buildCommands(layout: LayoutActions, missionPack: MissionPackAct
     // World
     {
       id: "world-mission-import",
-      label: "Import mission pack",
+      label: "Load mission pack",
       description: "Load a mission pack from a file",
       icon: Upload,
       category: "world",
@@ -344,14 +364,23 @@ export function buildCommands(layout: LayoutActions, missionPack: MissionPackAct
       },
     },
     {
+      id: "world-mbtiles-import",
+      label: "Import offline map",
+      description: "Load a .mbtiles tileset",
+      icon: Map,
+      category: "world",
+      action: () => {
+        void missionPack.importMbtilesFromPicker();
+      },
+    },
+    {
       id: "world-mission-export",
       label: "Export mission pack",
       description: "Download the current world state as a mission pack",
       icon: Package,
       category: "world",
-      action: () => {
-        void missionPack.exportPack();
-      },
+      action: () => {},
+      mode: { kind: "mission-export" },
     },
   ];
 
@@ -363,6 +392,16 @@ export function buildCommands(layout: LayoutActions, missionPack: MissionPackAct
     category: "world",
     action: () => {},
     mode: { kind: "mission-health" },
+  });
+
+  commands.push({
+    id: "world-asset-readiness",
+    label: "Asset readiness",
+    description: "Assets not yet ready or on the map",
+    icon: ListChecks,
+    category: "world",
+    action: () => {},
+    mode: { kind: "asset-readiness" },
   });
 
   commands.push({

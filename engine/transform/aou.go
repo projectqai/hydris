@@ -36,9 +36,13 @@ func NewAOUTransformer() *AOUTransformer {
 	}
 }
 
+func (t *AOUTransformer) Reindex(_ map[string]*pb.Entity, _ string) {}
+
 func (t *AOUTransformer) Validate(_ map[string]*pb.Entity, _ *pb.Entity) error {
 	return nil
 }
+
+func (t *AOUTransformer) Name() string { return "aou" }
 
 func (t *AOUTransformer) Resolve(head map[string]*pb.Entity, changedID string, _ map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	entity := head[changedID]

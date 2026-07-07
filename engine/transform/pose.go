@@ -31,9 +31,25 @@ func NewPoseTransformer() *PoseTransformer {
 	}
 }
 
+func (pt *PoseTransformer) Reindex(head map[string]*pb.Entity, id string) {
+	entity := head[id]
+	if entity == nil || entity.Pose == nil || entity.Pose.Parent == "" {
+		return
+	}
+	parentID := entity.Pose.Parent
+	pt.removeChild(id)
+	pt.byParent[parentID] = append(pt.byParent[parentID], id)
+	pt.childParent[id] = parentID
+	if entity.Geo != nil {
+		pt.managed[id] = struct{}{}
+	}
+}
+
 func (pt *PoseTransformer) Validate(head map[string]*pb.Entity, incoming *pb.Entity) error {
 	return nil
 }
+
+func (pt *PoseTransformer) Name() string { return "pose" }
 
 func (pt *PoseTransformer) Resolve(head map[string]*pb.Entity, changedID string, _ map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	entity := head[changedID]

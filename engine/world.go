@@ -3,9 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -14,8 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,7 +23,7 @@ import (
 	"github.com/projectqai/hydris/builtin/artifacts"
 	builtinmaps "github.com/projectqai/hydris/builtin/maps"
 	"github.com/projectqai/hydris/builtin/mediaserver"
-	"github.com/projectqai/hydris/builtin/plugins"
+	"github.com/projectqai/hydris/builtin/tileserver"
 	"github.com/projectqai/hydris/engine/meta"
 	"github.com/projectqai/hydris/engine/transform"
 	"github.com/projectqai/hydris/pkg/media"
@@ -65,7 +61,7 @@ func (es *entityState) isInfinite(protoNum int32) bool {
 var protoNumToFieldIdx map[int32]int
 
 // lifetimeProtoNum is the proto field number of Entity.Lifetime.
-const lifetimeProtoNum int32 = 4
+const lifetimeProtoNum int32 = int32(pb.EntityComponent_EntityComponentLifetime)
 
 func init() {
 	t := reflect.TypeOf(pb.Entity{})
@@ -113,7 +109,8 @@ type WorldServer struct {
 	// the lifetime of the current world, not the process.
 	startTime time.Time
 
-	policyEval *PolicyEvaluator
+	policyEval  *PolicyEvaluator
+	connTracker *connTracker
 }
 
 func NewWorldServer() *WorldServer {
@@ -151,165 +148,8 @@ func NewWorldServer() *WorldServer {
 	return server
 }
 
-// hardwareNodeID derives a stable node identifier from hardware characteristics.
-// It tries /etc/machine-id first, then falls back to hashing MAC addresses,
-// then to a random ID as a last resort.
-func hardwareNodeID() string {
-	// Try /etc/machine-id (Linux, systemd-based)
-	if mid, err := os.ReadFile("/etc/machine-id"); err == nil {
-		id := strings.TrimSpace(string(mid))
-		if len(id) >= 16 {
-			return id[:16]
-		}
-	}
-
-	// Fallback: hash MAC addresses of network interfaces
-	ifaces, err := net.Interfaces()
-	if err == nil {
-		var macs []string
-		for _, iface := range ifaces {
-			mac := iface.HardwareAddr.String()
-			if mac != "" {
-				macs = append(macs, mac)
-			}
-		}
-		slices.Sort(macs)
-		if len(macs) > 0 {
-			h := sha256.Sum256([]byte(strings.Join(macs, ",")))
-			return hex.EncodeToString(h[:16])
-		}
-	}
-
-	// Last resort: random
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic("failed to generate node identity: " + err.Error())
-	}
-	return hex.EncodeToString(b[:])
-}
-
-// InitNodeIdentity finds or creates a stable node identity.
-// It looks for an existing entity with a DeviceComponent containing a NodeDevice.
-// If none is found, it derives one from hardware MAC addresses.
-func (s *WorldServer) InitNodeIdentity() {
-	s.l.Lock()
-	defer s.l.Unlock()
-
-	// Look for an existing node device entity
-	for _, es := range s.head {
-		e := es.entity
-		if e.Device != nil && e.Device.Node != nil && strings.HasPrefix(e.Id, "node.") {
-			s.nodeID = strings.TrimPrefix(e.Id, "node.")
-			s.nodeEntity = e
-			if e.Policy == nil {
-				e.Policy = DefaultPolicy()
-			}
-			s.fillNodeDeviceInfo(e.Device.Node)
-			if s.chatTransformer != nil {
-				s.chatTransformer.SetNodeEntityID(s.nodeEntity.Id)
-			}
-			slog.Info("using existing node identity", "nodeID", s.nodeID, "entityID", e.Id)
-			s.checkForUpdate()
-			return
-		}
-	}
-
-	s.nodeID = hardwareNodeID()
-
-	hostname, _ := os.Hostname()
-	numCPU := uint32(runtime.NumCPU())
-
-	node := &pb.NodeDevice{
-		Hostname: &hostname,
-		NumCpu:   &numCPU,
-	}
-	s.fillNodeDeviceInfo(node)
-
-	nodeEntityID := "node." + s.nodeID
-	s.nodeEntity = &pb.Entity{
-		Id:     nodeEntityID,
-		Label:  &hostname,
-		Symbol: &pb.SymbolComponent{MilStd2525C: "SFGPUCI--------"},
-		Device: &pb.DeviceComponent{
-			Category: proto.String("Network"),
-			State:    pb.DeviceState_DeviceStateActive,
-			Node:     node,
-		},
-		Controller: &pb.Controller{
-			Node:   &s.nodeID,
-			Origin: &nodeEntityID,
-		},
-		Policy: DefaultPolicy(),
-	}
-
-	s.setEntity(s.nodeEntity.Id, s.nodeEntity, nil)
-	s.bus.Dirty(s.nodeEntity.Id, s.nodeEntity, pb.EntityChange_EntityChangeUpdated)
-
-	slog.Info("created new node identity", "nodeID", s.nodeID, "entityID", s.nodeEntity.Id)
-
-	if s.chatTransformer != nil {
-		s.chatTransformer.SetNodeEntityID(s.nodeEntity.Id)
-	}
-
-	s.checkForUpdate()
-}
-
-// SetNodeID overrides the node identity. Used in tests to simulate distinct
-// nodes on the same machine. Must be called after InitNodeIdentity.
-func (s *WorldServer) SetNodeID(id string) {
-	s.l.Lock()
-	defer s.l.Unlock()
-	s.nodeID = id
-	if s.nodeEntity != nil && s.nodeEntity.Controller != nil {
-		s.nodeEntity.Controller.Node = &s.nodeID
-	}
-}
-
-// fillNodeDeviceInfo overwrites the runtime-derived fields of a NodeDevice
-// with current values. Called both for freshly created and persisted nodes
-// so that version info is always up to date.
-func (s *WorldServer) fillNodeDeviceInfo(n *pb.NodeDevice) {
-	n.Os = strPtr(runtime.GOOS)
-	n.Arch = strPtr(runtime.GOARCH)
-	n.HydrisVersion = strPtr(version.Version)
-	n.HydrisUpdateAvailable = nil // clear stale value; checkForUpdate will re-set if needed
-	if v := osVersion(); v != "" {
-		n.OsVersion = &v
-	}
-}
-
-// checkForUpdate fetches the plugin registry index in the background and
-// sets hydris_update_available on the node entity when a newer version exists.
-func (s *WorldServer) checkForUpdate() {
-	if version.Version == "dev" {
-		return
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-
-		idx, err := plugins.FetchIndex(ctx)
-		if err != nil {
-			slog.Debug("update check: failed to fetch index", "error", err)
-			return
-		}
-		if idx.HydrisVersion == "" {
-			return
-		}
-		if version.IsNewerVersion(idx.HydrisVersion) {
-			s.l.Lock()
-			if s.nodeEntity != nil && s.nodeEntity.Device != nil && s.nodeEntity.Device.Node != nil {
-				s.nodeEntity.Device.Node.HydrisUpdateAvailable = &idx.HydrisVersion
-				s.bus.Dirty(s.nodeEntity.Id, s.nodeEntity, pb.EntityChange_EntityChangeUpdated)
-			}
-			s.l.Unlock()
-			slog.Info("hydris update available", "current", version.Version, "latest", idx.HydrisVersion)
-		}
-	}()
-}
-
-func strPtr(s string) *string { return &s }
+// Node identity (hardware ID, node device entity) and the node's TLS keypair
+// live in identity.go.
 
 func isURLSafeID(s string) bool {
 	if len(s) == 0 || len(s) > 250 {
@@ -331,12 +171,6 @@ func isURLSafeID(s string) bool {
 // SetWorldFile sets the path for world state persistence
 func (s *WorldServer) SetWorldFile(path string) {
 	s.worldFile = path
-}
-
-// GetSourceURL returns the original source URL for a camera stream before
-// the MediaTransformer rewrote it to a proxy URL.
-func (s *WorldServer) GetSourceURL(entityID string, streamIndex int) string {
-	return s.mediaTransformer.GetSourceURL(entityID, streamIndex)
 }
 
 // SetStreamEpoch records the epoch for a stream and notifies subscribers.
@@ -405,11 +239,23 @@ func (s *WorldServer) entityInternal(es *entityState) *structpb.Struct {
 		if cm.Generated {
 			c["generated"] = true
 		}
-		if cm.Source != "" {
-			c["source"] = cm.Source
+		if cm.Transformer != "" {
+			c["transformer"] = cm.Transformer
 		}
-		if !cm.SourceAt.IsZero() {
-			c["source_at"] = cm.SourceAt.Format(time.RFC3339Nano)
+		if cm.Reloaded {
+			c["reloaded"] = true
+		}
+		if cm.Builtin != "" {
+			c["builtin"] = cm.Builtin
+		}
+		if cm.Actor != "" {
+			c["actor"] = cm.Actor
+		}
+		if cm.OriginNode != "" {
+			c["origin_node"] = cm.OriginNode
+		}
+		if !cm.WrittenAt.IsZero() {
+			c["written_at"] = cm.WrittenAt.Format(time.RFC3339Nano)
 		}
 		c["infinite"] = es.isInfinite(protoNum)
 		components[strconv.FormatInt(int64(protoNum), 10)] = c
@@ -470,6 +316,19 @@ func (s *WorldServer) GetLocalNode(ctx context.Context, req *connect.Request[pb.
 	return connect.NewResponse(&pb.GetLocalNodeResponse{Entity: ln, NodeId: s.nodeID}), nil
 }
 
+// GetSelf reports the identity the caller is authenticated as, along with that
+// identity's entity (carrying its policy) when present.
+func (s *WorldServer) GetSelf(ctx context.Context, req *connect.Request[pb.GetSelfRequest]) (*connect.Response[pb.GetSelfResponse], error) {
+	actor := actorFromContext(ctx)
+	resp := &pb.GetSelfResponse{EntityId: actor}
+	s.l.RLock()
+	if es, ok := s.head[actor]; ok {
+		resp.Entity = es.entity
+	}
+	s.l.RUnlock()
+	return connect.NewResponse(resp), nil
+}
+
 func (s *WorldServer) TimeSync(ctx context.Context, req *connect.Request[pb.TimeSyncRequest]) (*connect.Response[pb.TimeSyncResponse], error) {
 	now := time.Now()
 	if pc, ok := ctx.Value(peerEntityKey).(*peerConn); ok && req.Msg.T1.IsValid() {
@@ -498,11 +357,17 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 
 	peer := parsePeer(req.Peer().Addr)
 	pc, _ := ctx.Value(peerEntityKey).(*peerConn)
+	actor := actorFromContext(ctx)
 	if pc != nil {
-		pc.pushCount.Add(1)
+		s.connTracker.addPush(actor)
 	}
 	builtinName, _ := ctx.Value(builtinNameKey).(string)
+	federationNode, _ := ctx.Value(federationNodeKey).(string)
 	isFederation := builtinName == "federation"
+	// A federation push that declares an actor (the local link entity) is
+	// credited to it; federation's own control-plane (no declared actor) falls
+	// through to the normal local-node attribution.
+	federationActor := isFederation && actor != anonymousEntity
 
 	// Validate incoming entities before any merge.
 	for _, e := range req.Msg.Changes {
@@ -534,6 +399,30 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 	configChanged := false
 	var changedIDs []string
 
+	var peerOrigin string
+	if federationActor {
+		// Federation relays a remote node's changes; credit the link entity it
+		// declared as actor, not this local node.
+		peerOrigin = actor
+	} else if peer.local && s.nodeEntity != nil {
+		peerOrigin = s.nodeEntity.Id
+	} else if pc != nil {
+		// Remote pushes are attributed to the authenticated identity.
+		peerOrigin = actor
+	}
+
+	// originNode is the node the change originated on, kept distinct from actor:
+	// a federation relay carries the remote node; any other locally-applied write
+	// (in-process builtin, loopback client) is this node; a remote peer has none.
+	originNode := ""
+	if federationNode != "" {
+		originNode = federationNode
+	} else if peer.local && s.nodeEntity != nil {
+		originNode = s.nodeEntity.Id
+	}
+
+	prov := meta.Component{Builtin: builtinName, Actor: actor, OriginNode: originNode}
+
 	for _, e := range req.Msg.Changes {
 
 		// Enforce lease: reject if entity is leased by a different controller.
@@ -551,7 +440,7 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 		}
 
 		if es, ok := s.head[e.Id]; ok {
-			merged, accepted := s.mergeEntityComponents(e.Id, es, e, builtinName, isFederation)
+			merged, accepted := s.mergeEntityComponents(e.Id, es, e, prov)
 			if !accepted {
 				continue
 			}
@@ -568,7 +457,7 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 			if e.Lifetime.Fresh == nil || !e.Lifetime.Fresh.IsValid() {
 				e.Lifetime.Fresh = e.Lifetime.From
 			}
-			s.initEntityFrom(e, builtinName, hadNoLifetime)
+			s.initEntityFrom(e, prov, hadNoLifetime)
 		}
 
 		// Stamp controller node after merge so we never clobber an
@@ -585,12 +474,14 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 		if stored.Controller == nil {
 			stored.Controller = &pb.Controller{}
 		}
-		if peer.local {
+		if federationActor {
+			stored.Controller.Origin = proto.String(peerOrigin)
+		} else if peer.local {
 			if stored.Controller.Origin == nil && s.nodeEntity != nil {
 				stored.Controller.Origin = &s.nodeEntity.Id
 			}
 		} else if pc != nil {
-			stored.Controller.Origin = &pc.entityID
+			stored.Controller.Origin = proto.String(peerOrigin)
 		}
 		changedIDs = append(changedIDs, e.Id)
 		if e.Config != nil {
@@ -624,15 +515,17 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 		if e.Controller == nil {
 			e.Controller = &pb.Controller{}
 		}
-		if peer.local {
+		if federationActor {
+			e.Controller.Origin = proto.String(peerOrigin)
+		} else if peer.local {
 			if e.Controller.Origin == nil && s.nodeEntity != nil {
 				e.Controller.Origin = &s.nodeEntity.Id
 			}
 		} else if pc != nil {
-			e.Controller.Origin = &pc.entityID
+			e.Controller.Origin = proto.String(peerOrigin)
 		}
 
-		s.initEntityFrom(e, builtinName)
+		s.initEntityFrom(e, prov)
 		changedIDs = append(changedIDs, e.Id)
 		if e.Config != nil {
 			configChanged = true
@@ -647,9 +540,15 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 		if s.isRemoteEntity(id) {
 			continue
 		}
-		upserted, removed := transform.RunTransformers(s.transformers, s.headView, s.bus, id, s.head[id].lifetimes)
+		upserted, removed, genBy := transform.RunTransformers(s.transformers, s.headView, s.bus, id, s.head[id].lifetimes)
 		s.syncTransformerResults(upserted, removed)
-		s.markGeneratedComponents(id)
+		s.markGeneratedComponents(id, genBy[id])
+		// Transformers also write components in place on other entities
+		// (e.g. a child's Geo computed when its parent moves); mark those
+		// too so they never masquerade as authored data.
+		for _, uid := range upserted {
+			s.markGeneratedComponents(uid, genBy[uid])
+		}
 	}
 	for _, id := range changedIDs {
 		s.bus.Dirty(id, s.head[id].entity, pb.EntityChange_EntityChangeUpdated)
@@ -659,12 +558,10 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 		s.notifyPersist()
 	}
 
-	if s.nodeEntity != nil {
-		for _, id := range changedIDs {
-			if id == s.nodeEntity.Id {
-				go s.policyEval.Rebuild()
-				break
-			}
+	for _, id := range changedIDs {
+		if id == authzPolicyEntity || id == authnPolicyEntity {
+			go s.policyEval.Rebuild()
+			break
 		}
 	}
 
@@ -736,6 +633,7 @@ func (s *WorldServer) HardReset(ctx context.Context, req *connect.Request[pb.Har
 	builtin.RestartAll()
 
 	s.policyEval.Rebuild()
+
 	s.startTime = time.Now()
 
 	slog.Info("hard reset complete")
@@ -855,8 +753,17 @@ func NewAPIMux(engine *WorldServer, promHandler http.Handler, bridges *media.Bri
 		)
 		mux.Handle(artPath, artHandler)
 
-		mux.Handle("GET /artifacts/{id}", mediaAccessControl(handleArtifactGet(engine)))
-		mux.Handle("POST /artifacts/{id}", mediaAccessControl(handleArtifactPost()))
+		// Serve mbtiles artifacts at /tiles/entity_id/z/x/y.ext
+		var ts *tileserver.Server
+		if local := artifacts.Server.Local(); local != nil {
+			ts = tileserver.NewServer(local)
+			mux.Handle("GET /tiles/{entityID}/{z}/{x}/{y}", ts.Handler())
+		}
+
+		// Access is enforced by the global policy Middleware (which wraps the
+		// whole mux), so these handlers are registered directly.
+		mux.Handle("GET /artifacts/{id}", handleArtifactGet(engine))
+		mux.Handle("POST /artifacts/{id}", handleArtifactPost(ts))
 	}
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -875,11 +782,11 @@ func NewAPIMux(engine *WorldServer, promHandler http.Handler, bridges *media.Bri
 	// Plugin dev loading — localhost only.
 	mux.Handle("POST /plugin/dev", localhostOnly(http.HandlerFunc(handlePluginDev)))
 
-	whepHandler := mediaserver.NewWHEPHandler(engine.GetSourceURL, bridges)
-	mux.Handle("POST /media/whep/{entityId...}", mediaAccessControl(whepHandler))
+	whepHandler := mediaserver.NewWHEPHandler(bridges)
+	mux.Handle("POST /media/whep/{entityId...}", whepHandler)
 
-	imageHandler := mediaserver.NewImageProxyHandler(engine.GetSourceURL)
-	mux.Handle("GET /media/image/{entityId...}", mediaAccessControl(imageHandler))
+	imageHandler := mediaserver.NewImageProxyHandler()
+	mux.Handle("GET /media/image/{entityId...}", imageHandler)
 
 	// Plugin map layers - proxies tile/image requests.
 	var tileStore builtinmaps.TileStore
@@ -904,23 +811,6 @@ func NewAPIMux(engine *WorldServer, promHandler http.Handler, bridges *media.Bri
 	return mux
 }
 
-// mediaAccessControl wraps an HTTP handler to enforce the mediaserver's
-// share_remote policy. When remote sharing is disabled, only requests from
-// localhost (127.0.0.1, ::1) are allowed; all others get 403 Forbidden.
-func mediaAccessControl(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !mediaserver.IsRemoteSharingEnabled() {
-			host, _, _ := net.SplitHostPort(r.RemoteAddr)
-			ip := net.ParseIP(host)
-			if ip != nil && !ip.IsLoopback() {
-				http.Error(w, "remote media access is disabled", http.StatusForbidden)
-				return
-			}
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 // localhostOnly rejects requests not originating from loopback.
 func localhostOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -940,6 +830,9 @@ type EngineConfig struct {
 	NoDefaults      bool
 	DisableSecurity bool
 	LogRing         *LogRing
+	// AdvertiseURL is the externally-reachable base URL for this node (e.g.
+	// https://node.example.com). When set it is shown in the startup banner.
+	AdvertiseURL string
 }
 
 // StartEngine starts the Hydris engine and returns the server address.
@@ -958,9 +851,15 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 			}
 		}
 	}
+	// A node with no persistence directory has nowhere to keep its world state,
+	// artifacts, or TLS identity — it can't run sensibly. Fail fast rather than
+	// limp along storing things in the process working directory.
+	if worldFile == "" {
+		panic("engine: no world file and no usable config directory; refusing to start without persistence")
+	}
 
 	// Set up world file persistence
-	if worldFile != "" {
+	{
 		engine.worldFile = worldFile
 
 		// Load existing state from file
@@ -993,6 +892,10 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 		engine.policyEval.Rebuild()
 	}
 
+	// Track live connections and per-actor activity (authz.service metrics).
+	engine.connTracker = newConnTracker(engine)
+	engine.connTracker.start(ctx)
+
 	// Initialize Prometheus exporter and OpenTelemetry metrics
 	promHandler, err := metrics.InitPrometheus()
 	if err != nil {
@@ -1003,6 +906,10 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 		return "", fmt.Errorf("failed to initialize metrics: %w", err)
 	}
 
+	if err := metrics.RegisterCollector(NewEntityMetricsCollector(engine)); err != nil {
+		return "", fmt.Errorf("failed to register entity metrics collector: %w", err)
+	}
+
 	// Start metrics updater
 	StartMetricsUpdater(engine)
 
@@ -1010,6 +917,17 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "50051"
+	}
+
+	// PORT must be odd. The RTSP server binds RTP on the nearest even port >=
+	// PORT and RTCP on the next one (see pkg/media/rtsp.go); when PORT is even
+	// the RTP listener lands on PORT itself and collides with the shared
+	// API/WebRTC UDP listener, aborting startup with an opaque "address already
+	// in use" only after most subsystems have come up. Fail fast with context.
+	if p, err := strconv.Atoi(port); err != nil {
+		return "", fmt.Errorf("invalid PORT %q: %w", port, err)
+	} else if p%2 == 0 {
+		return "", fmt.Errorf("PORT must be odd: %d is even, so the RTSP RTP listener would bind UDP :%d and collide with the API/WebRTC listener on the same port (use an odd port, e.g. %d)", p, p, p+1)
 	}
 
 	if os.Getenv("HYDRIS_SERVER") == "" {
@@ -1030,13 +948,16 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 		engine.SetStreamEpoch(parts[0], idx, epoch)
 	}
 
-	// Set up WebRTC UDP mux so all ICE traffic goes through a single UDP port.
-	// This means only one port (the engine port) needs to be open in the firewall.
+	// Set up WebRTC UDP mux so all ICE traffic goes through a single port.
+	// Non-fatal: the UDP port may be taken by another app (video conferencing
+	// tools grab ports in this range), and Wine fails all UDP binds because it
+	// doesn't implement the SIO_UDP_CONNRESET ioctl Go issues on UDP sockets.
+	// WebRTC still works via ICE over TCP on the shared mux listener.
 	udpListener, err := net.ListenPacket("udp", ":"+port)
 	if err != nil {
-		return "", fmt.Errorf("failed to listen UDP on port %s: %v", port, err)
+		slog.Warn("failed to listen UDP; WebRTC will fall back to TCP", "port", port, "error", err)
+		udpListener = nil
 	}
-	bridges.SetupWebRTCMux(udpListener)
 
 	// Set up artifact storage.
 	artDir := filepath.Join(filepath.Dir(worldFile), "artifacts")
@@ -1050,6 +971,27 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	}
 	worldClient := pb.NewWorldServiceClient(grpcConn)
 	artifacts.Server = artifacts.NewArtifactServer(artLocal, worldClient)
+
+	// Generate or load the node's TLS identity, then build a server TLS config.
+	// The mux listener uses it to terminate TLS on the shared port; clients are
+	// invited to present a certificate (RequestClientCert) but not yet required.
+	engine.InitNodeSecrets()
+	var tlsConfig *tls.Config
+	if cert, err := engine.loadNodeTLS(); err != nil {
+		slog.Warn("node TLS identity unavailable; serving without TLS", "error", err)
+	} else {
+		NodeTLSCert = cert
+		// SECURITY: RequestClientCert skips chain checks but crypto/tls still
+		// verifies CertificateVerify when a cert is presented, proving private-key
+		// possession. verifyMTLS's `self` admin check relies on this. A handshake
+		// path that skips CertificateVerify makes anyone with node-tls.pem admin.
+		tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{*cert},
+			ClientAuth:   tls.RequestClientCert,
+			MinVersion:   tls.VersionTLS12,
+			NextProtos:   []string{"h2", "http/1.1"},
+		}
+	}
 
 	// Create HTTP handler: API endpoints + frontend on "/"
 	mux := NewAPIMux(engine, promHandler, bridges, cfg.LogRing)
@@ -1080,11 +1022,12 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	// Create listener first to fail fast if port is in use
 	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		return "", fmt.Errorf("failed to listen on port %s: %v", port, err)
+		return "", fmt.Errorf("failed to listen on port %s: %w", port, err)
 	}
 
-	// Protocol-multiplex: RTSP and HTTP share the same port.
-	muxLn := muxlistener.New(listener)
+	// Protocol-multiplex: TLS, RTSP, HTTP, and ICE TCP share the same port.
+	muxLn := muxlistener.New(listener, tlsConfig)
+	bridges.SetupWebRTCMux(udpListener, muxLn.ICE())
 
 	// Start RTSP relay server on the RTSP sub-listener.
 	rtspServer := media.NewRTSPServer(
@@ -1095,9 +1038,8 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 			}
 			return e.Camera.Streams
 		},
-		engine.GetSourceURL,
 		bridges,
-		mediaserver.IsRemoteSharingEnabled,
+		engine.policyEval.AllowMedia,
 	)
 	if err := rtspServer.Start(muxLn.RTSP()); err != nil {
 		return "", fmt.Errorf("failed to start RTSP server: %v", err)
@@ -1122,6 +1064,11 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 		fmt.Print("Network: ")
 		_, _ = cyan.Printf("http://%s:%s\n", ip, port)
 	}
+	if cfg.AdvertiseURL != "" {
+		_, _ = green.Print("  ➜ ")
+		fmt.Print("Public:  ")
+		_, _ = cyan.Printf("%s\n", strings.TrimRight(cfg.AdvertiseURL, "/"))
+	}
 	fmt.Println()
 
 	// Serve HTTP on the HTTP sub-listener.
@@ -1140,20 +1087,15 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	}()
 
 	// Start in-process server for builtin services
-	var builtinProtos http.Protocols
-	builtinProtos.SetHTTP1(true)
-	builtinProtos.SetUnencryptedHTTP2(true)
-	builtinServer := &http.Server{
-		Handler:     mux,
-		ConnContext: BuiltinConnContext,
-		Protocols:   &builtinProtos,
-	}
+	builtinServer := NewBuiltinServer(mux)
 	go func() {
 		if err := builtinServer.Serve(builtin.GetBuiltinListener()); err != nil && err != http.ErrServerClosed {
 			slog.Error("builtin server error", "error", err)
 			os.Exit(1)
 		}
 	}()
+
+	go mediaserver.WatchCameraStreams(ctx, bridges)
 
 	go func() {
 		<-ctx.Done()
@@ -1170,6 +1112,31 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 func (s *WorldServer) setEntity(id string, e *pb.Entity, lifetimes map[int32]meta.Component) {
 	s.head[id] = &entityState{entity: e, lifetimes: lifetimes}
 	s.headView[id] = e
+}
+
+// setEntityMetrics overwrites an entity's Metric component (clone + swap) and
+// marks it dirty, leaving Lifetime and the per-component lifetime map untouched.
+// Telemetry therefore never extends the host entity's expiry — vital when the
+// host is a credential (auth:*) — and the entity is still reaped on its
+// own schedule. No-op if the entity is absent.
+func (s *WorldServer) setEntityMetrics(id string, metrics []*pb.Metric) {
+	s.l.Lock()
+	defer s.l.Unlock()
+	s.setEntityMetricsLocked(id, metrics)
+}
+
+// setEntityMetricsLocked is setEntityMetrics for callers already holding s.l
+// (the Push handler, via connTracker.addPush).
+func (s *WorldServer) setEntityMetricsLocked(id string, metrics []*pb.Metric) {
+	es, ok := s.head[id]
+	if !ok {
+		return
+	}
+	updated := proto.Clone(es.entity).(*pb.Entity)
+	updated.Metric = &pb.MetricComponent{Metrics: metrics}
+	es.entity = updated
+	s.headView[id] = updated
+	s.bus.Dirty(id, updated, pb.EntityChange_EntityChangeUpdated)
 }
 
 // deleteEntity removes an entity from head and headView.
@@ -1209,8 +1176,9 @@ func (s *WorldServer) syncTransformerResults(upserted, removed []string) {
 
 // markGeneratedComponents detects components on an entity that have no
 // lifetime entry (i.e. were set by a transformer, not by an external push)
-// and marks them as Generated in the lifetimes map.
-func (s *WorldServer) markGeneratedComponents(id string) {
+// and marks them as Generated in the lifetimes map. genBy maps a component's
+// proto field number to the transformer that produced it (from RunTransformers).
+func (s *WorldServer) markGeneratedComponents(id string, genBy map[int32]string) {
 	es, ok := s.head[id]
 	if !ok {
 		return
@@ -1230,7 +1198,7 @@ func (s *WorldServer) markGeneratedComponents(id string) {
 		if es.lifetimes == nil {
 			es.lifetimes = make(map[int32]meta.Component)
 		}
-		es.lifetimes[protoNum] = meta.Component{Generated: true, NoLifetime: true, Source: "transformer", SourceAt: time.Now()}
+		es.lifetimes[protoNum] = meta.Component{Generated: true, NoLifetime: true, WrittenAt: time.Now(), Transformer: genBy[protoNum]}
 	}
 }
 
@@ -1262,10 +1230,13 @@ func lifetimeUntil(l *pb.Lifetime) time.Time {
 // original push had no Lifetime set — components are marked accordingly so
 // they inherit the entity's lifetime from other components during merge.
 func (s *WorldServer) initEntity(e *pb.Entity, noLifetime ...bool) {
-	s.initEntityFrom(e, "", noLifetime...)
+	s.initEntityFrom(e, meta.Component{}, noLifetime...)
 }
 
-func (s *WorldServer) initEntityFrom(e *pb.Entity, source string, noLifetime ...bool) {
+// initEntityFrom stores a new entity, stamping each component with the given
+// provenance. prov carries the attribution fields (Builtin/Actor/OriginNode/
+// Reloaded); the lifetime and timing fields are filled in here.
+func (s *WorldServer) initEntityFrom(e *pb.Entity, prov meta.Component, noLifetime ...bool) {
 	fresh := lifetimeTime(e.Lifetime)
 	until := lifetimeUntil(e.Lifetime)
 	nl := len(noLifetime) > 0 && noLifetime[0]
@@ -1279,7 +1250,9 @@ func (s *WorldServer) initEntityFrom(e *pb.Entity, source string, noLifetime ...
 		}
 		f := v.Field(fieldIdx)
 		if f.Kind() == reflect.Pointer && !f.IsNil() {
-			cms[protoNum] = meta.Component{Fresh: fresh, Until: until, NoLifetime: nl, Source: source, SourceAt: now}
+			cm := prov
+			cm.Fresh, cm.Until, cm.NoLifetime, cm.WrittenAt = fresh, until, nl, now
+			cms[protoNum] = cm
 		}
 	}
 	if len(cms) == 0 {
@@ -1324,7 +1297,7 @@ func componentAccepted(incomingFresh, incomingUntil time.Time, existing meta.Com
 // Each non-nil pointer field in incoming is independently compared against
 // the existing component's lifetime. Returns the merged entity and whether
 // at least one component was accepted.
-func (s *WorldServer) mergeEntityComponents(entityID string, existing *entityState, incoming *pb.Entity, source string, isFederation bool) (*pb.Entity, bool) {
+func (s *WorldServer) mergeEntityComponents(entityID string, existing *entityState, incoming *pb.Entity, prov meta.Component) (*pb.Entity, bool) {
 	merged := proto.Clone(existing.entity).(*pb.Entity)
 
 	now := time.Now()
@@ -1361,10 +1334,9 @@ func (s *WorldServer) mergeEntityComponents(entityID string, existing *entitySta
 		if existing.lifetimes == nil {
 			existing.lifetimes = make(map[int32]meta.Component)
 		}
-		existing.lifetimes[protoNum] = meta.Component{
-			Fresh: inFresh, Until: inUntil, NoLifetime: incoming.Lifetime == nil,
-			Source: source, SourceAt: now,
-		}
+		cm := prov
+		cm.Fresh, cm.Until, cm.NoLifetime, cm.WrittenAt = inFresh, inUntil, incoming.Lifetime == nil, now
+		existing.lifetimes[protoNum] = cm
 		anyAccepted = true
 	}
 

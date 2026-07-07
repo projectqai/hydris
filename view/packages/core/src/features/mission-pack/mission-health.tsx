@@ -1,14 +1,13 @@
 "use no memo";
 
+import { CollapsibleSection } from "@hydris/ui/collapsible-section";
 import { ControlButton } from "@hydris/ui/controls";
 import { EmptyState } from "@hydris/ui/empty-state";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
-import { AlertTriangle, CheckCircle2, ChevronDown, ListTree } from "lucide-react-native";
-import { useColorScheme } from "nativewind";
+import { AlertTriangle, CheckCircle2, ListTree } from "lucide-react-native";
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, Text, View } from "react-native";
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import { Text, View } from "react-native";
 
 import { worldClient } from "../../lib/api/world-client";
 import { useEntityStore } from "../aware/store/entity-store";
@@ -16,11 +15,6 @@ import { useVersion } from "../aware/store/version-store";
 import type { RowStatus } from "./mission-health-compute";
 import { computeControllers, computeStatic } from "./mission-health-compute";
 import { useMissionHealthStore } from "./mission-health-store";
-
-const STATUS_COLORS = {
-  dark: { ok: "rgb(52, 211, 153)", warn: "rgb(251, 191, 36)", fail: "rgb(248, 113, 113)" },
-  light: { ok: "rgb(2, 90, 65)", warn: "rgb(132, 58, 0)", fail: "rgb(148, 18, 18)" },
-} as const;
 
 function statusColorClass(status: RowStatus): string {
   switch (status) {
@@ -31,66 +25,6 @@ function statusColorClass(status: RowStatus): string {
     case "fail":
       return "text-red-foreground";
   }
-}
-
-function statusColor(scheme: "light" | "dark", status: RowStatus): string {
-  return STATUS_COLORS[scheme][status];
-}
-
-function IssueSection({
-  label,
-  count,
-  tone,
-  description,
-  children,
-}: {
-  label: string;
-  count: number;
-  tone: RowStatus;
-  description: string;
-  children?: React.ReactNode;
-}) {
-  const t = useThemeColors();
-  const [expanded, setExpanded] = useState(false);
-  const hasBody = description.length > 0 || children != null;
-  const rotationValue = useSharedValue(0);
-  useEffect(() => {
-    rotationValue.value = withTiming(expanded ? 180 : 0, { duration: 120 });
-  }, [expanded, rotationValue]);
-  const rotation = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${rotationValue.value}deg` }],
-  }));
-  return (
-    <View className="border-foreground/8 border-t">
-      <Pressable
-        onPress={() => hasBody && setExpanded((v) => !v)}
-        disabled={!hasBody}
-        className="flex-row items-center gap-2 px-5 py-3 select-none"
-      >
-        <Text className={cn("font-sans-medium text-sm", statusColorClass(tone))}>{label}</Text>
-        <View className="bg-surface-overlay/10 h-5 items-center justify-center rounded px-1.5">
-          <Text className="text-on-surface/85 text-11 font-mono leading-none tabular-nums">
-            {count}
-          </Text>
-        </View>
-        {hasBody ? (
-          <Animated.View style={[rotation, { marginLeft: "auto" }]}>
-            <ChevronDown size={14} strokeWidth={2} color={t.iconMuted} />
-          </Animated.View>
-        ) : null}
-      </Pressable>
-      {expanded && hasBody ? (
-        <View className="px-5 pb-3">
-          {description ? (
-            <Text className="text-muted-foreground text-11 font-mono leading-relaxed">
-              {description}
-            </Text>
-          ) : null}
-          {children ? <View className="mt-2">{children}</View> : null}
-        </View>
-      ) : null}
-    </View>
-  );
 }
 
 function IdItem({ id, error }: { id: string; error?: string }) {
@@ -156,16 +90,16 @@ function useControllerHealth() {
 
 function MissionStatusHeader() {
   const controllers = useControllerHealth();
-  const { colorScheme } = useColorScheme();
-  const scheme = colorScheme ?? "dark";
+  const t = useThemeColors();
   const hasFailures = controllers.failed.length > 0;
   const status: RowStatus = hasFailures ? "fail" : "ok";
+  const iconColor = hasFailures ? t.redForeground : t.successForeground;
   return (
-    <View className="flex-row items-center gap-2 px-5 py-3">
+    <View className="flex-row items-center gap-2 px-4 py-2">
       {hasFailures ? (
-        <AlertTriangle size={16} strokeWidth={2} color={statusColor(scheme, status)} />
+        <AlertTriangle size={16} strokeWidth={2} color={iconColor} />
       ) : (
-        <CheckCircle2 size={16} strokeWidth={2} color={statusColor(scheme, status)} />
+        <CheckCircle2 size={16} strokeWidth={2} color={iconColor} />
       )}
       <Text className={cn("font-sans-medium text-sm", statusColorClass(status))}>
         {hasFailures ? "Imported with issues" : "Mission ready"}
@@ -179,7 +113,7 @@ function ControllerSections() {
   return (
     <>
       {controllers.expected > 0 && controllers.status === "ok" ? (
-        <IssueSection
+        <CollapsibleSection
           label="Controllers running"
           count={controllers.running}
           tone="ok"
@@ -188,11 +122,11 @@ function ControllerSections() {
           {controllers.runningIds.map((id) => (
             <IdItem key={id} id={id} />
           ))}
-        </IssueSection>
+        </CollapsibleSection>
       ) : null}
 
       {controllers.expected > 0 && controllers.status === "warn" ? (
-        <IssueSection
+        <CollapsibleSection
           label="Controllers starting"
           count={controllers.pending.length}
           tone="warn"
@@ -201,11 +135,11 @@ function ControllerSections() {
           {controllers.pending.map((id) => (
             <IdItem key={id} id={id} />
           ))}
-        </IssueSection>
+        </CollapsibleSection>
       ) : null}
 
       {controllers.failed.length > 0 ? (
-        <IssueSection
+        <CollapsibleSection
           label="Controllers not running"
           count={controllers.failed.length}
           tone="fail"
@@ -214,7 +148,7 @@ function ControllerSections() {
           {controllers.failed.map((p) => (
             <IdItem key={p.id} id={p.id} error={p.error} />
           ))}
-        </IssueSection>
+        </CollapsibleSection>
       ) : null}
     </>
   );
@@ -226,7 +160,7 @@ export function MissionDoneFooter({ onDone }: { onDone: () => void }) {
   if (!hasMission) return null;
   const hasFailures = controllers.failed.length > 0;
   return (
-    <View className="border-foreground/8 border-t px-5 py-3">
+    <View className="border-foreground/8 border-t px-4 py-3">
       <ControlButton
         onPress={onDone}
         label={hasFailures ? "Proceed anyway" : "Done"}
@@ -264,17 +198,17 @@ export function MissionHealth() {
     <View>
       <MissionStatusHeader />
 
-      <IssueSection
+      <CollapsibleSection
         label="Entities loaded"
         count={health.entityCount}
         tone="ok"
         description="All entities in the world, including engine services and the node itself."
       >
         <EntityList />
-      </IssueSection>
+      </CollapsibleSection>
 
       {health.layoutNames.length > 0 ? (
-        <IssueSection
+        <CollapsibleSection
           label="Layouts loaded"
           count={health.layoutNames.length}
           tone="ok"
@@ -283,11 +217,11 @@ export function MissionHealth() {
           {health.layoutNames.map((name) => (
             <IdItem key={name} id={name} />
           ))}
-        </IssueSection>
+        </CollapsibleSection>
       ) : null}
 
       {health.artifacts.count > 0 ? (
-        <IssueSection
+        <CollapsibleSection
           label="Artifacts bundled"
           count={health.artifacts.count}
           tone="ok"
@@ -298,7 +232,7 @@ export function MissionHealth() {
       <ControllerSections />
 
       {health.version.status !== "ok" ? (
-        <IssueSection
+        <CollapsibleSection
           label="Version mismatch"
           count={1}
           tone={health.version.status}

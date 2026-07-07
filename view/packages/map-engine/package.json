@@ -2,11 +2,11 @@
   "name": "@hydris/map-engine",
   "version": "1.0.0",
   "dependencies": {
-    "@deck.gl/core": "^9.2.9",
-    "@deck.gl/extensions": "^9.2.9",
-    "@deck.gl/layers": "^9.2.9",
-    "@deck.gl/mapbox": "^9.2.9",
-    "maplibre-gl": "^5.23.0",
+    "@deck.gl/core": "^9.3.4",
+    "@deck.gl/extensions": "^9.3.4",
+    "@deck.gl/layers": "^9.3.4",
+    "@deck.gl/mapbox": "^9.3.4",
+    "maplibre-gl": "^5.24.0",
     "milsymbol": "^3.0.4",
     "react-map-gl": "^8.1.1",
     "supercluster": "^8.0.1"

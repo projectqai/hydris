@@ -162,13 +162,24 @@ func BuiltinDialer() grpc.DialOption {
 }
 
 // builtinCreds injects the builtin name as per-RPC metadata so the engine
-// can identify which builtin is making each call.
+// can identify which builtin is making each call. A builtin may also declare
+// the actor identity its calls should be attributed to; the engine trusts it
+// verbatim because the bufconn is in-process (see engine authContext).
 type builtinCreds struct {
-	name string
+	name  string
+	actor string
+	node  string
 }
 
 func (b builtinCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
-	return map[string]string{"x-builtin-name": b.name}, nil
+	md := map[string]string{"x-builtin-name": b.name}
+	if b.actor != "" {
+		md["x-builtin-actor"] = b.actor
+	}
+	if b.node != "" {
+		md["x-federation-node"] = b.node
+	}
+	return md, nil
 }
 
 func (b builtinCreds) RequireTransportSecurity() bool { return false }
@@ -176,11 +187,29 @@ func (b builtinCreds) RequireTransportSecurity() bool { return false }
 var _ credentials.PerRPCCredentials = builtinCreds{}
 
 func BuiltinClientConn(name string) (*grpc.ClientConn, error) {
+	return newBuiltinConn(builtinCreds{name: name})
+}
+
+// BuiltinClientConnAs is like BuiltinClientConn but attributes the builtin's
+// calls to the given actor identity. Use this for builtins (e.g. federation)
+// that must not be evaluated as trusted in-process callers.
+func BuiltinClientConnAs(name, actor string) (*grpc.ClientConn, error) {
+	return newBuiltinConn(builtinCreds{name: name, actor: actor})
+}
+
+// BuiltinClientConnForNode is like BuiltinClientConnAs but also declares the
+// remote node the connection relays on behalf of. The engine exposes it to
+// policy as source.node so federation can be constrained to that node.
+func BuiltinClientConnForNode(name, actor, node string) (*grpc.ClientConn, error) {
+	return newBuiltinConn(builtinCreds{name: name, actor: actor, node: node})
+}
+
+func newBuiltinConn(creds builtinCreds) (*grpc.ClientConn, error) {
 	return grpc.NewClient(
 		"passthrough:///bufconn",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		BuiltinDialer(),
-		grpc.WithPerRPCCredentials(builtinCreds{name: name}),
+		grpc.WithPerRPCCredentials(creds),
 	)
 }
 

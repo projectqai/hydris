@@ -214,10 +214,13 @@ func TestSenderLoop_Basic(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
+	var mu sync.Mutex
 	var sent []*pb.EntityChangeEvent
 	go func() {
 		senderErr := c.SenderLoop(ctx, func(ev *pb.EntityChangeEvent) error {
+			mu.Lock()
 			sent = append(sent, ev)
+			mu.Unlock()
 			return nil
 		})
 		assertContextErr(t, senderErr)
@@ -225,6 +228,8 @@ func TestSenderLoop_Basic(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
+	mu.Lock()
+	defer mu.Unlock()
 	if len(sent) != 2 {
 		t.Errorf("expected 2 sent, got %d", len(sent))
 	}
@@ -248,10 +253,13 @@ func TestSenderLoop_Expiry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
+	var mu sync.Mutex
 	var sent []*pb.EntityChangeEvent
 	go func() {
 		senderErr := c.SenderLoop(ctx, func(ev *pb.EntityChangeEvent) error {
+			mu.Lock()
 			sent = append(sent, ev)
+			mu.Unlock()
 			return nil
 		})
 		assertContextErr(t, senderErr)
@@ -259,6 +267,8 @@ func TestSenderLoop_Expiry(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
+	mu.Lock()
+	defer mu.Unlock()
 	if len(sent) != 1 {
 		t.Fatalf("expected 1 sent, got %d", len(sent))
 	}
@@ -278,10 +288,13 @@ func TestSenderLoop_EntityGone(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
+	var mu sync.Mutex
 	var sent []*pb.EntityChangeEvent
 	go func() {
 		senderErr := c.SenderLoop(ctx, func(ev *pb.EntityChangeEvent) error {
+			mu.Lock()
 			sent = append(sent, ev)
+			mu.Unlock()
 			return nil
 		})
 		assertContextErr(t, senderErr)
@@ -289,6 +302,8 @@ func TestSenderLoop_EntityGone(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
+	mu.Lock()
+	defer mu.Unlock()
 	if len(sent) != 0 {
 		t.Fatalf("expected 0 sent, got %d", len(sent))
 	}
@@ -312,10 +327,13 @@ func TestSenderLoop_BurstBypassesRateLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
+	var mu sync.Mutex
 	var sent []*pb.EntityChangeEvent
 	go func() {
 		senderErr := c.SenderLoop(ctx, func(ev *pb.EntityChangeEvent) error {
+			mu.Lock()
 			sent = append(sent, ev)
+			mu.Unlock()
 			return nil
 		})
 		assertContextErr(t, senderErr)
@@ -324,6 +342,8 @@ func TestSenderLoop_BurstBypassesRateLimit(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Burst should be sent immediately, Low should be waiting on rate limit
+	mu.Lock()
+	defer mu.Unlock()
 	if len(sent) != 1 {
 		t.Errorf("expected 1 sent (burst only), got %d", len(sent))
 	}
@@ -348,10 +368,13 @@ func TestSenderLoop_Filter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
+	var mu sync.Mutex
 	var sent []*pb.EntityChangeEvent
 	go func() {
 		senderErr := c.SenderLoop(ctx, func(ev *pb.EntityChangeEvent) error {
+			mu.Lock()
 			sent = append(sent, ev)
+			mu.Unlock()
 			return nil
 		})
 		assertContextErr(t, senderErr)
@@ -359,6 +382,8 @@ func TestSenderLoop_Filter(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
+	mu.Lock()
+	defer mu.Unlock()
 	if len(sent) != 1 {
 		t.Fatalf("expected 1 sent (filtered), got %d", len(sent))
 	}
@@ -546,10 +571,13 @@ func TestConsumer_BurstPriorityUnderLoad(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
+	var mu sync.Mutex
 	var sent []*pb.EntityChangeEvent
 	go func() {
 		senderErr := c.SenderLoop(ctx, func(ev *pb.EntityChangeEvent) error {
+			mu.Lock()
 			sent = append(sent, ev)
+			mu.Unlock()
 			return nil
 		})
 		assertContextErr(t, senderErr)
@@ -558,6 +586,8 @@ func TestConsumer_BurstPriorityUnderLoad(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Burst should be first
+	mu.Lock()
+	defer mu.Unlock()
 	if len(sent) < 1 {
 		t.Fatal("expected at least 1 send")
 	}

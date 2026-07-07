@@ -2,10 +2,15 @@
 
 import type { Entity } from "@projectqai/proto/world";
 import { useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { getEntityName } from "../../../../lib/api/use-track-utils";
 import { useEntityStore } from "../../store/entity-store";
-import { type ConfigStateLabel, getConfigState, getEntityIcon } from "../../utils/entity-helpers";
+import {
+  type ConfigStateBadge,
+  getConfigStateBadge,
+  getEntityIcon,
+} from "../../utils/entity-helpers";
 
 export type DeviceNode = {
   entityId: string;
@@ -14,7 +19,7 @@ export type DeviceNode = {
   icon: ReturnType<typeof getEntityIcon>;
   children: DeviceNode[];
   isConfigurable: boolean;
-  configState: ConfigStateLabel | null;
+  configState: ConfigStateBadge | null;
   canAddChildren: boolean;
 };
 
@@ -27,6 +32,9 @@ export type ConfigSelection = { type: "device"; entityId: string } | null;
 
 const ORPHANED_CATEGORY = "Orphaned Configs";
 
+// device.category label the engine's plugin controllers push; must match it
+export const PLUGINS_CATEGORY = "Plugins";
+
 function buildDeviceNode(entity: Entity, orphaned = false): DeviceNode {
   return {
     entityId: entity.id,
@@ -36,7 +44,7 @@ function buildDeviceNode(entity: Entity, orphaned = false): DeviceNode {
     children: [],
     isConfigurable:
       !!entity.configurable?.schema && Object.keys(entity.configurable.schema).length > 0,
-    configState: orphaned ? null : getConfigState(entity),
+    configState: orphaned ? null : getConfigStateBadge(entity),
     canAddChildren: orphaned
       ? false
       : (entity.configurable?.supportedDeviceClasses.length ?? 0) > 0,
@@ -48,12 +56,16 @@ function sortNodes(nodes: DeviceNode[]) {
   for (const n of nodes) sortNodes(n.children);
 }
 
-function buildTree(entities: Map<string, Entity>): CategoryGroup[] {
+function isConfigSource(entity: Entity): boolean {
+  return !!entity.device || (!!entity.configurable && !!entity.config);
+}
+
+function buildTree(sources: Entity[]): CategoryGroup[] {
   const nodeMap = new Map<string, DeviceNode>();
   const entityMap = new Map<string, Entity>();
   const orphanedNodes: DeviceNode[] = [];
 
-  for (const entity of entities.values()) {
+  for (const entity of sources) {
     if (entity.device) {
       nodeMap.set(entity.id, buildDeviceNode(entity));
       entityMap.set(entity.id, entity);
@@ -103,7 +115,15 @@ function buildTree(entities: Map<string, Entity>): CategoryGroup[] {
 }
 
 export function useConfigTree(): CategoryGroup[] {
-  const entities = useEntityStore((s) => s.entities);
-  const changeVersion = useEntityStore((s) => s.lastChange.version);
-  return useMemo(() => buildTree(entities), [entities, changeVersion]);
+  const sources = useEntityStore(
+    useShallow((s) => {
+      const result: Entity[] = [];
+      for (const entity of s.entities.values()) {
+        if (isConfigSource(entity)) result.push(entity);
+      }
+      return result;
+    }),
+  );
+
+  return useMemo(() => buildTree(sources), [sources]);
 }

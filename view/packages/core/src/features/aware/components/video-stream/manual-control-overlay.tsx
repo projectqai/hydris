@@ -1,3 +1,4 @@
+import { useIsScreenLocked } from "@hydris/ui/screen-lock";
 import type { Entity } from "@projectqai/proto/world";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -24,6 +25,7 @@ export function ManualControlOverlay({
   const [showHint, setShowHint] = useState(true);
 
   const { enabled, start, stop, setAxes } = useManualControl(camera);
+  const isScreenLocked = useIsScreenLocked();
   const taskables = useEntityTaskables(camera?.id);
   const { runTask } = useRunTask();
 
@@ -61,6 +63,7 @@ export function ManualControlOverlay({
   const panGesture = useMemo(
     () =>
       Gesture.Pan()
+        .enabled(!isScreenLocked)
         .onStart(() => {
           "worklet";
           runOnJS(onPanStart)();
@@ -74,7 +77,7 @@ export function ManualControlOverlay({
           runOnJS(onPanEnd)();
         })
         .minDistance(1),
-    [onPanStart, onPanUpdate, onPanEnd],
+    [onPanStart, onPanUpdate, onPanEnd, isScreenLocked],
   );
 
   useEffect(() => {

@@ -42,6 +42,17 @@ function estimateCapacity(symbolSize: number): number {
   return cols * rows;
 }
 
+function symbolDims(symbol: InstanceType<typeof ms.Symbol>): {
+  width: number;
+  height: number;
+  anchorX: number;
+  anchorY: number;
+} {
+  const { width, height } = symbol.getSize();
+  const { x: anchorX, y: anchorY } = symbol.getAnchor();
+  return { width, height, anchorX, anchorY };
+}
+
 export type SymbolAtlas = {
   getOrCreate: (sidc: string, size?: number) => string;
   preload: (sidcs: string[], size?: number) => Promise<void>;
@@ -105,7 +116,7 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
     if (overflowSymbols.has(key)) return key;
 
     const symbol = new ms.Symbol(sidc, { size: actualSize });
-    const { width, height } = symbol.getSize();
+    const { width, height, anchorX, anchorY } = symbolDims(symbol);
 
     if (currentX + width + PADDING > ATLAS_SIZE) {
       currentX = 0;
@@ -124,8 +135,8 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
         dataUrl: svgToDataUri(symbol.asSVG()),
         width,
         height,
-        anchorX: width / 2,
-        anchorY: height / 2,
+        anchorX,
+        anchorY,
       });
 
       return key;
@@ -138,8 +149,8 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
       y: currentY,
       width,
       height,
-      anchorX: width / 2,
-      anchorY: height / 2,
+      anchorX,
+      anchorY,
     };
 
     mapping.set(key, entry);
@@ -173,7 +184,7 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
       if (mapping.has(key) || overflowSymbols.has(key)) continue;
 
       const symbol = new ms.Symbol(sidc, { size: actualSize });
-      const { width, height } = symbol.getSize();
+      const { width, height, anchorX, anchorY } = symbolDims(symbol);
 
       if (currentX + width + PADDING > ATLAS_SIZE) {
         currentX = 0;
@@ -190,8 +201,8 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
           dataUrl: svgToDataUri(symbol.asSVG()),
           width,
           height,
-          anchorX: width / 2,
-          anchorY: height / 2,
+          anchorX,
+          anchorY,
         });
 
         continue;
@@ -204,8 +215,8 @@ function createSymbolAtlas(symbolSize = 32): SymbolAtlas {
         y: currentY,
         width,
         height,
-        anchorX: width / 2,
-        anchorY: height / 2,
+        anchorX,
+        anchorY,
       };
 
       mapping.set(key, entry);

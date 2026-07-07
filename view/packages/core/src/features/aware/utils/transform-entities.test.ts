@@ -134,6 +134,47 @@ describe("buildDelta", () => {
   });
 });
 
+describe("expiry is engine-driven, not local-clock", () => {
+  beforeEach(() => resetDeltaState());
+
+  function expiredEntity(id: string): Entity {
+    return {
+      id,
+      geo: { latitude: 0, longitude: 0, altitude: 0 },
+      symbol: { milStd2525C: "SFGPU------" },
+      lifetime: { until: { seconds: BigInt(1), nanos: 0 } },
+    } as Entity;
+  }
+
+  it("keeps an entity whose lifetime.until is already past", () => {
+    const entities = new Map([["e1", expiredEntity("e1")]]);
+    accumulateChanges(createChangeSet(1, ["e1"]));
+    const delta = buildDelta(entities, new Set());
+
+    expect(delta.entities).toHaveLength(1);
+    expect(delta.entities[0]?.id).toBe("e1");
+    expect(delta.removed).toHaveLength(0);
+  });
+
+  it("removes it only when the engine drops it from the map", () => {
+    const entities = new Map([["e1", expiredEntity("e1")]]);
+    accumulateChanges(createChangeSet(1, ["e1"]));
+    buildDelta(entities, new Set());
+
+    entities.delete("e1");
+    accumulateChanges({
+      version: 2,
+      updatedIds: new Set(),
+      deletedIds: new Set(["e1"]),
+      geoChanged: true,
+    });
+    const delta = buildDelta(entities, new Set());
+
+    expect(delta.removed).toContain("e1");
+    expect(delta.entities).toHaveLength(0);
+  });
+});
+
 describe("accumulateChanges", () => {
   beforeEach(() => resetDeltaState());
 

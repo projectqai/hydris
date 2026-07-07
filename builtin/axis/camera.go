@@ -65,35 +65,27 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 		})
 	}
 
+	caps := getImageCapabilities(ip, cfg.Username, cfg.Password)
+	if entity.Configurable != nil && (len(caps.Resolutions) > 0 || len(caps.Codecs) > 0 || caps.MaxFPS > 0) {
+		entity.Configurable.Schema = cameraSchemaWithCaps(&caps)
+	}
+
 	fovWide, fovTele := getFieldAngle(ip, cfg.Username, cfg.Password)
 	if fovWide > 0 {
 		logger.Info("FOV from VAPIX", "wide", fovWide, "tele", fovTele)
 	}
 	rangeMax := 30.0
 
-	rtspURL, mjpegURL, snapURL := streamURLs(ip, cfg.Username, cfg.Password)
+	streams := discoverStreams(ip, cfg)
 
-	streams := []*pb.MediaStream{
-		{
-			Label:    "Main Stream",
-			Url:      rtspURL,
-			Protocol: pb.MediaStreamProtocol_MediaStreamProtocolRtsp,
-			Codec:    "H264",
-			Role:     pb.MediaStreamRole_MediaStreamRoleMain,
-		},
-		{
-			Label:    "MJPEG",
-			Url:      mjpegURL,
-			Protocol: pb.MediaStreamProtocol_MediaStreamProtocolImage,
-			Role:     pb.MediaStreamRole_MediaStreamRoleSub,
-		},
-		{
-			Label:    "Snapshot",
-			Url:      snapURL,
-			Protocol: pb.MediaStreamProtocol_MediaStreamProtocolImage,
-			Role:     pb.MediaStreamRole_MediaStreamRoleSnapshot,
-		},
-	}
+	logger.Info("stream config",
+		"resolution", cfg.Resolution,
+		"codec", cfg.Codec,
+		"fps", cfg.FPS,
+		"compression", cfg.Compression,
+		"bitrate", cfg.Bitrate,
+		"streams", len(streams),
+	)
 
 	hasPTZ := false
 	_, ptzErr := getPTZPosition(ip, cfg.Username, cfg.Password)
@@ -132,8 +124,14 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 			}},
 		},
 	}
-	if model != "" {
+	if entity.Configurable != nil {
+		headEntity.Configurable = entity.Configurable
+	}
+	if model != "" && entity.Label == nil {
 		headEntity.Label = proto.String("AXIS " + model)
+	}
+	if hasPTZ && cfg.EnableDirectDrive {
+		headEntity.ManualControl = &pb.ManualControlComponent{}
 	}
 	if err := controller.Push(ctx, controllerName, headEntity); err != nil {
 		return fmt.Errorf("push head entity: %w", err)
@@ -176,11 +174,78 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 		}); err != nil {
 			return fmt.Errorf("push focal point entity: %w", err)
 		}
+		if cfg.EnableDirectDrive {
+			go watchManualControl(ctx, logger, ip, cfg, entity.Id)
+		}
 		return watchTargetPose(ctx, logger, ip, cfg, focalPointID, entity.Id, rangeMax)
 	}
 
 	<-ctx.Done()
 	return nil
+}
+
+func watchManualControl(ctx context.Context, logger *slog.Logger, ip string, cfg cameraConfig, camID string) {
+	grpcConn, err := builtin.BuiltinClientConn("axis")
+	if err != nil {
+		logger.Warn("axis: manual control connect", "error", err)
+		return
+	}
+	defer func() { _ = grpcConn.Close() }()
+	client := pb.NewWorldServiceClient(grpcConn)
+
+	stream, err := goclient.WatchEntitiesWithRetry(ctx, client, &pb.ListEntitiesRequest{
+		Filter: &pb.EntityFilter{
+			Id:        &camID,
+			Component: []uint32{65},
+		},
+	})
+	if err != nil {
+		logger.Warn("axis: manual control watch", "error", err)
+		return
+	}
+
+	var lastPanSpeed, lastTiltSpeed, lastZoomSpeed int
+	for {
+		event, err := stream.Recv()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			logger.Warn("axis: manual control recv", "error", err)
+			return
+		}
+		if event.Entity == nil || event.T != pb.EntityChange_EntityChangeUpdated {
+			continue
+		}
+
+		panSpeed, tiltSpeed, zoomSpeed := 0, 0, 0
+		tmc := event.Entity.TargetManualControl
+		if tmc != nil && len(tmc.Input) > 0 {
+			if axes := tmc.Input[0].Axes; axes != nil {
+				pan := axes.GetPan()
+				if pan == 0 {
+					pan = axes.GetRight() * 0.5
+				}
+				panSpeed = int(pan * 15)
+				tiltSpeed = int(axes.GetTilt() * 15)
+				zoomSpeed = int(axes.GetForward() * 45)
+			}
+		}
+
+		if panSpeed != lastPanSpeed || tiltSpeed != lastTiltSpeed {
+			lastPanSpeed = panSpeed
+			lastTiltSpeed = tiltSpeed
+			if err := continuousPanTiltMove(ip, cfg.Username, cfg.Password, panSpeed, tiltSpeed); err != nil {
+				logger.Warn("axis: continuous move", "error", err)
+			}
+		}
+		if zoomSpeed != lastZoomSpeed {
+			lastZoomSpeed = zoomSpeed
+			if err := continuousZoomMove(ip, cfg.Username, cfg.Password, zoomSpeed); err != nil {
+				logger.Warn("axis: continuous zoom", "error", err)
+			}
+		}
+	}
 }
 
 func watchTargetPose(ctx context.Context, logger *slog.Logger, ip string, cfg cameraConfig, entityID, parentID string, rangeMax float64) error {

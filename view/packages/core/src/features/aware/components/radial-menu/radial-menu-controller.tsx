@@ -5,7 +5,10 @@ import { Code, ConnectError } from "@connectrpc/connect";
 import { generateSymbol } from "@hydris/map-engine/utils/symbol-atlas";
 import { RadialMenu } from "@hydris/ui/radial-menu";
 import { PlanarPointSchema } from "@projectqai/proto/geometry";
-import { TaskExecutionTargetSchema } from "@projectqai/proto/tasking";
+import {
+  TaskExecutionTargetEntitySchema,
+  TaskExecutionTargetSchema,
+} from "@projectqai/proto/tasking";
 import { useCallback, useContext, useEffect, useMemo } from "react";
 import { Platform } from "react-native";
 
@@ -61,10 +64,17 @@ export function RadialMenuController() {
     async (id: string) => {
       if (id.startsWith("task:")) {
         const taskId = id.slice("task:".length);
-        const target =
-          entity || !open
-            ? undefined
-            : create(TaskExecutionTargetSchema, {
+        const target = entity
+          ? create(TaskExecutionTargetSchema, {
+              kind: {
+                case: "entity",
+                value: create(TaskExecutionTargetEntitySchema, {
+                  entity: [entity.id],
+                }),
+              },
+            })
+          : open
+            ? create(TaskExecutionTargetSchema, {
                 kind: {
                   case: "position",
                   value: create(PlanarPointSchema, {
@@ -72,7 +82,8 @@ export function RadialMenuController() {
                     longitude: open.lng,
                   }),
                 },
-              });
+              })
+            : undefined;
         try {
           await runTask(taskId, target);
         } catch (err) {
@@ -87,7 +98,7 @@ export function RadialMenuController() {
       if (!entity) return;
       if (id === "built-in:follow") useSelectionStore.getState().toggleFollow();
       if (id === "built-in:configure") palette.open({ kind: "config", entityId: entity.id });
-      if (id === "built-in:reposition") placement.enterPlacement(entity);
+      if (id === "built-in:reposition") placement.enterPlacement(entity, { recenter: true });
       if (id === "built-in:delete") requestDelete(entity);
     },
     [entity, open, runTask, palette, placement, requestDelete],

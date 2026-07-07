@@ -63,6 +63,22 @@ static void webview_run() {
 static void webview_destroy() {
 	gtk_widget_destroy(window);
 }
+
+static void show_error_dialog(const char *title, const char *message) {
+	// May run before webview_init; gtk_init_check is idempotent and, unlike
+	// gtk_init, doesn't abort the process when no display is available.
+	if (!gtk_init_check(NULL, NULL)) {
+		return;
+	}
+	GtkWidget *dialog = gtk_message_dialog_new(NULL,
+		GTK_DIALOG_MODAL,
+		GTK_MESSAGE_ERROR,
+		GTK_BUTTONS_OK,
+		"%s", message);
+	gtk_window_set_title(GTK_WINDOW(dialog), title);
+	gtk_dialog_run(GTK_DIALOG(dialog));
+	gtk_widget_destroy(dialog);
+}
 */
 import "C"
 import (
@@ -102,4 +118,14 @@ func (w *Webview) Shutdown() {}
 
 func (w *Webview) Destroy() {
 	C.webview_destroy()
+}
+
+// ErrorDialog shows a blocking native error dialog. Safe to call before
+// NewWebview; does nothing when no display is available.
+func ErrorDialog(title, message string) {
+	cTitle := C.CString(title)
+	defer C.free(unsafe.Pointer(cTitle))
+	cMsg := C.CString(message)
+	defer C.free(unsafe.Pointer(cMsg))
+	C.show_error_dialog(cTitle, cMsg)
 }

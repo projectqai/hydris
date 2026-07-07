@@ -15,6 +15,7 @@ import Svg, { Circle, Path } from "react-native-svg";
 import { scheduleOnRN } from "react-native-worklets";
 
 import { useThemeColors } from "../lib/theme";
+import { useIsScreenLocked } from "../screen-lock";
 import { hitSlice, polar, sliceCenterAngle, slicePath } from "./geometry";
 import type { RadialMenuItem, RadialMenuItemVariant, RadialMenuProps } from "./types";
 
@@ -366,10 +367,12 @@ export function RadialMenu({
     return () => document.removeEventListener("keydown", handleKey);
   }, [onClose, enterIndex, count, highlight]);
 
+  const isScreenLocked = useIsScreenLocked();
   // Tap or drag to a slice, release to invoke. minDistance 0 makes taps activate too.
   const pan = useMemo(
     () =>
       Gesture.Pan()
+        .enabled(!isScreenLocked)
         .minDistance(0)
         .onBegin((e) => {
           "worklet";
@@ -391,7 +394,7 @@ export function RadialMenu({
           if (i >= 0 && i < count) scheduleOnRN(enterIndex, i);
           else scheduleOnRN(onClose);
         }),
-    [radius, count, innerR, highlight, enterIndex, onClose],
+    [radius, count, innerR, highlight, enterIndex, onClose, isScreenLocked],
   );
 
   // Mouse hover only in web, touch doesn't have.

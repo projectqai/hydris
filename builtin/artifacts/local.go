@@ -25,6 +25,10 @@ func (s *LocalStore) path(id string) string {
 	return filepath.Join(s.dataDir, id)
 }
 
+func (s *LocalStore) Path(id string) string {
+	return s.path(id)
+}
+
 func (s *LocalStore) Get(_ context.Context, id string) (io.ReadCloser, error) {
 	f, err := os.Open(s.path(id))
 	if err != nil {

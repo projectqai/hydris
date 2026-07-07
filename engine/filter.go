@@ -81,6 +81,10 @@ func entityHasComponent(entity *pb.Entity, field uint32) bool {
 		return entity.Chat != nil
 	case pb.EntityComponent_EntityComponentArtifact:
 		return entity.Artifact != nil
+	case pb.EntityComponent_EntityComponentPolicy:
+		return entity.Policy != nil
+	case pb.EntityComponent_EntityComponentAuthorization:
+		return entity.Authorization != nil
 	case pb.EntityComponent_EntityComponentAssembly:
 		return entity.Assembly != nil
 	case pb.EntityComponent_EntityComponentMapLayer:
@@ -294,6 +298,9 @@ func (s *WorldServer) matchesEntityFilter(entity *pb.Entity, filter *pb.EntityFi
 			return false
 		}
 		if filter.Controller.Id != nil && entity.Controller.GetId() != *filter.Controller.Id {
+			return false
+		}
+		if filter.Controller.Node != nil && entity.Controller.GetNode() != *filter.Controller.Node {
 			return false
 		}
 	}

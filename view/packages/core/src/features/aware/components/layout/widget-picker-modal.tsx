@@ -104,7 +104,10 @@ export function WidgetPickerModal({
   };
 
   const handleGroupWidgetSelect = (group: WidgetGroup, widgetId: string) => {
-    if (group.EntityPicker) {
+    if (group.createContent) {
+      onSelect(group.createContent(widgetId));
+      onClose();
+    } else if (group.EntityPicker) {
       setPendingEntityPicker({ group, widgetId });
     } else {
       handleSelectWidget(widgetId);
@@ -112,7 +115,7 @@ export function WidgetPickerModal({
   };
 
   const handleGroupTabClick = (group: WidgetGroup) => {
-    if (group.EntityPicker && group.widgets.length <= 1) {
+    if (!group.createContent && group.EntityPicker && group.widgets.length <= 1) {
       setPendingEntityPicker({ group, widgetId: group.widgets[0]?.id ?? "" });
     }
   };

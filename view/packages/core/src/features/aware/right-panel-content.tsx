@@ -65,8 +65,11 @@ export function RightPanelContent({ headerActions }: RightPanelContentProps) {
   return (
     <View className="flex-1">
       <EntityDetails.Root entity={selectedEntity}>
-        <EntityDetails.Header>{headerActions}</EntityDetails.Header>
-        <EntityDetails.Tabs />
+        <EntityDetails.Header />
+        <EntityDetails.Body>
+          {headerActions ? <View className="px-3 py-2.5">{headerActions}</View> : null}
+          <EntityDetails.Tabs />
+        </EntityDetails.Body>
       </EntityDetails.Root>
     </View>
   );

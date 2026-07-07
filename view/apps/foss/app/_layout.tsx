@@ -18,12 +18,13 @@ import {
 import { AlarmOverlay } from "@hydris/core/features/sensors/components/alarm-overlay";
 import { useFonts } from "expo-font";
 import { activateKeepAwakeAsync } from "expo-keep-awake";
+import { LinearGradient } from "expo-linear-gradient";
 import * as Linking from "expo-linking";
 import * as NavigationBar from "expo-navigation-bar";
 import { router, Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
-import { useColorScheme } from "nativewind";
+import { cssInterop, useColorScheme } from "nativewind";
 import { useEffect } from "react";
 import { Appearance, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -37,6 +38,8 @@ SplashScreen.preventAutoHideAsync();
 if (process.env.EXPO_OS !== "web") {
   activateKeepAwakeAsync();
 }
+
+cssInterop(LinearGradient, { className: "style" });
 
 import { useThemeStore } from "@hydris/core/features/aware/store/theme-store";
 import * as HydrisEngine from "@hydris/engine";

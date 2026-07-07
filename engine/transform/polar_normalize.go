@@ -21,6 +21,10 @@ func (t *PolarNormalizeTransformer) Validate(_ map[string]*pb.Entity, _ *pb.Enti
 	return nil
 }
 
+func (t *PolarNormalizeTransformer) Reindex(_ map[string]*pb.Entity, _ string) {}
+
+func (t *PolarNormalizeTransformer) Name() string { return "polar_normalize" }
+
 func (t *PolarNormalizeTransformer) Resolve(head map[string]*pb.Entity, changedID string, _ map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	entity := head[changedID]
 	if entity == nil || entity.Pose == nil {

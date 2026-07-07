@@ -285,6 +285,15 @@ export function formatRelativeTime(timestamp: { seconds: bigint }): string {
   return formatDistanceToNowStrict(date, { addSuffix: true });
 }
 
+export function formatCompactRelativeTime(timestamp: { seconds: bigint }): string {
+  const diffS = Math.max(0, Math.floor(Date.now() / 1000 - Number(timestamp.seconds)));
+  if (diffS < 10) return "now";
+  if (diffS < 60) return `${diffS}s ago`;
+  if (diffS < 3600) return `${Math.floor(diffS / 60)}m ago`;
+  if (diffS < 86400) return `${Math.floor(diffS / 3600)}h ago`;
+  return `${Math.floor(diffS / 86400)}d ago`;
+}
+
 export function getSharedTimestamp(
   metrics: readonly Metric[],
   { strict = true }: { strict?: boolean } = {},

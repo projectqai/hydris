@@ -78,10 +78,12 @@ deeptest:
   image: ${RUNNER_IMAGE}
   extends:
     - .go-cache
+    - .bun-cache
   before_script:
     - *base-setup
   script:
     - make deeptest
+    - make blackbox
 
 cli:
   stage: build

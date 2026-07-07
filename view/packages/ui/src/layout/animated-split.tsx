@@ -13,6 +13,7 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { useThemeColors } from "../lib/theme";
+import { useIsScreenLocked } from "../screen-lock";
 import {
   COLLAPSED_PX,
   DIVIDER_SIZE,
@@ -40,6 +41,7 @@ export function AnimatedSplit({
 }) {
   const t = useThemeColors();
   const { isCustomizing, onRatioChange } = useContext(LayoutEditingContext)!;
+  const isScreenLocked = useIsScreenLocked();
   const isH = direction === "horizontal";
   const ratio = useSharedValue(targetRatio);
   const dragStartRatio = useSharedValue(0);
@@ -83,6 +85,7 @@ export function AnimatedSplit({
   const secondSize = useDerivedValue(() => containerSizeSV.value - firstSize.value - DIVIDER_SIZE);
 
   const tapGesture = Gesture.Tap()
+    .enabled(!isScreenLocked)
     .hitSlop(isH ? { left: 12, right: 12 } : { top: 12, bottom: 12 })
     .onEnd(() => {
       "worklet";
@@ -95,6 +98,7 @@ export function AnimatedSplit({
     });
 
   const panGesture = Gesture.Pan()
+    .enabled(!isScreenLocked)
     .hitSlop(isH ? { left: 12, right: 12 } : { top: 12, bottom: 12 })
     .minDistance(3)
     .onStart(() => {
@@ -239,7 +243,10 @@ export function AnimatedSplit({
           accessible
           accessibilityRole="adjustable"
           accessibilityLabel={`Resize ${isH ? "columns" : "rows"}`}
-          style={[handleStyle, { cursor: isH ? "col-resize" : "row-resize" } as never]}
+          style={[
+            handleStyle,
+            { cursor: isH ? "col-resize" : "row-resize", outlineStyle: "none" } as never,
+          ]}
         >
           <Animated.View
             style={[

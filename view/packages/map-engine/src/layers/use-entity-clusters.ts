@@ -3,7 +3,7 @@ import { IconLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import { useMemo, useRef, useState } from "react";
 
 import { ICON_SIZE } from "../constants";
-import type { Affiliation, EntityData, EntityFilter } from "../types";
+import type { Affiliation, ConnectorHealth, EntityData, EntityFilter, RGBA } from "../types";
 import { getSymbolAtlas, type OverflowEntry } from "../utils/symbol-atlas";
 import { useClusterWorker } from "./use-cluster-worker";
 
@@ -11,7 +11,7 @@ const CLUSTER_SYMBOL_SIZE = 44;
 const ICON_SIZE_MIN_PIXELS = 8;
 const ICON_SIZE_MAX_PIXELS = 64;
 
-const CLUSTER_BG: [number, number, number, number] = [50, 50, 50, 255];
+const CLUSTER_BG: RGBA = [50, 50, 50, 255];
 const ZERO_OFFSET: [number, number] = [0, 0];
 const COLOCATION_PRECISION = 1e6;
 const ASSEMBLY_RADIUS = 90;
@@ -40,7 +40,7 @@ function coarsePositionKey(position: [number, number]): string {
 
 const BADGE_TEXT_STYLE = {
   getSize: 12,
-  getColor: [255, 255, 255, 255] as [number, number, number, number],
+  getColor: [255, 255, 255, 255] as RGBA,
   getTextAnchor: "middle" as const,
   getAlignmentBaseline: "center" as const,
   fontFamily: "Inter, system-ui, sans-serif",
@@ -52,7 +52,50 @@ const BADGE_TEXT_STYLE = {
   pickable: false,
 } as const;
 
-const MILSYMBOL_COLORS_RGBA: Record<Affiliation, [number, number, number, number]> = {
+// dark disc so the status color doesn't read as an affiliation (red/green/yellow)
+const HEALTH_DOT_COLOR: Record<ConnectorHealth, string> = {
+  healthy: "rgb(52,211,153)",
+  degraded: "rgb(251,191,36)",
+  failed: "rgb(248,113,113)",
+};
+
+const HEALTH_SEVERITY: Record<ConnectorHealth, number> = {
+  healthy: 0,
+  degraded: 1,
+  failed: 2,
+};
+
+type HealthChipIcon = {
+  url: string;
+  width: number;
+  height: number;
+  anchorX: number;
+  anchorY: number;
+};
+
+function healthChipIcon(health: ConnectorHealth): HealthChipIcon {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">` +
+    `<circle cx="8" cy="8" r="7" fill="rgb(32,33,36)" stroke="rgba(255,255,255,0.85)" stroke-width="1"/>` +
+    `<circle cx="8" cy="8" r="3.6" fill="${HEALTH_DOT_COLOR[health]}"/></svg>`;
+  return {
+    url: "data:image/svg+xml," + encodeURIComponent(svg),
+    width: 16,
+    height: 16,
+    anchorX: 8,
+    anchorY: 8,
+  };
+}
+
+const HEALTH_CHIP_ICONS: Record<ConnectorHealth, HealthChipIcon> = {
+  healthy: healthChipIcon("healthy"),
+  degraded: healthChipIcon("degraded"),
+  failed: healthChipIcon("failed"),
+};
+
+const HEALTH_BADGE_OFFSET = -14;
+
+const MILSYMBOL_COLORS_RGBA: Record<Affiliation, RGBA> = {
   blue: [128, 224, 255, 255],
   red: [255, 128, 128, 255],
   neutral: [170, 255, 170, 255],
@@ -60,9 +103,7 @@ const MILSYMBOL_COLORS_RGBA: Record<Affiliation, [number, number, number, number
   unclassified: [156, 163, 175, 255],
 };
 
-function getAffiliationColorRGBA(
-  affiliation: Affiliation | undefined,
-): [number, number, number, number] {
+function getAffiliationColorRGBA(affiliation: Affiliation | undefined): RGBA {
   return MILSYMBOL_COLORS_RGBA[affiliation ?? "unknown"];
 }
 
@@ -86,8 +127,8 @@ type ClusterRenderData = {
   size?: number;
   radius: number;
   pixelOffset: [number, number];
-  lineColor: [number, number, number, number];
-  textColor: [number, number, number, number];
+  lineColor: RGBA;
+  textColor: RGBA;
   overflow?: OverflowEntry;
 };
 
@@ -98,6 +139,7 @@ type UseEntityClustersOptions = {
   selectedId: string | null;
   shapesVisible: boolean;
   detectionsVisible: boolean;
+  clusteringEnabled: boolean;
   zoom: number;
   pickable?: boolean;
   overlapOffsets?: OverlapOffsets | null;
@@ -133,6 +175,8 @@ type UseEntityClustersResult = {
     pixelOffset?: [number, number];
   }[];
   coverageEntities: EntityData[];
+  // entities drawn as their own marker, not folded into a cluster
+  renderedEntityIds: Set<string>;
 };
 
 export function useEntityClusters(options: UseEntityClustersOptions): UseEntityClustersResult {
@@ -143,6 +187,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
     selectedId,
     shapesVisible,
     detectionsVisible,
+    clusteringEnabled,
     zoom,
     pickable = true,
     overlapOffsets = null,
@@ -187,6 +232,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
     filter,
     shapesVisible,
     detectionsVisible,
+    clusteringEnabled,
     zoom,
     version,
     geoChanged,
@@ -215,6 +261,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
       selectionData: null,
       labelData: [],
       coverageEntities: [],
+      renderedEntityIds: new Set(),
     };
   }
 
@@ -231,6 +278,13 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
     pixelOffset?: [number, number];
   }[] = [];
   const renderedEntityIds = new Set<string>();
+
+  // draw a marker and record it together so renderedEntityIds can't drift from
+  // what's actually rendered (outline visibility reads this set)
+  const pushRenderedEntity = (data: EntityRenderData) => {
+    renderEntities.push(data);
+    renderedEntityIds.add(data.entity.id);
+  };
 
   const entityAtlas = entityAtlasRef.current;
   const clusterAtlas = clusterAtlasRef.current;
@@ -304,14 +358,13 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
             affiliation: cluster.affiliation,
             symbol,
           };
-          renderEntities.push({
+          pushRenderedEntity({
             entity: renderEntity,
             position,
             iconKey,
             size,
             overflow: overflowData,
           });
-          renderedEntityIds.add(entityId);
 
           if (entity?.label) {
             labelData.push({
@@ -332,13 +385,12 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
             affiliation: cluster.affiliation,
             symbol,
           };
-          renderEntities.push({
+          pushRenderedEntity({
             entity: renderEntity,
             position,
             iconKey,
             size,
           });
-          renderedEntityIds.add(entityId);
 
           if (entity?.label) {
             labelData.push({
@@ -358,7 +410,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
   }
 
   // Inject expanded assembly children directly (they bypass Supercluster)
-  if (expandedAssemblies) {
+  if (clusteringEnabled && expandedAssemblies) {
     let rootClustered = false;
     for (const rootId of expandedAssemblies) {
       if (!renderedEntityIds.has(rootId)) {
@@ -380,14 +432,13 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
           const dims = overflowData ?? mapping;
           if (dims && dims.width > 0 && dims.height > 0) {
             const size = ICON_SIZE * Math.sqrt(dims.height / dims.width);
-            renderEntities.push({
+            pushRenderedEntity({
               entity: child,
               position: [child.position!.lng, child.position!.lat],
               iconKey,
               size,
               overflow: overflowData,
             });
-            renderedEntityIds.add(childId);
             if (child.label) {
               labelData.push({
                 id: child.id,
@@ -422,7 +473,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
   let assemblyAutoSpread: OverlapOffsets | null = null;
   let connectorLines: ConnectorLine[] = [];
 
-  if (expandedAssemblies) {
+  if (clusteringEnabled && expandedAssemblies) {
     for (const rootId of expandedAssemblies) {
       const children = assemblyChildrenOf.get(rootId);
       if (!children) continue;
@@ -503,8 +554,8 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
     }
   }
 
-  // Badge/stacking logic runs always, excluding entities already spread
-  {
+  // stacked-entity count badges, excluding entities already spread — off when clustering is off
+  if (clusteringEnabled) {
     const clusterCountByPosition = new Map<string, number>();
     for (const cluster of renderClusters) {
       const key = coarsePositionKey(cluster.position);
@@ -547,7 +598,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
   // Assembly badges: show child count on collapsed assembly roots
   for (const re of renderEntities) {
     const children = assemblyChildrenOf.get(re.entity.id);
-    if (!children || expandedAssemblies?.has(re.entity.id)) continue;
+    if (!clusteringEnabled || !children || expandedAssemblies?.has(re.entity.id)) continue;
     overlapBadges.push({
       position: re.position,
       count: children.length + 1,
@@ -706,7 +757,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
         const renderedAnchorY = (dims.anchorY / dims.height) * renderedH;
 
         if (!renderedEntityIds.has(selectedId)) {
-          renderEntities.push({
+          pushRenderedEntity({
             entity,
             position: [entity.position!.lng, entity.position!.lat],
             iconKey,
@@ -731,7 +782,11 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
     const clickedId = clicked.entity.id;
 
     // Collapsed assembly root: select it and expand to reveal children
-    if (assemblyChildrenOf.has(clickedId) && !expandedAssemblies?.has(clickedId)) {
+    if (
+      clusteringEnabled &&
+      assemblyChildrenOf.has(clickedId) &&
+      !expandedAssemblies?.has(clickedId)
+    ) {
       onEntityClickRef.current?.(clickedId);
       onAssemblyExpandRef.current?.(clickedId);
       return true;
@@ -827,6 +882,28 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
       getAngle: effectiveOverlapOffsets,
     },
   });
+
+  type HealthBadge = {
+    position: [number, number];
+    health: ConnectorHealth;
+    offset: [number, number];
+  };
+  // stacked connectors land on one pixel so keep the worst, not whichever draws last
+  const healthByPoint = new Map<string, HealthBadge>();
+  for (const re of renderEntities) {
+    const h = re.entity.health;
+    if (h !== "degraded" && h !== "failed") continue;
+    const o = effectiveOverlapOffsets?.get(re.entity.id);
+    const offset: [number, number] = o
+      ? [o[0] + HEALTH_BADGE_OFFSET, o[1] + HEALTH_BADGE_OFFSET]
+      : [HEALTH_BADGE_OFFSET, HEALTH_BADGE_OFFSET];
+    const key = `${positionKey(re.position)}:${offset[0]},${offset[1]}`;
+    const existing = healthByPoint.get(key);
+    if (!existing || HEALTH_SEVERITY[h] > HEALTH_SEVERITY[existing.health]) {
+      healthByPoint.set(key, { position: re.position, health: h, offset });
+    }
+  }
+  const healthBadges = [...healthByPoint.values()];
 
   const layers: Layer[] = [
     entityFallbackLayer,
@@ -1011,6 +1088,26 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
       outlineColor: [0, 0, 0, 255],
       pickable: false,
     }),
+    new IconLayer<HealthBadge>({
+      id: "connector-health-badges",
+      data: healthBadges,
+      visible: healthBadges.length > 0,
+      getPosition: (d) => d.position,
+      getPixelOffset: (d) => d.offset,
+      getIcon: (d) => HEALTH_CHIP_ICONS[d.health],
+      getSize: 16,
+      sizeUnits: "pixels",
+      pickable: false,
+      alphaCutoff: 0.001,
+      textureParameters,
+      updateTriggers: {
+        getPixelOffset: effectiveOverlapOffsets,
+      },
+      parameters: {
+        depthCompare: "always",
+        depthWriteEnabled: false,
+      },
+    }),
   ];
 
   // Apply pixel offsets to spread labels, hide stacked (non-spread) labels
@@ -1028,5 +1125,5 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
     }
   }
 
-  return { layers, selectionData, labelData, coverageEntities };
+  return { layers, selectionData, labelData, coverageEntities, renderedEntityIds };
 }

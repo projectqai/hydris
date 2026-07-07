@@ -111,6 +111,9 @@ type ThemeColorValues = {
   activeGreen: string;
   warning: string;
   destructiveRed: string;
+  successForeground: string;
+  pendingForeground: string;
+  redForeground: string;
   cardShadow: string;
   segmentBg: string;
   segmentShadow: string;
@@ -183,6 +186,9 @@ const THEME_COLORS: Record<"dark" | "light", ThemeColorValues> = {
     activeGreen: "rgb(34, 197, 94)",
     warning: "rgb(249, 87, 56)",
     destructiveRed: "rgb(205, 24, 24)",
+    successForeground: "rgb(52, 211, 153)",
+    pendingForeground: "rgb(251, 191, 36)",
+    redForeground: "rgb(248, 113, 113)",
     cardShadow: "0 1px 4px rgba(0,0,0,0.40), 0 1px 2px rgba(0,0,0,0.30)",
     segmentBg: "rgb(50, 50, 52)",
     segmentShadow: "0 1px 2px rgba(0,0,0,0.3)",
@@ -243,6 +249,9 @@ const THEME_COLORS: Record<"dark" | "light", ThemeColorValues> = {
     activeGreen: "rgb(40, 180, 99)",
     warning: "rgb(168, 52, 8)",
     destructiveRed: "rgb(190, 18, 18)",
+    successForeground: "rgb(2, 90, 65)",
+    pendingForeground: "rgb(132, 58, 0)",
+    redForeground: "rgb(148, 18, 18)",
     cardShadow: "0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06)",
     segmentBg: "rgb(238, 238, 240)",
     segmentShadow: "0 1px 3px rgba(0,0,0,0.10), 0 1px 2px rgba(0,0,0,0.06)",

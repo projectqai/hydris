@@ -2,11 +2,12 @@
 
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
-import { headerIconSize, useMeasuredScale } from "@hydris/ui/lib/widget-scale";
-import { BellOff, Lock, TriangleAlert, Wifi, WifiOff, X } from "lucide-react-native";
+import { useMeasuredScale } from "@hydris/ui/lib/widget-scale";
+import { TileFrame } from "@hydris/ui/tile-frame";
+import { BellOff, Lock, TriangleAlert, Wifi } from "lucide-react-native";
 import type { PropsWithChildren } from "react";
 import { useEffect } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import Animated, {
   cancelAnimation,
   useAnimatedStyle,
@@ -15,21 +16,14 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
+import { PinButton } from "../../aware/components/layout/pane-pin-button";
+import { usePaneEntity } from "../../aware/pane-entity-context";
 import type { CardStatus, ConnectionState, SignalStrength } from "../types";
 import { BASE, ScaleContext } from "./scale-context";
 import { VignetteGlow } from "./vignette-glow";
 
 type WidgetCardProps = PropsWithChildren<{
   status?: CardStatus;
-  sensorName?: string;
-  timestamp?: string;
-  connectionState?: ConnectionState;
-  signalStrength?: SignalStrength;
-  isSilentMode?: boolean;
-  hasReading?: boolean;
-  hasSensorError?: boolean;
-  hasDecodeErrors?: boolean;
-  onRemove?: () => void;
   glowColor?: string;
   glowIntensity?: number;
   isLocked?: boolean;
@@ -93,126 +87,90 @@ function useSignalInfo(
   return { color: colorMap[signalStrength], label: SIGNAL_LABELS[signalStrength] };
 }
 
+export function SensorHeaderMeta({
+  connectionState,
+  signalStrength,
+  isSilentMode = false,
+  hasSensorError = false,
+  textSize,
+  iconSize,
+}: {
+  connectionState: ConnectionState;
+  signalStrength?: SignalStrength;
+  isSilentMode?: boolean;
+  hasSensorError?: boolean;
+  textSize: number;
+  iconSize: number;
+}) {
+  const t = useThemeColors();
+  const reconnectPulse = useReconnectPulse(connectionState);
+  const signal = useSignalInfo(connectionState, signalStrength, t);
+  const { entityId: paneEntityId, onPin } = usePaneEntity();
+
+  return (
+    <>
+      {hasSensorError && (
+        <TriangleAlert
+          aria-label="Sensor error"
+          size={iconSize}
+          color={t.destructiveRed}
+          strokeWidth={2}
+        />
+      )}
+      {isSilentMode && (
+        <BellOff aria-label="Silent mode" size={iconSize} color={t.warning} strokeWidth={2} />
+      )}
+      <Animated.View style={reconnectPulse} className="flex-row items-center">
+        <View className="flex-row items-center" style={{ gap: 4 }}>
+          <Wifi aria-hidden size={iconSize} color={signal.color} strokeWidth={2} />
+          <Text className="font-sans-semibold text-foreground/70" style={{ fontSize: textSize }}>
+            {signal.label}
+          </Text>
+        </View>
+      </Animated.View>
+      {onPin ? <PinButton pinned={!!paneEntityId} onPress={onPin} size={iconSize} /> : null}
+    </>
+  );
+}
+
 export function WidgetCard({
   children,
   status = "normal",
-  sensorName,
-  timestamp,
-  connectionState = "connected",
-  signalStrength,
-  isSilentMode = false,
-  hasReading = true,
-  hasSensorError = false,
-  hasDecodeErrors = false,
-  onRemove,
   glowColor,
   glowIntensity = 0,
   isLocked = false,
 }: WidgetCardProps) {
   const t = useThemeColors();
   const pulseStyle = useDisconnectPulse(status);
-  const reconnectPulse = useReconnectPulse(connectionState);
   const { scale, onLayout } = useMeasuredScale();
-  const signal = useSignalInfo(connectionState, signalStrength, t);
-
-  const nameFontSize = Math.max(12, Math.round(BASE.labelText * scale.body));
-  const iconSize = headerIconSize(scale);
-  const metaFontSize = Math.max(10, Math.round(BASE.smallText * scale.body));
 
   return (
-    <Animated.View style={[{ flex: 1 }, pulseStyle]}>
-      <View
-        onLayout={onLayout}
+    <Animated.View style={[{ flex: 1 }, pulseStyle]} onLayout={onLayout}>
+      <TileFrame
         className={cn(
-          "border-background bg-background flex-1 border",
           status === "alarm" && "border-red",
           status === "cooldown" && "border-warning",
           status === "disconnected" && "border-red/50",
         )}
       >
-        <View
-          className="flex-1 overflow-hidden"
-          style={{ padding: Math.round(BASE.padding * scale.padding) }}
-        >
-          {glowColor && glowIntensity > 0 ? (
-            <VignetteGlow color={glowColor} intensity={glowIntensity} />
-          ) : null}
-          {sensorName && (
-            <View
-              className="flex-row items-center justify-between"
-              style={{ marginBottom: BASE.sectionGap * scale.body }}
+        {glowColor && glowIntensity > 0 ? (
+          <VignetteGlow color={glowColor} intensity={glowIntensity} />
+        ) : null}
+        <ScaleContext.Provider value={scale}>
+          <View className="flex-1">{children}</View>
+        </ScaleContext.Provider>
+        {isLocked && (
+          <View className="bg-background/95 pointer-events-none absolute inset-0 items-center justify-center">
+            <Lock size={Math.round(36 * scale.body)} color={t.foreground} strokeWidth={1.25} />
+            <Text
+              className="font-sans-semibold text-foreground mt-2 uppercase"
+              style={{ fontSize: Math.max(10, Math.round(BASE.smallText * scale.body)) }}
             >
-              <Text
-                className="font-sans-semibold text-foreground/80 min-w-0 shrink"
-                style={{ fontSize: nameFontSize }}
-                numberOfLines={1}
-              >
-                {sensorName}
-              </Text>
-              <View className="ml-3 shrink-0 flex-row items-center" style={{ gap: 8 * scale.body }}>
-                {hasSensorError && (
-                  <TriangleAlert size={iconSize} color={t.destructiveRed} strokeWidth={2} />
-                )}
-                {hasDecodeErrors && !hasSensorError && (
-                  <TriangleAlert size={iconSize} color={t.warning} strokeWidth={2} />
-                )}
-                {isSilentMode && <BellOff size={iconSize} color={t.warning} strokeWidth={2} />}
-                <Text
-                  className="font-sans-semibold text-foreground/70 tabular-nums"
-                  style={{ fontSize: metaFontSize }}
-                >
-                  {timestamp}
-                </Text>
-                <Animated.View style={reconnectPulse} className="flex-row items-center">
-                  <View className="flex-row items-center" style={{ gap: 4 * scale.body }}>
-                    <Wifi size={iconSize} color={signal.color} strokeWidth={2} />
-                    <Text
-                      className="font-sans-semibold text-foreground/70"
-                      style={{ fontSize: metaFontSize }}
-                    >
-                      {signal.label}
-                    </Text>
-                  </View>
-                </Animated.View>
-              </View>
-            </View>
-          )}
-          <ScaleContext.Provider value={scale}>
-            <View className="flex-1">
-              {status === "disconnected" && !hasReading ? (
-                <View className="flex-1 items-center justify-center gap-4">
-                  <Animated.View style={reconnectPulse}>
-                    <WifiOff size={32} color={t.destructiveRed} strokeWidth={2} />
-                  </Animated.View>
-                  <Text className="font-sans-semibold text-red text-sm">Connection lost</Text>
-                  {onRemove && (
-                    <Pressable
-                      onPress={onRemove}
-                      className="border-red/40 bg-red/20 flex-row items-center gap-2 rounded-lg border px-4 py-2"
-                    >
-                      <X size={16} color={t.destructiveRed} strokeWidth={2} />
-                      <Text className="font-sans-semibold text-red text-sm">Remove</Text>
-                    </Pressable>
-                  )}
-                </View>
-              ) : (
-                children
-              )}
-            </View>
-          </ScaleContext.Provider>
-          {isLocked && (
-            <View className="bg-background/95 pointer-events-none absolute inset-0 items-center justify-center">
-              <Lock size={Math.round(36 * scale.body)} color={t.foreground} strokeWidth={1.25} />
-              <Text
-                className="font-sans-semibold text-foreground mt-2 uppercase"
-                style={{ fontSize: Math.max(10, Math.round(BASE.smallText * scale.body)) }}
-              >
-                Locked
-              </Text>
-            </View>
-          )}
-        </View>
-      </View>
+              Locked
+            </Text>
+          </View>
+        )}
+      </TileFrame>
     </Animated.View>
   );
 }

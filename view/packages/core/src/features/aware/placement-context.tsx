@@ -1,8 +1,10 @@
 import type { Entity } from "@projectqai/proto/world";
 import { createContext, useContext } from "react";
 
+export type PlacementOptions = { recenter?: boolean };
+
 export type PlacementContextValue = {
-  enterPlacement: (entity: Entity) => void;
+  enterPlacement: (entity: Entity, options?: PlacementOptions) => void;
   isPlacing: boolean;
   canPlace: boolean;
 };

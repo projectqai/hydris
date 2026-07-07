@@ -98,7 +98,21 @@ var (
 	pSetWindowPlacement = user32.NewProc("SetWindowPlacement")
 	pMonitorFromWindow  = user32.NewProc("MonitorFromWindow")
 	pGetMonitorInfoW    = user32.NewProc("GetMonitorInfoW")
+	pMessageBoxW        = user32.NewProc("MessageBoxW")
 )
+
+// ErrorDialog shows a blocking native error dialog. Safe to call before
+// NewWebview. The app is built for the GUI subsystem, so without this a
+// startup failure printed to stderr is invisible to the user.
+func ErrorDialog(title, message string) {
+	const _MB_OK_ICONERROR = 0x00000010
+	titleW, _ := syscall.UTF16PtrFromString(title)
+	msgW, _ := syscall.UTF16PtrFromString(message)
+	pMessageBoxW.Call(0,
+		uintptr(unsafe.Pointer(msgW)),
+		uintptr(unsafe.Pointer(titleW)),
+		_MB_OK_ICONERROR)
+}
 
 var _webviewInstance *Webview
 

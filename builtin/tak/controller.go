@@ -18,8 +18,6 @@ import (
 	"github.com/projectqai/hydris/goclient"
 	"github.com/projectqai/hydris/pkg/cot"
 	pb "github.com/projectqai/proto/go"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -32,7 +30,7 @@ var (
 // handleConn runs bidirectional CoT streaming on a TCP connection.
 // It reads inbound CoT from the remote side (parsing and pushing to Hydris)
 // and writes outbound entity changes as CoT XML.
-func handleConn(ctx context.Context, conn net.Conn, serverURL string, logger *slog.Logger, trackerID string) {
+func handleConn(ctx context.Context, conn net.Conn, logger *slog.Logger, trackerID string) {
 	clientID := clientCount.Add(1)
 	logger.Info("Connection active", "clientID", clientID, "remoteAddr", conn.RemoteAddr())
 
@@ -44,7 +42,7 @@ func handleConn(ctx context.Context, conn net.Conn, serverURL string, logger *sl
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	grpcConn, err := grpc.NewClient(serverURL, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	grpcConn, err := builtin.BuiltinClientConn("tak")
 	if err != nil {
 		logger.Error("gRPC connection failed", "clientID", clientID, "error", err)
 		return
@@ -185,10 +183,7 @@ func handleConn(ctx context.Context, conn net.Conn, serverURL string, logger *sl
 	}
 }
 
-var globalServerURL string
-
-func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
-	globalServerURL = serverURL
+func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	controllerName := "tak"
 
 	tcpServerSchema, _ := structpb.NewStruct(map[string]any{
@@ -382,15 +377,15 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 			ready()
 			switch entity.Device.GetClass() {
 			case "tcp_server":
-				return runTcpServer(ctx, logger, globalServerURL, entity)
+				return runTcpServer(ctx, logger, entity)
 			case "tcp_client":
-				return runTcpClient(ctx, logger, globalServerURL, entity)
+				return runTcpClient(ctx, logger, entity)
 			case "udp_send":
-				return runUdpSend(ctx, logger, globalServerURL, entity)
+				return runUdpSend(ctx, logger, entity)
 			case "udp_receive":
-				return runUdpReceive(ctx, logger, globalServerURL, entity)
+				return runUdpReceive(ctx, logger, entity)
 			case "multicast":
-				return runMulticast(ctx, logger, globalServerURL, entity)
+				return runMulticast(ctx, logger, entity)
 			}
 			return fmt.Errorf("unknown device class: %s", entity.Device.GetClass())
 		})
@@ -426,7 +421,7 @@ func configBool(entity *pb.Entity, key string) bool {
 
 // --- TCP Server ---
 
-func runTcpServer(ctx context.Context, logger *slog.Logger, serverURL string, entity *pb.Entity) error {
+func runTcpServer(ctx context.Context, logger *slog.Logger, entity *pb.Entity) error {
 	listenAddr := configString(entity, "listen", ":8088")
 
 	for {
@@ -473,7 +468,7 @@ func runTcpServer(ctx context.Context, logger *slog.Logger, serverURL string, en
 				acceptErr = true
 				break
 			}
-			go handleConn(ctx, conn, serverURL, logger, entity.Id)
+			go handleConn(ctx, conn, logger, entity.Id)
 		}
 
 		close(done)
@@ -536,7 +531,7 @@ func buildTLSConfig(entity *pb.Entity) (*tls.Config, error) {
 	return tlsConf, nil
 }
 
-func runTcpClient(ctx context.Context, logger *slog.Logger, serverURL string, entity *pb.Entity) error {
+func runTcpClient(ctx context.Context, logger *slog.Logger, entity *pb.Entity) error {
 	address := configString(entity, "address", "")
 	if address == "" {
 		return fmt.Errorf("address is required")
@@ -590,7 +585,7 @@ func runTcpClient(ctx context.Context, logger *slog.Logger, serverURL string, en
 			}
 		}()
 
-		handleConn(ctx, conn, serverURL, logger, entity.Id)
+		handleConn(ctx, conn, logger, entity.Id)
 		_ = conn.Close()
 		close(done)
 
@@ -610,7 +605,7 @@ func runTcpClient(ctx context.Context, logger *slog.Logger, serverURL string, en
 
 // --- UDP Send ---
 
-func runUdpSend(ctx context.Context, logger *slog.Logger, serverURL string, entity *pb.Entity) error {
+func runUdpSend(ctx context.Context, logger *slog.Logger, entity *pb.Entity) error {
 	address := configString(entity, "address", "")
 	if address == "" {
 		return fmt.Errorf("address is required")
@@ -630,7 +625,7 @@ func runUdpSend(ctx context.Context, logger *slog.Logger, serverURL string, enti
 
 	logger.Info("UDP send started", "entityID", entity.Id, "destination", address)
 
-	grpcConn, err := grpc.NewClient(serverURL, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	grpcConn, err := builtin.BuiltinClientConn("tak")
 	if err != nil {
 		return err
 	}
@@ -699,7 +694,7 @@ func runUdpSend(ctx context.Context, logger *slog.Logger, serverURL string, enti
 
 // --- UDP Receive ---
 
-func runUdpReceive(ctx context.Context, logger *slog.Logger, serverURL string, entity *pb.Entity) error {
+func runUdpReceive(ctx context.Context, logger *slog.Logger, entity *pb.Entity) error {
 	listenAddr := configString(entity, "listen", "")
 	if listenAddr == "" {
 		return fmt.Errorf("listen address is required")
@@ -723,7 +718,7 @@ func runUdpReceive(ctx context.Context, logger *slog.Logger, serverURL string, e
 
 	logger.Info("UDP receive started", "entityID", entity.Id, "listenAddr", listenAddr)
 
-	grpcConn, err := grpc.NewClient(serverURL, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	grpcConn, err := builtin.BuiltinClientConn("tak")
 	if err != nil {
 		return err
 	}
@@ -798,7 +793,7 @@ func runUdpReceive(ctx context.Context, logger *slog.Logger, serverURL string, e
 
 // --- Multicast ---
 
-func runMulticast(ctx context.Context, logger *slog.Logger, serverURL string, entity *pb.Entity) error {
+func runMulticast(ctx context.Context, logger *slog.Logger, entity *pb.Entity) error {
 	multicastAddr := configString(entity, "address", "239.2.3.1:6969")
 	maxRateHz := configFloat32(entity, "max_rate_hz", 0)
 
@@ -811,7 +806,7 @@ func runMulticast(ctx context.Context, logger *slog.Logger, serverURL string, en
 
 		logger.Info("Starting UDP multicast", "entityID", entity.Id, "multicastAddr", multicastAddr, "maxRateHz", maxRateHz)
 
-		err := runMulticastBroadcaster(ctx, logger, serverURL, entity.Id, multicastAddr, maxRateHz)
+		err := runMulticastBroadcaster(ctx, logger, entity.Id, multicastAddr, maxRateHz)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -826,7 +821,7 @@ func runMulticast(ctx context.Context, logger *slog.Logger, serverURL string, en
 	}
 }
 
-func runMulticastBroadcaster(ctx context.Context, logger *slog.Logger, serverURL string, entityID string, multicastAddress string, maxRateHz float32) error {
+func runMulticastBroadcaster(ctx context.Context, logger *slog.Logger, entityID string, multicastAddress string, maxRateHz float32) error {
 	mcastAddr, err := net.ResolveUDPAddr("udp", multicastAddress)
 	if err != nil {
 		return err
@@ -845,7 +840,7 @@ func runMulticastBroadcaster(ctx context.Context, logger *slog.Logger, serverURL
 
 	logger.Info("UDP multicast connection", "local", udpConn.LocalAddr(), "multicast", multicastAddress)
 
-	grpcConn, err := grpc.NewClient(serverURL, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	grpcConn, err := builtin.BuiltinClientConn("tak")
 	if err != nil {
 		return err
 	}

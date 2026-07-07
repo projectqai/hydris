@@ -1,6 +1,6 @@
-.PHONY: all build clean frontend aio android desktop desktop-dev all pre-release release install-tools docker desktop_windows setup
+.PHONY: all build clean frontend aio android desktop desktop-dev all pre-release release install-tools docker desktop_windows setup deeptest blackbox
 
-VERSION ?= $(shell git describe --always --dirty --tags)
+VERSION := $(shell git describe --always --dirty --tags)
 LDFLAGS  = -X 'github.com/projectqai/hydris/pkg/version.Version=$(VERSION)'
 
 default: all
@@ -167,10 +167,21 @@ release: pre-release
 	git -c user.name="Project Q" -c user.email="opensource@project-q.ai" tag -f $(VERSION) github/main
 	git push -f github $(VERSION)
 
+
+
 deeptest:
 	mkdir -p view/apps/foss/build
 	touch view/apps/foss/build/.gitkeep
 	go run ./cmd/deeptest
+
+# Black-box security/behaviour tests: drive a real node over the wire (bun + connect-es).
+# Standalone (not part of `make deeptest`); run explicitly or in CI.
+# Prebuild the binary so a cold-cache go build doesn't overrun bun's hook timeout.
+blackbox:
+	@command -v bun >/dev/null || { echo "FAIL: bun not found (needed for test/blackbox)"; exit 1; }
+	go build
+	cd test/blackbox && bun install --frozen-lockfile && HYDRIS_BIN=$(CURDIR)/hydris bun test
+
 
 clean:
 	rm -rf bin/
@@ -184,6 +195,7 @@ vet:
 	go fmt ./...
 	go vet ./...
 	go test  ./...
+	go test -race ./...
 	golangci-lint run ./...
 	govulncheck ./...
 	cd desktop && go mod tidy && [ -z "$$(git diff --name-only go.mod go.sum)" ] || (echo "FAIL: desktop/go.mod or desktop/go.sum is out of date; run 'cd desktop && go mod tidy'" && false)

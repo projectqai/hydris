@@ -1,7 +1,7 @@
 import { EmptyState } from "@hydris/ui/empty-state";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import type { Entity } from "@projectqai/proto/world";
-import { DeviceState, LinkStatus } from "@projectqai/proto/world";
+import { LinkStatus } from "@projectqai/proto/world";
 import {
   Battery,
   Camera,
@@ -17,7 +17,9 @@ import {
   Wifi,
 } from "lucide-react-native";
 import type { ComponentType } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { Text, View } from "react-native";
+
+import { formatDeviceState } from "../../utils/format-entity";
 
 type ComponentsTabProps = {
   entity: Entity;
@@ -85,12 +87,7 @@ function getActiveComponents(entity: Entity): ComponentDef[] {
     components.push({ icon: Battery, label: "Power", description: `Battery ${pct}` });
   }
   if (entity.device) {
-    const stateLabel =
-      entity.device.state === DeviceState.DeviceStateActive
-        ? "Active"
-        : entity.device.state === DeviceState.DeviceStateFailed
-          ? "Failed"
-          : "Pending";
+    const stateLabel = formatDeviceState(entity.device.state).label;
     components.push({ icon: Cpu, label: "Device", description: `Device (${stateLabel})` });
   }
   if (entity.geo?.covariance) {
@@ -114,15 +111,13 @@ export function ComponentsTab({ entity }: ComponentsTabProps) {
   }
 
   return (
-    <ScrollView className="flex-1">
-      <View className="px-3 pt-3 pb-2">
-        <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
-          Active Components ({components.length})
-        </Text>
-        {components.map((comp) => (
-          <ComponentItem key={comp.label} {...comp} />
-        ))}
-      </View>
-    </ScrollView>
+    <View className="px-3 pt-3 pb-2">
+      <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
+        Active Components ({components.length})
+      </Text>
+      {components.map((comp) => (
+        <ComponentItem key={comp.label} {...comp} />
+      ))}
+    </View>
   );
 }

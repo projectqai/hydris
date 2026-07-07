@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -970,6 +971,11 @@ func runEdit(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get entity: %w", err)
 	}
+
+	if resp.Entity.Lifetime == nil {
+		resp.Entity.Lifetime = &pb.Lifetime{}
+	}
+	resp.Entity.Lifetime.Fresh = timestamppb.Now()
 
 	// Marshal to YAML
 	yamlBytes, err := protoToYAML(resp.Entity)

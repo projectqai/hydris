@@ -3,30 +3,13 @@
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { format } from "date-fns";
 import { formatInTimeZone } from "date-fns-tz";
-import { Wifi, WifiOff } from "lucide-react-native";
+import { Server, ServerOff } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Text, View } from "react-native";
 
 import { useEntityStore } from "../../store/entity-store";
-
-function Inset({ children }: { children: React.ReactNode }) {
-  const t = useThemeColors();
-  return (
-    <View
-      className="flex-row items-center gap-3 rounded px-2 py-2.5"
-      style={{
-        borderWidth: 1,
-        borderColor: t.insetBorder,
-        backgroundColor: t.insetBg,
-        borderBottomColor: t.insetHighlight,
-        // @ts-ignore react-native-web CSS property
-        boxShadow: t.insetShadow,
-      }}
-    >
-      {children}
-    </View>
-  );
-}
+import { AssetReadinessIndicator } from "./asset-readiness-indicator";
+import { Inset } from "./inset";
 
 function ConnectionIndicator() {
   const t = useThemeColors();
@@ -34,7 +17,7 @@ function ConnectionIndicator() {
   const error = useEntityStore((s) => s.error);
 
   const isDisconnected = !!error;
-  const Icon = isDisconnected ? WifiOff : Wifi;
+  const Icon = isDisconnected ? ServerOff : Server;
   const color = isDisconnected
     ? "rgb(239, 68, 68)"
     : isConnected
@@ -112,9 +95,12 @@ export function ContextStrip({ showConnection = true }: { showConnection?: boole
       </Inset>
 
       {showConnection && (
-        <Inset>
-          <ConnectionIndicator />
-        </Inset>
+        <>
+          <Inset>
+            <ConnectionIndicator />
+          </Inset>
+          <AssetReadinessIndicator />
+        </>
       )}
     </View>
   );

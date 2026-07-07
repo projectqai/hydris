@@ -18,6 +18,8 @@ func (ct *ChatTransformer) SetNodeEntityID(id string) {
 	ct.nodeEntityID = id
 }
 
+func (ct *ChatTransformer) Name() string { return "chat" }
+
 func (ct *ChatTransformer) Validate(head map[string]*pb.Entity, incoming *pb.Entity) error {
 	if incoming.Chat == nil {
 		return nil
@@ -37,6 +39,8 @@ func (ct *ChatTransformer) Validate(head map[string]*pb.Entity, incoming *pb.Ent
 
 	return nil
 }
+
+func (ct *ChatTransformer) Reindex(_ map[string]*pb.Entity, _ string) {}
 
 func (ct *ChatTransformer) Resolve(head map[string]*pb.Entity, changedID string, _ map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	return nil, nil

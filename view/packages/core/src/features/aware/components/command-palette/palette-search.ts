@@ -64,6 +64,13 @@ export function searchEntities(
   return search(haystack, filtered, q, max);
 }
 
+export function filterAssets(assets: Entity[], query: string, max = 200): Entity[] {
+  const q = query.trim();
+  if (!q) return assets;
+  const haystack = assets.map((e) => `${getEntityName(e)} ${e.id}`);
+  return search(haystack, assets, q, max).results.map((r) => r.item);
+}
+
 export function searchCommands(
   commands: Command[],
   query: string,
@@ -132,6 +139,10 @@ function flattenTree(tree: CategoryGroup[]): FlatNode[] {
   }
 
   return nodes;
+}
+
+export function findAncestorKeys(tree: CategoryGroup[], entityId: string): string[] | null {
+  return flattenTree(tree).find((n) => n.entityId === entityId)?.ancestorKeys ?? null;
 }
 
 const EMPTY_TREE_RESULT: ConfigTreeResult = {

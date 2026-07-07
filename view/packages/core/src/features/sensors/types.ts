@@ -5,7 +5,7 @@ export type SensorKind = MetricKind.MetricKindRadiationHazard | MetricKind.Metri
 export type MetricValue = { value: number; unit: MetricUnit };
 export type LevelValue = { code: string; value: number; max?: number };
 
-export type MetricReading = { shape: "metric"; primary: MetricValue; secondary?: MetricValue };
+type MetricReading = { shape: "metric"; primary: MetricValue; secondary?: MetricValue };
 export type LevelsReading = { shape: "levels"; levels: LevelValue[]; unit: string };
 export type SensorReading = MetricReading | LevelsReading;
 
@@ -25,7 +25,8 @@ export type SensorWidgetData = {
   isLocked?: boolean;
   isSilent?: boolean;
   isInitializing?: boolean;
-  timestamp?: string;
+  hasSensorError?: boolean;
+  measuredAt?: { seconds: bigint };
 };
 
 export type ThresholdConfig =

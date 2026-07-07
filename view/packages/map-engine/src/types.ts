@@ -43,6 +43,10 @@ export type ShapeProperties = {
 
 export type Affiliation = "blue" | "red" | "neutral" | "unknown" | "unclassified";
 
+export type RGBA = [number, number, number, number];
+
+export type ConnectorHealth = "healthy" | "degraded" | "failed";
+
 export type MapLayer = {
   kind: "tiles" | "image";
   url: string;
@@ -72,6 +76,7 @@ export type EntityData = {
   assemblyOutlineIds?: string[];
   isDetection?: boolean;
   mapLayer?: MapLayer;
+  health?: ConnectorHealth;
 };
 
 export type BaseLayer = "dark" | "satellite" | "street";

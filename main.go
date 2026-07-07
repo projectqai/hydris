@@ -30,6 +30,7 @@ func init() {
 	cli.CMD.Flags().StringSlice("plugin", nil, "plugins to run (local .ts/.js files or OCI image refs)")
 	cli.CMD.Flags().String("server", "", "proxy to remote server (host:port, ssh://user@host, or ssh://host)")
 	cli.CMD.Flags().String("wireguard", "", "path to WireGuard config (use with --server host:port)")
+	cli.CMD.Flags().String("advertise-url", "", "externally-reachable base URL for this node, shown in the startup banner")
 	cli.CMD.Flags().Bool("disable-all-security-i-know-what-i-am-doing", false, "disable the policy engine entirely")
 
 	cli.CMD.RunE = func(cmd *cobra.Command, args []string) error {
@@ -56,6 +57,7 @@ func init() {
 		allowPaths, _ := cmd.Flags().GetStringSlice("allow-path")
 		plugins, _ := cmd.Flags().GetStringSlice("plugin")
 		disableSecurity, _ := cmd.Flags().GetBool("disable-all-security-i-know-what-i-am-doing")
+		advertiseURL, _ := cmd.Flags().GetString("advertise-url")
 
 		ctx := context.Background()
 
@@ -64,6 +66,7 @@ func init() {
 			NoDefaults:      noDefaults,
 			DisableSecurity: disableSecurity,
 			LogRing:         logging.Ring,
+			AdvertiseURL:    advertiseURL,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

@@ -9,6 +9,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/projectqai/hydris/builtin/artifacts"
+	"github.com/projectqai/hydris/builtin/tileserver"
 	pb "github.com/projectqai/proto/go"
 )
 
@@ -22,7 +23,7 @@ func handleArtifactGet(engine *WorldServer) http.Handler {
 		}
 		art := resp.Msg.Entity.Artifact
 
-		rc, err := artifacts.Server.Local().Get(r.Context(), art.Id)
+		rc, err := artifacts.Server.Local().Get(r.Context(), art.Id) //nolint:staticcheck // SA1019: Artifact.Id migration pending
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -41,10 +42,11 @@ func handleArtifactGet(engine *WorldServer) http.Handler {
 	})
 }
 
-func handleArtifactPost() http.Handler {
+func handleArtifactPost(ts *tileserver.Server) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		if err := artifacts.Server.WriteArtifact(r.Context(), id, r.Body); err != nil {
+		contentType, err := artifacts.Server.WriteArtifact(r.Context(), id, r.Body)
+		if err != nil {
 			slog.Error("artifact upload failed", "entity", id, "error", err)
 			status := http.StatusInternalServerError
 			var ce *connect.Error
@@ -58,6 +60,9 @@ func handleArtifactPost() http.Handler {
 			}
 			http.Error(w, err.Error(), status)
 			return
+		}
+		if ts != nil {
+			ts.OnArtifactWritten(r.Context(), id, contentType)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})

@@ -4,8 +4,7 @@ import { ControlButton, ControlIconButton } from "@hydris/ui/controls";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { CommandTrigger } from "@hydris/ui/top-bar/command-trigger";
 import { CustomizeHelpIcon } from "@hydris/ui/top-bar/customize-help-icon";
-import { PlacementHelpIcon } from "@hydris/ui/top-bar/placement-help-icon";
-import { Bell, Undo2, X } from "lucide-react-native";
+import { Bell, Undo2 } from "lucide-react-native";
 import { Pressable, Text, View } from "react-native";
 import Animated, {
   interpolate,
@@ -18,6 +17,7 @@ import Animated, {
 import { Z } from "../../constants";
 import { ContextStrip } from "./context-strip";
 import { LayoutMenu } from "./layout-menu";
+import { PlacementBarContent } from "./placement-bar-content";
 import { PresetStrip } from "./preset-strip";
 
 type PlacementMode = {
@@ -25,6 +25,7 @@ type PlacementMode = {
   isActive: boolean;
   onConfirm: () => void;
   onAbort: () => void;
+  onTypeCoordinates: () => void;
 };
 
 export function TopBar({
@@ -210,31 +211,11 @@ export function TopBar({
         ]}
         pointerEvents={placement.isActive ? "auto" : "none"}
       >
-        <View className="flex-1 flex-row items-center gap-1.5">
-          <View className="size-1.5 rounded-full" style={{ backgroundColor: t.placementAccent }} />
-          <Text className="font-sans-medium text-11" style={{ color: t.placementAccent }}>
-            Set position
-          </Text>
-          <PlacementHelpIcon />
-        </View>
-        <View className="flex-1 flex-row justify-end gap-1.5">
-          <ControlButton
-            onPress={placement.onAbort}
-            icon={X}
-            label="Cancel"
-            variant="destructive"
-            size="md"
-            labelClassName="font-sans-semibold text-11"
-            accessibilityLabel="Cancel placement"
-          />
-          <ControlButton
-            onPress={placement.onConfirm}
-            label="Confirm"
-            variant="success"
-            labelClassName="font-sans-semibold text-11"
-            accessibilityLabel="Confirm sensor placement"
-          />
-        </View>
+        <PlacementBarContent
+          onConfirm={placement.onConfirm}
+          onAbort={placement.onAbort}
+          onTypeCoordinates={placement.onTypeCoordinates}
+        />
       </Animated.View>
     </Animated.View>
   );

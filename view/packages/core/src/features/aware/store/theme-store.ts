@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 type ColorSchemePreference = "dark" | "light" | "system";
 
@@ -17,18 +17,7 @@ export const useThemeStore = create<ThemeState>()(
     }),
     {
       name: "hydris-theme",
-      storage: {
-        getItem: async (name) => {
-          const value = await AsyncStorage.getItem(name);
-          return value ? JSON.parse(value) : null;
-        },
-        setItem: async (name, value) => {
-          await AsyncStorage.setItem(name, JSON.stringify(value));
-        },
-        removeItem: async (name) => {
-          await AsyncStorage.removeItem(name);
-        },
-      },
+      storage: createJSONStorage(() => AsyncStorage),
     },
   ),
 );

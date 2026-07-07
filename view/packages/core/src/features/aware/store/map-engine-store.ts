@@ -87,14 +87,9 @@ export const mapEngineActions = {
   zoomIn: () => getRef()?.zoomIn(),
   zoomOut: () => getRef()?.zoomOut(),
   flyTo: (lat: number, lng: number, alt?: number, duration?: number, zoom?: number) => {
-    const ref = getRef();
-    if (ref) {
-      ref.flyTo(lat, lng, alt, duration, zoom);
-    } else {
-      useMapEngineStore.setState({
-        flyToTarget: { lat, lng, alt, duration, zoom, commandId: ++flyToCommandId },
-      });
-    }
+    useMapEngineStore.setState({
+      flyToTarget: { lat, lng, alt, duration, zoom, commandId: ++flyToCommandId },
+    });
   },
   getView: () => useMapEngineStore.getState().currentView,
 };

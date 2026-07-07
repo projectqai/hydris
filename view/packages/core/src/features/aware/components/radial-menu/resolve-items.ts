@@ -1,6 +1,8 @@
 import type { RadialMenuItem } from "@hydris/ui/radial-menu/types";
 import type { Entity } from "@projectqai/proto/world";
 
+import { isRepositionable } from "../../../../lib/api/use-track-utils";
+
 const MAX_SLICES = 6;
 
 function toTaskItem(t: Entity): RadialMenuItem {
@@ -15,7 +17,7 @@ export function resolveRadialItems(
   const builtIns: RadialMenuItem[] = [];
   if (entity.device) builtIns.push({ id: "built-in:configure", label: "Configure" });
   if (entity.geo) builtIns.push({ id: "built-in:follow", label: "Follow" });
-  if (entity.symbol && !entity.pose && canPlace) {
+  if (isRepositionable(entity) && canPlace) {
     builtIns.push({ id: "built-in:reposition", label: "Reposition" });
   }
   if (entity.device?.parent) {

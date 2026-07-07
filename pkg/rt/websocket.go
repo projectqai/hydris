@@ -2,16 +2,49 @@ package rt
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/eventloop"
 	"github.com/gorilla/websocket"
 )
 
+// parseWebSocketProtocols normalizes the W3C WebSocket `protocols` argument,
+// which may be a single string or an array of strings, into a slice of
+// subprotocol names. Empty/undefined yields nil.
+func parseWebSocketProtocols(vm *goja.Runtime, v goja.Value) []string {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return nil
+	}
+	// Array of strings.
+	if obj := v.ToObject(vm); obj != nil && obj.ClassName() == "Array" {
+		length := int(obj.Get("length").ToInteger())
+		protocols := make([]string, 0, length)
+		for i := 0; i < length; i++ {
+			if s := obj.Get(strconv.Itoa(i)).String(); s != "" {
+				protocols = append(protocols, s)
+			}
+		}
+		return protocols
+	}
+	// Single string.
+	if s := v.String(); s != "" {
+		return []string{s}
+	}
+	return nil
+}
+
 // setupWebSocket registers a W3C-compatible WebSocket constructor on the VM.
 func setupWebSocket(loop *eventloop.EventLoop, vm *goja.Runtime) {
 	vm.Set("WebSocket", func(call goja.ConstructorCall) *goja.Object {
 		urlStr := call.Argument(0).String()
+
+		// W3C WebSocket(url, protocols): protocols is a string or array of
+		// subprotocol names that must be advertised via Sec-WebSocket-Protocol.
+		// SP-145: this argument was previously dropped, so MQTT-over-WS brokers
+		// (which require the "mqtt" subprotocol) closed the connection.
+		protocols := parseWebSocketProtocols(vm, call.Argument(1))
 
 		obj := call.This
 		obj.Set("url", urlStr)
@@ -95,6 +128,9 @@ func setupWebSocket(loop *eventloop.EventLoop, vm *goja.Runtime) {
 		// Connect in background goroutine.
 		go func() {
 			header := http.Header{}
+			if len(protocols) > 0 {
+				header.Set("Sec-WebSocket-Protocol", strings.Join(protocols, ", "))
+			}
 			c, _, err := websocket.DefaultDialer.Dial(urlStr, header)
 			if err != nil {
 				loop.RunOnLoop(func(vm *goja.Runtime) {

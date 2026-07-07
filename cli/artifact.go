@@ -173,7 +173,7 @@ func runArtifactGet(cmd *cobra.Command, args []string, outputPath string) error 
 		}
 
 		if msg.Meta != nil && outputPath != "" {
-			fmt.Fprintf(os.Stderr, "artifact: %s  type: %s", msg.Meta.Id, msg.Meta.ContentType)
+			fmt.Fprintf(os.Stderr, "artifact: %s  type: %s", msg.Meta.Id, msg.Meta.ContentType) //nolint:staticcheck // SA1019: Artifact.Id migration pending
 			if msg.Meta.SizeBytes != nil {
 				fmt.Fprintf(os.Stderr, "  size: %s", formatBytes(*msg.Meta.SizeBytes))
 			}

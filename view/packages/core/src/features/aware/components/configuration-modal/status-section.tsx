@@ -3,11 +3,11 @@
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import type { Entity } from "@projectqai/proto/world";
-import { DeviceState } from "@projectqai/proto/world";
 import { Activity, Battery, Cpu, Wifi } from "lucide-react-native";
 import type { ComponentType } from "react";
 import { Text, View } from "react-native";
 
+import { formatTime } from "../../../../lib/api/use-track-utils";
 import { formatDeviceState, formatDuration, formatLinkStatus } from "../../utils/format-entity";
 
 function StatusRow({
@@ -76,9 +76,6 @@ function DeviceStatus({ entity, first }: { entity: Entity; first?: boolean }) {
     <>
       <SectionHeader icon={Cpu} label="Device" first={first} />
       <StatusRow label="State" value={label} valueClassName={className} />
-      {entity.device.state === DeviceState.DeviceStateFailed && !!entity.device.error && (
-        <StatusRow label="Error" value={entity.device.error} />
-      )}
       {!!entity.device.uniqueHardwareId && (
         <StatusRow label="Hardware ID" value={entity.device.uniqueHardwareId} mono />
       )}
@@ -120,6 +117,15 @@ function DataLinkStatus({ entity, first }: { entity: Entity; first?: boolean }) 
     <>
       <SectionHeader icon={Wifi} label="Data Link" first={first} />
       <StatusRow label="Status" value={label} valueClassName={className} />
+      {entity.link.lastSeen && (
+        <StatusRow label="Last seen" value={formatTime(entity.link.lastSeen)} mono />
+      )}
+      {entity.link.lastLatencyMs !== undefined && (
+        <StatusRow label="Latency" value={`${entity.link.lastLatencyMs} ms`} mono />
+      )}
+      {entity.link.linkQualityPercent !== undefined && (
+        <StatusRow label="Quality" value={`${entity.link.linkQualityPercent}%`} mono />
+      )}
       {entity.link.rssiDbm !== undefined && (
         <StatusRow label="RSSI" value={`${entity.link.rssiDbm} dBm`} mono />
       )}

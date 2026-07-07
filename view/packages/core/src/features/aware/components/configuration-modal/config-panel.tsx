@@ -11,7 +11,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 
 import { useEntityMutation } from "../../../../lib/api/use-entity-mutation";
-import { getEntityName } from "../../../../lib/api/use-track-utils";
+import { getEntityName, isRepositionable } from "../../../../lib/api/use-track-utils";
 import { toast } from "../../../../lib/sonner";
 import { useEntityDelete } from "../../hooks/use-entity-delete";
 import { usePlacement } from "../../placement-context";
@@ -117,16 +117,6 @@ function ConfigurableSection({ entity }: { entity: Entity }) {
 
   return (
     <View className="py-2">
-      {configurable.error && (
-        <View
-          accessibilityRole="alert"
-          className="mx-4 mb-2 flex-row items-start gap-2 rounded bg-red-500/10 px-3 py-2"
-        >
-          <AlertTriangle size={14} strokeWidth={2} color="rgb(248,113,113)" />
-          <Text className="text-red-foreground font-mono text-xs">{configurable.error}</Text>
-        </View>
-      )}
-
       {configurable.schema && Object.keys(configurable.schema).length > 0 ? (
         <SchemaForm
           schema={configurable.schema}
@@ -250,13 +240,15 @@ function EntityHeader({
         </View>
       </View>
 
-      {entity.device?.error && (
+      {(entity.configurable?.error || entity.device?.error) && (
         <View
           accessibilityRole="alert"
           className="mx-5 mb-2 flex-row items-start gap-2 rounded bg-red-500/10 px-3 py-2"
         >
           <AlertTriangle size={14} strokeWidth={2} color="rgb(248,113,113)" />
-          <Text className="text-red-foreground font-mono text-xs">{entity.device.error}</Text>
+          <Text className="text-red-foreground font-mono text-xs">
+            {entity.configurable?.error || entity.device?.error}
+          </Text>
         </View>
       )}
     </>
@@ -420,9 +412,7 @@ export function ConfigPanel({
         onAddPress={deviceClasses.length > 0 ? handleAddPress : undefined}
         onDeletePress={handleDeletePress}
         onPositionPress={
-          !entity.track && entity.symbol && !entity.pose && canPlace
-            ? () => enterPlacement(entity)
-            : undefined
+          isRepositionable(entity) && canPlace ? () => enterPlacement(entity) : undefined
         }
         metricsTimestamp={metricsTimestamp}
       />

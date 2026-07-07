@@ -12,16 +12,18 @@ type SegmentedControlProps<T extends string> = {
   tabs: Tab<T>[];
   activeTab: T;
   onTabChange: (id: T) => void;
+  className?: string;
 };
 
 export function SegmentedControl<T extends string>({
   tabs,
   activeTab,
   onTabChange,
+  className,
 }: SegmentedControlProps<T>) {
   const t = useThemeColors();
   return (
-    <View className="px-3 pt-4 pb-2">
+    <View className={cn("px-3 pt-4 pb-2", className)}>
       <View
         className="flex-row items-center gap-1 rounded-lg p-1"
         style={{

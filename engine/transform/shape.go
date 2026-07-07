@@ -33,21 +33,28 @@ func NewShapeTransformer() *ShapeTransformer {
 }
 
 func (st *ShapeTransformer) Validate(head map[string]*pb.Entity, incoming *pb.Entity) error {
-	hasLocal := incoming.LocalShape != nil && incoming.LocalShape.Geometry != nil
-	hasGeo := incoming.Shape != nil
-
-	if hasLocal && incoming.LocalShape.RelativeTo == "" {
+	if incoming.LocalShape != nil && incoming.LocalShape.Geometry != nil && incoming.LocalShape.RelativeTo == "" {
 		return connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("entity %s has LocalShapeComponent without relative_to (ambiguous frame)", incoming.Id))
 	}
-
-	if hasLocal && incoming.LocalShape.RelativeTo != "" && hasGeo {
-		return connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("entity %s has both LocalShapeComponent (relative_to set) and GeoShapeComponent; GeoShapeComponent is engine-managed", incoming.Id))
-	}
-
 	return nil
 }
+
+func (st *ShapeTransformer) Reindex(head map[string]*pb.Entity, id string) {
+	entity := head[id]
+	if entity == nil || entity.LocalShape == nil || entity.LocalShape.RelativeTo == "" {
+		return
+	}
+	parentID := entity.LocalShape.RelativeTo
+	st.removeChild(id)
+	st.byParent[parentID] = append(st.byParent[parentID], id)
+	st.childParent[id] = parentID
+	if entity.Shape != nil {
+		st.managed[id] = struct{}{}
+	}
+}
+
+func (st *ShapeTransformer) Name() string { return "shape" }
 
 func (st *ShapeTransformer) Resolve(head map[string]*pb.Entity, changedID string, _ map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	entity := head[changedID]
@@ -74,8 +81,10 @@ func (st *ShapeTransformer) Resolve(head map[string]*pb.Entity, changedID string
 		return nil, remove
 	}
 
-	// If entity has LocalShapeComponent with RelativeTo, resolve it
+	// GeoShapeComponent is engine-managed when RelativeTo is set: drop
+	// whatever was pushed and recompute it.
 	if entity.LocalShape != nil && entity.LocalShape.RelativeTo != "" {
+		entity.Shape = nil
 		st.resolveShape(head, changedID, entity)
 	}
 

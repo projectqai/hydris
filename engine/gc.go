@@ -110,8 +110,12 @@ func (s *WorldServer) GC() {
 		if es, ok := s.head[id]; ok {
 			lts = es.lifetimes
 		}
-		upserted, removed := transform.RunTransformers(s.transformers, s.headView, s.bus, id, lts)
+		upserted, removed, genBy := transform.RunTransformers(s.transformers, s.headView, s.bus, id, lts)
 		s.syncTransformerResults(upserted, removed)
+		s.markGeneratedComponents(id, genBy[id])
+		for _, uid := range upserted {
+			s.markGeneratedComponents(uid, genBy[uid])
+		}
 	}
 	for _, id := range changed {
 		if s.isRemoteEntity(id) {
@@ -121,21 +125,25 @@ func (s *WorldServer) GC() {
 		if es, ok := s.head[id]; ok {
 			lts = es.lifetimes
 		}
-		upserted, removed := transform.RunTransformers(s.transformers, s.headView, s.bus, id, lts)
+		upserted, removed, genBy := transform.RunTransformers(s.transformers, s.headView, s.bus, id, lts)
 		s.syncTransformerResults(upserted, removed)
+		s.markGeneratedComponents(id, genBy[id])
+		for _, uid := range upserted {
+			s.markGeneratedComponents(uid, genBy[uid])
+		}
 	}
 	s.l.Unlock()
 }
 
 // deleteArtifactBlob deletes the blob for an artifact entity from storage.
 func deleteArtifactBlob(entity *proto.Entity) {
-	if entity.Artifact == nil || entity.Artifact.Id == "" {
+	if entity.Artifact == nil || entity.Artifact.Id == "" { //nolint:staticcheck // SA1019: Artifact.Id migration pending
 		return
 	}
 	if artifacts.Server == nil {
 		return
 	}
-	if err := artifacts.Server.DeleteBlob(entity.Artifact.Id); err != nil {
-		slog.Warn("failed to delete artifact blob on expiry", "id", entity.Artifact.Id, "error", err)
+	if err := artifacts.Server.DeleteBlob(entity.Artifact.Id); err != nil { //nolint:staticcheck // SA1019: Artifact.Id migration pending
+		slog.Warn("failed to delete artifact blob on expiry", "id", entity.Artifact.Id, "error", err) //nolint:staticcheck // SA1019: Artifact.Id migration pending
 	}
 }

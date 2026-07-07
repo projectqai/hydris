@@ -42,14 +42,18 @@ export function validateLayoutNode(
         break;
       }
       case "camera": {
-        if (typeof content.entityId !== "string") return null;
-        paneContent = { type: "camera", entityId: content.entityId };
+        paneContent =
+          typeof content.entityId === "string"
+            ? { type: "camera", entityId: content.entityId }
+            : { type: "camera" };
         break;
       }
       case "sensor": {
-        if (typeof content.entityId !== "string" || typeof content.widgetId !== "string")
-          return null;
-        paneContent = { type: "sensor", entityId: content.entityId, widgetId: content.widgetId };
+        if (typeof content.widgetId !== "string") return null;
+        paneContent =
+          typeof content.entityId === "string"
+            ? { type: "sensor", entityId: content.entityId, widgetId: content.widgetId }
+            : { type: "sensor", widgetId: content.widgetId };
         break;
       }
       case "empty": {
@@ -176,9 +180,9 @@ export function setPaneEntityId(content: PaneContent, entityId: string | undefin
             ...(content.props ? { props: content.props } : {}),
           };
     case "sensor":
+      return entityId ? { ...content, entityId } : { type: "sensor", widgetId: content.widgetId };
     case "camera":
-      // sensor and camera always carry an entity, so clearing is a no-op.
-      return entityId ? { ...content, entityId } : content;
+      return entityId ? { ...content, entityId } : { type: "camera" };
     default:
       return content;
   }
@@ -189,8 +193,9 @@ export function getStructureKey(node: LayoutNode): string {
     const c = node.content;
     if (c.type === "component")
       return c.entityId ? `p:${c.componentId}(${c.entityId})` : `p:${c.componentId}`;
-    if (c.type === "camera") return `p:cam(${c.entityId})`;
-    if (c.type === "sensor") return `p:sensor(${c.entityId},${c.widgetId})`;
+    if (c.type === "camera") return c.entityId ? `p:cam(${c.entityId})` : "p:cam";
+    if (c.type === "sensor")
+      return c.entityId ? `p:sensor(${c.entityId},${c.widgetId})` : `p:sensor(${c.widgetId})`;
     if (c.type === "iframe") return `p:url(${c.url})`;
     return "p:empty";
   }

@@ -1,13 +1,14 @@
 import { GeoJsonLayer } from "@deck.gl/layers";
 
 import { AFFILIATION_COLORS_RGB } from "../constants";
-import type { Affiliation, BaseLayer, ShapeFeature, ShapeProperties } from "../types";
-
-type RGBA = [number, number, number, number];
+import type { Affiliation, BaseLayer, RGBA, ShapeFeature, ShapeProperties } from "../types";
 
 function withAlpha(alpha: number): Record<Affiliation, RGBA> {
   return Object.fromEntries(
-    Object.entries(AFFILIATION_COLORS_RGB).map(([k, [r, g, b]]) => [k, [r, g, b, alpha]]),
+    Object.entries(AFFILIATION_COLORS_RGB).map(([aff, [r, g, b]]) => [
+      aff,
+      [r, g, b, alpha] as RGBA,
+    ]),
   ) as Record<Affiliation, RGBA>;
 }
 

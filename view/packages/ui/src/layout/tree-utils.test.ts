@@ -174,6 +174,28 @@ describe("validateLayoutNode", () => {
       content: { type: "component", componentId: "alpha" },
     });
   });
+
+  it("accepts an unbound camera pane, with or without an entityId", () => {
+    expect(validateLayoutNode({ type: "pane", id: "p1", content: { type: "camera" } })).toEqual({
+      type: "pane",
+      id: "p1",
+      content: { type: "camera" },
+    });
+    expect(
+      validateLayoutNode({ type: "pane", id: "p2", content: { type: "camera", entityId: "cam" } }),
+    ).toEqual({ type: "pane", id: "p2", content: { type: "camera", entityId: "cam" } });
+  });
+
+  it("accepts an unbound sensor pane but still requires a widgetId", () => {
+    expect(
+      validateLayoutNode({
+        type: "pane",
+        id: "p1",
+        content: { type: "sensor", widgetId: "sensor:metric" },
+      }),
+    ).toEqual({ type: "pane", id: "p1", content: { type: "sensor", widgetId: "sensor:metric" } });
+    expect(validateLayoutNode({ type: "pane", id: "p2", content: { type: "sensor" } })).toBeNull();
+  });
 });
 
 describe("getPaneEntityId", () => {
@@ -217,6 +239,15 @@ describe("setPaneEntityId", () => {
       entityId: "new",
     });
   });
+
+  it("unpins sensor and camera, keeping the sensor widget id", () => {
+    expect(
+      setPaneEntityId({ type: "sensor", entityId: "old", widgetId: "sensor:metric" }, undefined),
+    ).toEqual({ type: "sensor", widgetId: "sensor:metric" });
+    expect(setPaneEntityId({ type: "camera", entityId: "old" }, undefined)).toEqual({
+      type: "camera",
+    });
+  });
 });
 
 describe("getStructureKey", () => {
@@ -234,5 +265,20 @@ describe("getStructureKey", () => {
     expect(unbound).toBe("p:vitals");
     expect(pinned).toBe("p:vitals(e1)");
     expect(unbound).not.toBe(pinned);
+  });
+
+  it("distinguishes pinned and unbound camera and sensor panes", () => {
+    const cam = (entityId?: string) =>
+      getStructureKey({ type: "pane", id: "p1", content: { type: "camera", entityId } });
+    const sensor = (entityId?: string) =>
+      getStructureKey({
+        type: "pane",
+        id: "p1",
+        content: { type: "sensor", entityId, widgetId: "sensor:metric" },
+      });
+    expect(cam()).toBe("p:cam");
+    expect(cam("e1")).toBe("p:cam(e1)");
+    expect(sensor()).toBe("p:sensor(sensor:metric)");
+    expect(sensor("e2")).toBe("p:sensor(e2,sensor:metric)");
   });
 });

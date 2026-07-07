@@ -132,6 +132,14 @@ export function useDeepLink(mapReady: boolean, options: DeepLinkOptions) {
           useOverlayStore.setState(merged);
         }
 
+        if (payload.hl && typeof payload.hl === "object") {
+          useOverlayStore.setState({ hiddenLayers: payload.hl });
+        }
+
+        if (payload.lo && typeof payload.lo === "object") {
+          useOverlayStore.setState({ layerOpacity: payload.lo });
+        }
+
         if (payload.l) {
           useMapStore.getState().setLayer(payload.l as "dark" | "satellite" | "street");
         }

@@ -10,7 +10,7 @@ import { Check, Crosshair, Search } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, Text, TextInput, View } from "react-native";
 
-import { getEntityName } from "../../../../lib/api/use-track-utils";
+import { getEntityName, isDetectionEntity } from "../../../../lib/api/use-track-utils";
 
 const uf = new uFuzzy({ intraMode: 1 });
 
@@ -27,6 +27,8 @@ export function buildEntityItems(
 ): EntityItem[] {
   const result: EntityItem[] = [];
   for (const entity of entities.values()) {
+    // a detection can carry a matching metric
+    if (isDetectionEntity(entity)) continue;
     if (!opts.match(entity)) continue;
     result.push({
       id: entity.id,

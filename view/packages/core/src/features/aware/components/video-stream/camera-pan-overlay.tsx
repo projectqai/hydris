@@ -1,3 +1,4 @@
+import { useIsScreenLocked } from "@hydris/ui/screen-lock";
 import type { Entity } from "@projectqai/proto/world";
 import type { LucideIcon } from "lucide-react-native";
 import { ChevronLeft, ChevronRight } from "lucide-react-native";
@@ -69,6 +70,7 @@ export function CameraPanOverlay({
 
 function TapPanOverlay({ camera, children }: { camera: Entity | undefined; children: ReactNode }) {
   const { enabled, pan } = useCameraPan(camera);
+  const isScreenLocked = useIsScreenLocked();
   const widthRef = useRef(0);
 
   const handleLayout = (e: LayoutChangeEvent) => {
@@ -82,6 +84,7 @@ function TapPanOverlay({ camera, children }: { camera: Entity | undefined; child
       void pan((x - w / 2) / (w / 2));
     };
     return Gesture.Tap()
+      .enabled(!isScreenLocked)
       .maxDuration(10_000)
       .maxDistance(10_000)
       .onEnd((e, success) => {
@@ -89,7 +92,7 @@ function TapPanOverlay({ camera, children }: { camera: Entity | undefined; child
         if (!success) return;
         runOnJS(fire)(e.x);
       });
-  }, [pan]);
+  }, [pan, isScreenLocked]);
 
   const rightGesture = useMemo(() => {
     const fire = (xInStrip: number) => {
@@ -99,6 +102,7 @@ function TapPanOverlay({ camera, children }: { camera: Entity | undefined; child
       void pan((absX - w / 2) / (w / 2));
     };
     return Gesture.Tap()
+      .enabled(!isScreenLocked)
       .maxDuration(10_000)
       .maxDistance(10_000)
       .onEnd((e, success) => {
@@ -106,7 +110,7 @@ function TapPanOverlay({ camera, children }: { camera: Entity | undefined; child
         if (!success) return;
         runOnJS(fire)(e.x);
       });
-  }, [pan]);
+  }, [pan, isScreenLocked]);
 
   if (!enabled) return <>{children}</>;
 

@@ -6,10 +6,12 @@ import { ControlIconButton, ControlSlider, OverlayCategory } from "@hydris/ui/co
 import { useKeyboardShortcut } from "@hydris/ui/keyboard";
 import { GRADIENT_PROPS, useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
+import type { Entity } from "@projectqai/proto/world";
 import { LinearGradient } from "expo-linear-gradient";
 import {
   ExternalLink,
   Eye,
+  Group,
   Hexagon,
   Layers,
   Link2,
@@ -62,9 +64,13 @@ function getPortalTo() {
 type NetworkType = "datalinks";
 type SensorStatus = "online" | "degraded";
 type TrackType = "red" | "neutral" | "unknown" | "blue" | "unclassified";
-type VisualizationType = "coverage" | "shapes" | "detections" | "trackHistory";
+type VisualizationType = "coverage" | "shapes" | "detections" | "trackHistory" | "clustering";
 
 const ICON_SIZE = 16;
+
+function isOfflineMap(e: Entity): boolean {
+  return e.mapLayer?.source.case === "tiles" && e.mapLayer.source.value.url.startsWith("/tiles/");
+}
 
 type LayerOption = {
   id: BaseLayer;
@@ -106,6 +112,7 @@ const VISUALIZATION_OPTIONS: OverlayCategoryOption[] = [
   { id: "shapes", label: "Geoshapes", icon: Hexagon },
   { id: "detections", label: "Detections", icon: Radar },
   { id: "trackHistory", label: "Track Lines", icon: Route },
+  { id: "clustering", label: "Clustering", icon: Group },
 ];
 
 type ViewState = { lat: number; lng: number; zoom: number };
@@ -265,6 +272,8 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
   paramsRef.current = params;
   const currentLayer = useMapStore((state) => state.layer);
   const setLayerStore = useMapStore((state) => state.setLayer);
+  const offlineBasemapId = useMapStore((state) => state.offlineBasemapId);
+  const setOfflineBasemap = useMapStore((state) => state.setOfflineBasemap);
   const tracks = useOverlayStore((state) => state.tracks);
   const sensors = useOverlayStore((state) => state.sensors);
   const network = useOverlayStore((state) => state.network);
@@ -278,7 +287,9 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
   const mapLayerEntities = useEntityStore(
     useShallow((s) => Array.from(s.entities.values()).filter((e) => e.mapLayer)),
   );
-  const expandedLayer = mapLayerEntities.find((e) => e.id === expandedLayerId);
+  const offlineBasemapOptions = mapLayerEntities.filter(isOfflineMap);
+  const pluginMapLayers = mapLayerEntities.filter((e) => !isOfflineMap(e));
+  const expandedLayer = pluginMapLayers.find((e) => e.id === expandedLayerId);
   // handles proto3 zero-default for opacity
   const expandedOpacity =
     expandedLayer?.mapLayer != null
@@ -323,6 +334,29 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
     setLayerStore(layer);
     setShowLayerMenu(false);
   };
+
+  const handleOfflineSelect = (id: string) => {
+    setOfflineBasemap(id);
+    setShowLayerMenu(false);
+  };
+
+  const offlineActive = offlineBasemapOptions.some((e) => e.id === offlineBasemapId);
+  const basemapOptions = [
+    ...LAYER_OPTIONS.map((o) => ({
+      key: o.id,
+      label: o.label,
+      icon: o.icon,
+      isSelected: !offlineActive && currentLayer === o.id,
+      onPress: () => handleLayerSelect(o.id),
+    })),
+    ...offlineBasemapOptions.map((e) => ({
+      key: e.id,
+      label: e.label || e.id,
+      icon: Map,
+      isSelected: offlineBasemapId === e.id,
+      onPress: () => handleOfflineSelect(e.id),
+    })),
+  ];
 
   const toggleOverlay = <K extends "tracks" | "sensors" | "network" | "visualization">(
     category: K,
@@ -385,6 +419,8 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
         };
       },
       getDefaultOverlays: () => DEFAULT_OVERLAYS,
+      getHiddenLayers: () => useOverlayStore.getState().hiddenLayers,
+      getLayerOpacity: () => useOverlayStore.getState().layerOpacity,
       getLayer: () => useMapStore.getState().layer,
       getListMode: () => useLeftPanelStore.getState().listMode,
       getDetailTab: () => useTabStore.getState().activeDetailTab,
@@ -427,37 +463,31 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
             <LinearGradient
               colors={t.gradients.default}
               {...GRADIENT_PROPS}
-              className="border-border/40 w-full gap-0.5 overflow-hidden rounded-lg border p-1"
+              className="border-border/40 gap-0.5 self-start overflow-hidden rounded-lg border p-1"
             >
-              {LAYER_OPTIONS.map((option) => {
-                const Icon = option.icon;
-                const isSelected = currentLayer === option.id;
-                return (
-                  <Pressable
-                    key={option.id}
-                    onPress={() => handleLayerSelect(option.id)}
-                    className={cn(
-                      "hover:bg-surface-overlay/10 active:bg-surface-overlay/15 min-w-28 rounded",
-                      isSelected && "bg-surface-overlay/15 hover:bg-surface-overlay/15",
-                    )}
-                  >
-                    <View className="flex-row items-center gap-2.5 px-3 py-2.5 select-none">
-                      <Icon size={ICON_SIZE} color={isSelected ? t.iconActive : t.iconDefault} />
-                      <Text
-                        selectable={false}
-                        className={cn(
-                          "text-sm",
-                          isSelected
-                            ? "font-sans-medium text-foreground"
-                            : "font-sans-medium text-on-surface/70",
-                        )}
-                      >
-                        {option.label}
-                      </Text>
-                    </View>
-                  </Pressable>
-                );
-              })}
+              {basemapOptions.map(({ key, label, icon: Icon, isSelected, onPress }) => (
+                <Pressable
+                  key={key}
+                  onPress={onPress}
+                  className={cn(
+                    "hover:bg-surface-overlay/10 active:bg-surface-overlay/15 min-w-28 rounded",
+                    isSelected && "bg-surface-overlay/15 hover:bg-surface-overlay/15",
+                  )}
+                >
+                  <View className="flex-row items-center gap-2.5 px-3 py-2.5 select-none">
+                    <Icon size={ICON_SIZE} color={isSelected ? t.iconActive : t.iconDefault} />
+                    <Text
+                      selectable={false}
+                      className={cn(
+                        "font-sans-medium text-sm",
+                        isSelected ? "text-foreground" : "text-on-surface/70",
+                      )}
+                    >
+                      {label}
+                    </Text>
+                  </View>
+                </Pressable>
+              ))}
             </LinearGradient>
           </ControlMenu>
         </View>
@@ -512,7 +542,7 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
                     onToggle={(id) => toggleOverlay("visualization", id as VisualizationType)}
                   />
 
-                  {mapLayerEntities.length > 0 && (
+                  {pluginMapLayers.length > 0 && (
                     <View className="gap-1.5">
                       <Text
                         selectable={false}
@@ -521,7 +551,7 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
                         Layers
                       </Text>
                       <View className="flex-row flex-wrap gap-1">
-                        {mapLayerEntities.map((e) => {
+                        {pluginMapLayers.map((e) => {
                           const visible = !hiddenLayers[e.id];
                           return (
                             <Pressable

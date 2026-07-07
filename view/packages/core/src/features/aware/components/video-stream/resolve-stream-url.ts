@@ -4,34 +4,31 @@ import { MediaStreamProtocol } from "@projectqai/proto/world";
 import { baseUrl } from "../../../../lib/api/world-client";
 import type { VideoProtocol } from "./types";
 
-function toVideoProtocol(proto: MediaStreamProtocol): VideoProtocol | null {
-  switch (proto) {
-    case MediaStreamProtocol.MediaStreamProtocolHls:
-      return "hls";
-    case MediaStreamProtocol.MediaStreamProtocolMjpeg:
-      return "mjpeg";
-    case MediaStreamProtocol.MediaStreamProtocolImage:
-      return "image";
-    case MediaStreamProtocol.MediaStreamProtocolIframe:
-      return "iframe";
-    case MediaStreamProtocol.MediaStreamProtocolWebrtc:
-      return "webrtc";
-    default:
-      return null;
-  }
-}
-
-// When the frontend can't play a protocol directly (e.g. rtsp://),
-// request a WHEP stream from the backend which transcodes to WebRTC.
 export function resolveStreamUrl(
   stream: ProtoMediaStream,
   entityId: string,
   streamIndex: number,
 ): { url: string; protocol: VideoProtocol } {
-  const protocol = toVideoProtocol(stream.protocol);
-  if (protocol) return { url: stream.url, protocol };
-  return {
-    url: `${baseUrl}/media/whep/${encodeURIComponent(entityId)}/${streamIndex}`,
-    protocol: "webrtc",
-  };
+  const eid = encodeURIComponent(entityId);
+  switch (stream.protocol) {
+    case MediaStreamProtocol.MediaStreamProtocolHls:
+      return { url: stream.url, protocol: "hls" };
+    case MediaStreamProtocol.MediaStreamProtocolIframe:
+      return { url: stream.url, protocol: "iframe" };
+    case MediaStreamProtocol.MediaStreamProtocolImage:
+      return {
+        url: `${baseUrl}/media/image/${eid}?stream=${streamIndex}`,
+        protocol: "image",
+      };
+    case MediaStreamProtocol.MediaStreamProtocolMjpeg:
+      return {
+        url: `${baseUrl}/media/image/${eid}?stream=${streamIndex}`,
+        protocol: "mjpeg",
+      };
+    default:
+      return {
+        url: `${baseUrl}/media/whep/${eid}?stream=${streamIndex}`,
+        protocol: "webrtc",
+      };
+  }
 }

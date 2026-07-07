@@ -8,10 +8,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/projectqai/hydris/engine/meta"
+	"github.com/projectqai/hydris/engine/transform"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -31,6 +34,18 @@ func (s *WorldServer) LoadDefaults(b []byte) error {
 	if err != nil {
 		return err
 	}
+	return s.LoadDefaultEntities(entities)
+}
+
+// LoadDefaultEntities loads entities as defaults: each is stamped with a Unix
+// epoch lifetime so it loses the last-writer-wins merge against any persisted
+// or runtime entity, letting operators override it. Used both for the YAML
+// defaults and for engine-provided defaults (e.g. the policy chain) so they go
+// through one identical path.
+func (s *WorldServer) LoadDefaultEntities(entities []*pb.Entity) error {
+	if len(entities) == 0 {
+		return nil
+	}
 
 	// Dedup by ID, last-wins, so platform overrides replace base defaults.
 	seen := make(map[string]int, len(entities))
@@ -48,8 +63,15 @@ func (s *WorldServer) LoadDefaults(b []byte) error {
 	s.l.Lock()
 	defer s.l.Unlock()
 
-	// Use Unix epoch so defaults lose the LWW merge against any persisted entity.
+	// Defaults must lose the LWW merge against any real runtime/persisted entity,
+	// so their timestamps stay near the Unix epoch. An unset timestamp falls back
+	// to the epoch; an explicitly-set one is respected so a default can be
+	// versioned — bump lifetime.fresh from epoch+1 to epoch+2 to ship an updated
+	// default that overrides the one already loaded on existing nodes.
 	epoch := timestamppb.New(time.Unix(0, 0))
+	// year2000 guards against a real wall-clock timestamp slipping into a default,
+	// which would let it overwrite genuine state.
+	year2000 := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	added := 0
 	for _, e := range entities {
@@ -62,17 +84,21 @@ func (s *WorldServer) LoadDefaults(b []byte) error {
 		if e.Lifetime.Fresh == nil || !e.Lifetime.Fresh.IsValid() {
 			e.Lifetime.Fresh = e.Lifetime.From
 		}
+		if e.Lifetime.From.AsTime().After(year2000) || e.Lifetime.Fresh.AsTime().After(year2000) {
+			panic(fmt.Sprintf("default entity %q carries a real timestamp (fresh=%s); defaults must use small epoch+N offsets", e.Id, e.Lifetime.Fresh.AsTime().Format(time.RFC3339)))
+		}
 
 		if es, ok := s.head[e.Id]; ok {
-			merged, accepted := s.mergeEntityComponents(e.Id, es, e, "persist", false)
+			merged, accepted := s.mergeEntityComponents(e.Id, es, e, meta.Component{Reloaded: true})
 			if !accepted {
 				continue
 			}
 			es.entity = merged
 			s.headView[e.Id] = merged
 		} else {
-			s.initEntity(e)
+			s.initEntityFrom(e, meta.Component{Reloaded: true})
 		}
+		transform.ReindexTransformers(s.transformers, s.headView, e.Id)
 		s.bus.Dirty(e.Id, s.head[e.Id].entity, pb.EntityChange_EntityChangeUpdated)
 		added++
 	}
@@ -112,7 +138,11 @@ func (s *WorldServer) LoadFromFile(path string) error {
 		if e.Lifetime.Fresh == nil || !e.Lifetime.Fresh.IsValid() {
 			e.Lifetime.Fresh = e.Lifetime.From
 		}
-		s.initEntity(e)
+		s.initEntityFrom(e, meta.Component{Reloaded: true})
+	}
+
+	for _, e := range entities {
+		transform.ReindexTransformers(s.transformers, s.headView, e.Id)
 		s.bus.Dirty(e.Id, e, pb.EntityChange_EntityChangeUpdated)
 	}
 
@@ -165,49 +195,54 @@ func (s *WorldServer) isLocal(e *pb.Entity) bool {
 	return s.nodeID != "" && e.Controller != nil && e.Controller.Node != nil && *e.Controller.Node == s.nodeID
 }
 
+// isDurable reports whether a component survives a FlushToFile/LoadFromFile
+// round-trip: it must never expire and must not be transformer-generated.
+// Generated components are recomputed from their sources; persisting them
+// would make them look externally authored after a reload. Leases are never
+// durable — a persisted lock would leave the entity locked to a controller
+// that no longer exists after a restart.
+func (es *entityState) isDurable(protoNum int32) bool {
+	if protoNum == int32(pb.EntityComponent_EntityComponentLease) {
+		return false
+	}
+	return !es.lifetimes[protoNum].Generated && es.isInfinite(protoNum)
+}
+
+// isPersisted reports whether an entity is written to the world file: it must
+// be local and permanent. The entity-level Lifetime is the union of the
+// tracked component lifetimes (see mergeEntityComponents), so a missing Until
+// already implies durable content; persistableStub picks which components are
+// kept.
 func (s *WorldServer) isPersisted(es *entityState) bool {
 	e := es.entity
 	if !s.isLocal(e) {
 		return false
 	}
-	if s.nodeEntity != nil && (e.Controller == nil || e.Controller.Origin == nil || *e.Controller.Origin != s.nodeEntity.Id) {
-		return false
-	}
-	if lt := e.GetLifetime(); lt != nil && lt.GetUntil().IsValid() {
-		return false
-	}
-	return e.Config != nil || e.Device != nil || e.Artifact != nil || e.Policy != nil ||
-		(e.Geo != nil && es.isInfinite(11))
+	lt := e.GetLifetime()
+	return lt == nil || !lt.GetUntil().IsValid()
 }
 
 // persistableStub returns a copy of the entity containing only its durable
 // components — the subset that survives a FlushToFile/LoadFromFile round-trip.
-// Caller must hold s.l. Transient components (Track, Sensor, ...) and
+// Caller must hold s.l. Expiring components (tracks, detections, ...) and
 // transformer-generated derivatives are dropped.
 func (es *entityState) persistableStub() *pb.Entity {
 	e := es.entity
 	stub := &pb.Entity{Id: e.Id, Label: e.Label, Controller: e.Controller, Lifetime: e.Lifetime}
-	if e.Config != nil {
-		stub.Config = e.Config
-	}
-	if e.Device != nil {
-		stub.Device = e.Device
-	}
-	if e.Artifact != nil {
-		stub.Artifact = e.Artifact
-	}
-	if e.Geo != nil && es.isInfinite(11) {
-		stub.Geo = e.Geo
-	}
-	if e.Policy != nil {
-		stub.Policy = e.Policy
+	src := reflect.ValueOf(e).Elem()
+	dst := reflect.ValueOf(stub).Elem()
+	for protoNum, fieldIdx := range protoNumToFieldIdx {
+		f := src.Field(fieldIdx)
+		if f.Kind() == reflect.Pointer && !f.IsNil() && es.isDurable(protoNum) {
+			dst.Field(fieldIdx).Set(f)
+		}
 	}
 	return stub
 }
 
 // FlushToFile writes the current head state to the world file atomically.
-// Only local entities (controller.node == this node) are persisted, and only
-// the config and device components are kept. Entities with lifetime.until
+// Only local entities (controller.node == this node) are persisted, reduced
+// to their durable components. Entities with lifetime.until
 // (expiring/temporary) are skipped entirely.
 func (s *WorldServer) FlushToFile() error {
 	if s.worldFile == "" {

@@ -3,7 +3,6 @@ package goclient
 import (
 	"context"
 	"crypto/tls"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +20,19 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
+
+// ConnectOption configures an outbound connection.
+type ConnectOption func(*connectOpts)
+
+type connectOpts struct {
+	clientCert *tls.Certificate
+}
+
+// WithClientCert presents cert as the mTLS client certificate. It applies only
+// to TLS (https) connections; plaintext connections ignore it.
+func WithClientCert(cert tls.Certificate) ConnectOption {
+	return func(o *connectOpts) { o.clientCert = &cert }
+}
 
 // Connection wraps a gRPC connection with optional tunnel (WireGuard, SSH, etc.)
 type Connection struct {
@@ -76,56 +88,100 @@ func ParseServer(server, wgConfigPath string) (tunnel Tunnel, remoteAddr, label 
 	return nil, server, "", nil
 }
 
-// ConnectURL establishes a gRPC connection, parsing the server address for
-// ssh:// URLs and optional WireGuard config.
-func ConnectURL(server, wgConfigPath string) (*Connection, error) {
+// ConnectURL establishes a working gRPC connection, parsing the server address
+// for ssh:// URLs and optional WireGuard config. Unless the URL pins a scheme it
+// tries TLS (with mTLS when a client cert is supplied) before plaintext; http://
+// forces plaintext, https:// forces TLS. Because gRPC dials lazily, each
+// candidate is probed with GetLocalNode so only a transport+auth that actually
+// works is returned.
+func ConnectURL(ctx context.Context, server, wgConfigPath string, options ...ConnectOption) (*Connection, error) {
+	var o connectOpts
+	for _, opt := range options {
+		opt(&o)
+	}
+
 	tunnel, remoteAddr, _, err := ParseServer(server, wgConfigPath)
 	if err != nil {
 		return nil, err
 	}
 
-	target, opts, err := parseServerURL(remoteAddr)
-	if err != nil {
-		if tunnel != nil {
-			_ = tunnel.Close()
+	var lastErr error
+	for _, cand := range connectCandidates(remoteAddr, o.clientCert != nil) {
+		var cert *tls.Certificate
+		if cand.useCert {
+			cert = o.clientCert
 		}
-		return nil, err
+		target, opts, perr := parseServerURL(cand.url, cert)
+		if perr != nil {
+			lastErr = perr
+			continue
+		}
+		if tunnel != nil {
+			opts = append(opts, grpc.WithContextDialer(tunnel.Dial))
+		}
+		conn, derr := grpc.NewClient(target, opts...)
+		if derr != nil {
+			lastErr = derr
+			continue
+		}
+		if perr := probeConn(ctx, conn); perr != nil {
+			lastErr = perr
+			_ = conn.Close()
+			continue
+		}
+		return &Connection{ClientConn: conn, Tunnel: tunnel}, nil
 	}
 
 	if tunnel != nil {
-		opts = append(opts, grpc.WithContextDialer(tunnel.Dial))
+		_ = tunnel.Close()
 	}
+	return nil, fmt.Errorf("connect to %s: %w", server, lastErr)
+}
 
-	grpcConn, err := grpc.NewClient(target, opts...)
-	if err != nil {
-		if tunnel != nil {
-			_ = tunnel.Close()
+// connectCandidate is one transport attempt: a scheme-qualified URL and whether
+// to present the mTLS client certificate.
+type connectCandidate struct {
+	url     string
+	useCert bool
+}
+
+// connectCandidates orders the transports to try for a server address. A pinned
+// http://hostname stays plaintext and https://hostname stays TLS; a bare
+// host:port tries TLS first, then plaintext. For TLS targets a client cert is
+// tried first (when available), then without it for remotes that predate mTLS.
+func connectCandidates(remoteAddr string, hasCert bool) []connectCandidate {
+	tlsAttempts := func(u string) []connectCandidate {
+		if hasCert {
+			return []connectCandidate{{u, true}, {u, false}}
 		}
-		return nil, err
+		return []connectCandidate{{u, false}}
 	}
-
-	return &Connection{ClientConn: grpcConn, Tunnel: tunnel}, nil
+	switch {
+	case strings.HasPrefix(remoteAddr, "http://"):
+		return []connectCandidate{{remoteAddr, false}}
+	case strings.HasPrefix(remoteAddr, "https://"):
+		return tlsAttempts(remoteAddr)
+	default:
+		return append(tlsAttempts("https://"+remoteAddr), connectCandidate{"http://" + remoteAddr, false})
+	}
 }
 
-// basicAuthCreds implements credentials.PerRPCCredentials for HTTP basic auth.
-type basicAuthCreds struct {
-	header string
+// probeConn verifies a lazily-dialed connection actually works (transport +
+// authentication) by issuing a GetLocalNode within a short timeout.
+func probeConn(ctx context.Context, conn *grpc.ClientConn) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, err := proto.NewWorldServiceClient(conn).GetLocalNode(probeCtx, &proto.GetLocalNodeRequest{})
+	return err
 }
 
-func (b basicAuthCreds) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
-	return map[string]string{"authorization": b.header}, nil
-}
-
-func (b basicAuthCreds) RequireTransportSecurity() bool { return false }
-
-// parseServerURL parses a server URL and returns the gRPC target, dial options
-// for TLS/auth, and any error. Supported formats:
+// parseServerURL parses a server URL and returns the gRPC target and dial
+// options. Supported formats:
 //
-//	host:port              (plaintext gRPC)
-//	http://host[:port]     (plaintext, default port 80)
-//	https://host[:port]    (TLS, default port 443)
-//	https://user:pass@host (TLS + basic auth)
-func parseServerURL(serverURL string) (target string, opts []grpc.DialOption, err error) {
+//	host:port        (plaintext gRPC)
+//	http://host[:port]  (plaintext, default port 80)
+//	https://host[:port] (TLS, default port 443; self-signed, optional mTLS cert)
+func parseServerURL(serverURL string, cert *tls.Certificate) (target string, opts []grpc.DialOption, err error) {
 	u, parseErr := url.Parse(serverURL)
 	// If there's no scheme, url.Parse may put everything in Path or Opaque.
 	// Detect the "host:port" case (no scheme).
@@ -143,7 +199,16 @@ func parseServerURL(serverURL string) (target string, opts []grpc.DialOption, er
 		if port == "" {
 			port = "443"
 		}
-		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})))
+		// The node serves a self-signed certificate. Present a client cert when
+		// one was supplied for this attempt, so the server can identify us via mTLS.
+		tlsCfg := &tls.Config{
+			InsecureSkipVerify: true,
+			NextProtos:         []string{"h2"},
+		}
+		if cert != nil {
+			tlsCfg.Certificates = []tls.Certificate{*cert}
+		}
+		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	case "http":
 		if port == "" {
 			port = "80"
@@ -153,21 +218,17 @@ func parseServerURL(serverURL string) (target string, opts []grpc.DialOption, er
 
 	target = host + ":" + port
 
-	// Basic auth from userinfo
-	if u.User != nil {
-		username := u.User.Username()
-		password, _ := u.User.Password()
-		encoded := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
-		opts = append(opts, grpc.WithPerRPCCredentials(basicAuthCreds{header: "Basic " + encoded}))
-	}
-
 	return target, opts, nil
 }
 
 // Connect establishes a gRPC connection to the server.
-// serverURL can be "host:port", "https://host", or "https://user:pass@host".
-func Connect(serverURL string) (*Connection, error) {
-	target, opts, err := parseServerURL(serverURL)
+// serverURL can be "host:port", "http://host", or "https://host".
+func Connect(serverURL string, options ...ConnectOption) (*Connection, error) {
+	var o connectOpts
+	for _, opt := range options {
+		opt(&o)
+	}
+	target, opts, err := parseServerURL(serverURL, o.clientCert)
 	if err != nil {
 		return nil, err
 	}

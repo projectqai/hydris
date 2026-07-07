@@ -2,6 +2,7 @@ package rt
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,6 +13,24 @@ import (
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/eventloop"
 )
+
+// insecureClient is a shared http.Client that skips TLS certificate
+// verification. Used by fetch when the caller passes
+// { tls: { rejectUnauthorized: false } }. Created lazily so the default
+// (verifying) path never allocates an extra transport.
+var (
+	insecureClientOnce sync.Once
+	insecureClient     *http.Client
+)
+
+func getInsecureClient() *http.Client {
+	insecureClientOnce.Do(func() {
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		insecureClient = &http.Client{Transport: tr}
+	})
+	return insecureClient
+}
 
 // setupFetch registers global fetch(url, opts?), Headers, and Request classes,
 // backed by Go's net/http.
@@ -39,6 +58,7 @@ func setupFetch(loop *eventloop.EventLoop, vm *goja.Runtime) {
 		var reqBody []byte
 		goHeaders := http.Header{}
 		reqCtx := context.Background()
+		insecureTLS := false
 
 		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Argument(1)) {
 			opts := call.Argument(1).ToObject(vm)
@@ -78,6 +98,15 @@ func setupFetch(loop *eventloop.EventLoop, vm *goja.Runtime) {
 					}
 				}
 			}
+			// Bun-style opt-out of TLS verification:
+			//   fetch(url, { tls: { rejectUnauthorized: false } })
+			if v := opts.Get("tls"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
+				if tlsObj := v.ToObject(vm); tlsObj != nil {
+					if ru := tlsObj.Get("rejectUnauthorized"); ru != nil && !goja.IsUndefined(ru) && !ru.ToBoolean() {
+						insecureTLS = true
+					}
+				}
+			}
 			if v := opts.Get("signal"); v != nil && !goja.IsUndefined(v) {
 				sigObj := v.ToObject(vm)
 				if ctxVal := sigObj.Get("_ctx"); ctxVal != nil {
@@ -102,7 +131,11 @@ func setupFetch(loop *eventloop.EventLoop, vm *goja.Runtime) {
 			}
 			req.Header = goHeaders
 
-			resp, err := http.DefaultClient.Do(req)
+			client := http.DefaultClient
+			if insecureTLS {
+				client = getInsecureClient()
+			}
+			resp, err := client.Do(req)
 			if err != nil {
 				loop.RunOnLoop(func(vm *goja.Runtime) { _ = reject(vm.NewGoError(err)) })
 				return

@@ -2,6 +2,11 @@
   margin-bottom: 6px;
 }
 
+.maplibregl-canvas:focus,
+.maplibregl-canvas:focus-visible {
+  outline: none;
+}
+
 .maplibregl-ctrl-scale {
   background-color: rgba(0, 0, 0, 0.55);
   border-color: rgba(255, 255, 255, 0.88);

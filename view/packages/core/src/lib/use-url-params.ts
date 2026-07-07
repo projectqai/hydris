@@ -108,6 +108,10 @@ export type ViewStatePayload = {
   t?: unknown;
   /** overlay diffs from defaults */
   o?: Record<string, Record<string, boolean>>;
+  /** hidden custom map layers, by id */
+  hl?: Record<string, true>;
+  /** custom map layer opacity, by id */
+  lo?: Record<string, number>;
   /** map layer */
   l?: string;
   /** entity list mode: "tracks" | "assets" */
@@ -155,6 +159,8 @@ export type BuildShareViewUrlDeps = {
   getLayoutSnapshot: () => { activePresetId: string; tree: unknown };
   getOverlayState: () => OverlayData;
   getDefaultOverlays: () => OverlayData;
+  getHiddenLayers: () => Record<string, true>;
+  getLayerOpacity: () => Record<string, number>;
   getLayer: () => string;
   getListMode: () => string;
   getDetailTab: () => string;
@@ -197,6 +203,16 @@ export function buildShareViewUrl(deps: BuildShareViewUrlDeps): string | null {
   }
   if (Object.keys(overlayDiff).length > 0) {
     payload.o = overlayDiff;
+  }
+
+  const hiddenLayers = deps.getHiddenLayers();
+  if (Object.keys(hiddenLayers).length > 0) {
+    payload.hl = hiddenLayers;
+  }
+
+  const layerOpacity = deps.getLayerOpacity();
+  if (Object.keys(layerOpacity).length > 0) {
+    payload.lo = layerOpacity;
   }
 
   const layer = deps.getLayer();

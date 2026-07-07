@@ -148,6 +148,13 @@ func cameraSchema() *structpb.Struct {
 				"default":     false,
 				"ui:order":    5,
 			},
+			"enable_direct_drive": map[string]any{
+				"type":        "boolean",
+				"title":       "Direct Drive",
+				"description": "Accept manual joystick control for pan and tilt",
+				"default":     false,
+				"ui:order":    6,
+			},
 		},
 	})
 	return s

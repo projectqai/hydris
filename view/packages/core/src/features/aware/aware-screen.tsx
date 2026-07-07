@@ -17,6 +17,7 @@ import type {
   WidgetPickerState,
 } from "@hydris/ui/layout/types";
 import { PanelProvider } from "@hydris/ui/panels";
+import { ScreenLockContext } from "@hydris/ui/screen-lock";
 import type { Entity } from "@projectqai/proto/world";
 import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View } from "react-native";
@@ -30,6 +31,7 @@ import { DropZone } from "../mission-pack/drop-zone";
 import { useMissionHealthStore } from "../mission-pack/mission-health-store";
 import { CameraPaneProvider } from "./camera-pane-context";
 import { CommandPalette } from "./components/command-palette/command-palette";
+import { CoordinateEntryModal } from "./components/coordinate-entry-modal";
 import { PaneEntityPickerModal } from "./components/layout/pane-entity-picker-modal";
 import { PaneShell } from "./components/layout/pane-shell";
 import { WidgetPickerModal } from "./components/layout/widget-picker-modal";
@@ -45,7 +47,11 @@ import { COMPONENT_LABELS, COMPONENT_REGISTRY, PRESETS } from "./layouts";
 import { PaletteContext, type PaletteContextValue } from "./palette-context";
 import { PIPProvider } from "./pip-context";
 import { PIPPlayer } from "./pip-player";
-import { PlacementContext, type PlacementContextValue } from "./placement-context";
+import {
+  PlacementContext,
+  type PlacementContextValue,
+  type PlacementOptions,
+} from "./placement-context";
 import { useChatStore } from "./store/chat-store";
 import { useEntityStore } from "./store/entity-store";
 import { useLeftPanelStore } from "./store/left-panel-store";
@@ -97,6 +103,13 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
   const [placementEntity, setPlacementEntity] = useState<Entity | null>(null);
   const placementProgress = useSharedValue(0);
   const isPlacing = placementEntity !== null;
+  const cameraBeforePlacementRef = useRef<{ lat: number; lng: number; zoom: number } | null>(null);
+  const [coordEntry, setCoordEntry] = useState<{
+    latitude: number;
+    longitude: number;
+    altitude?: number;
+  } | null>(null);
+  const [pendingAltitude, setPendingAltitude] = useState<number | null>(null);
   const { updateEntityLocation } = useEntityMutation();
 
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
@@ -153,6 +166,8 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
 
   const finishExitPlacement = useCallback(() => {
     setPlacementEntity(null);
+    setCoordEntry(null);
+    setPendingAltitude(null);
   }, []);
 
   const exitPlacement = useCallback(() => {
@@ -170,12 +185,16 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
   }, [customizeProgress, isPlacing, exitPlacement]);
 
   const enterPlacement = useCallback(
-    (entity: Entity) => {
+    (entity: Entity, options?: PlacementOptions) => {
       if (!mapVisible) {
         toast.error("Add a map to a pane first to position entities");
         return;
       }
       if (isCustomizing) exitCustomize();
+      cameraBeforePlacementRef.current = mapEngineActions.getView();
+      if (options?.recenter && entity.geo) {
+        mapEngineActions.flyTo(entity.geo.latitude, entity.geo.longitude);
+      }
       setPlacementEntity(entity);
       setPaletteMode(null);
       placementProgress.value = withTiming(1, { duration: 280 });
@@ -192,13 +211,38 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
       await updateEntityLocation(placementEntity, {
         latitude: view.lat,
         longitude: view.lng,
+        altitude: pendingAltitude ?? undefined,
       });
       toast.success(`Position set for ${getEntityName(placementEntity)}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to set position");
     }
     exitPlacement();
-  }, [placementEntity, updateEntityLocation, exitPlacement]);
+  }, [placementEntity, updateEntityLocation, exitPlacement, pendingAltitude]);
+
+  const applyTypedCoords = useCallback(
+    (coords: { latitude: number; longitude: number; altitude?: number }) => {
+      mapEngineActions.flyTo(coords.latitude, coords.longitude, undefined, 0);
+      setPendingAltitude(coords.altitude ?? null);
+      setCoordEntry(null);
+    },
+    [],
+  );
+
+  const openCoordEntry = useCallback(() => {
+    const view = mapEngineActions.getView();
+    setCoordEntry({
+      latitude: view.lat,
+      longitude: view.lng,
+      altitude: pendingAltitude ?? placementEntity?.geo?.altitude,
+    });
+  }, [placementEntity, pendingAltitude]);
+
+  const cancelPlacement = useCallback(() => {
+    const cam = cameraBeforePlacementRef.current;
+    if (cam) mapEngineActions.flyTo(cam.lat, cam.lng, undefined, undefined, cam.zoom);
+    exitPlacement();
+  }, [exitPlacement]);
 
   const placementCtx = useMemo<PlacementContextValue>(
     () => ({ enterPlacement, isPlacing, canPlace: mapVisible }),
@@ -225,6 +269,8 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
         };
       },
       getDefaultOverlays: () => DEFAULT_OVERLAYS,
+      getHiddenLayers: () => useOverlayStore.getState().hiddenLayers,
+      getLayerOpacity: () => useOverlayStore.getState().layerOpacity,
       getLayer: () => useMapStore.getState().layer,
       getListMode: () => useLeftPanelStore.getState().listMode,
       getDetailTab: () => useTabStore.getState().activeDetailTab,
@@ -317,116 +363,126 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
   );
 
   return (
-    <PlacementContext.Provider value={placementCtx}>
-      <PaletteContext.Provider value={paletteCtx}>
-        <View className="bg-background flex-1">
-          <TopBar
-            activePresetId={activePresetId}
-            onPresetSelect={handlePresetSelect}
-            customizeProgress={customizeProgress}
-            isCustomizing={isCustomizing}
-            onCustomize={enterCustomize}
-            onDone={exitCustomize}
-            isLayoutModified={!!isLayoutModified}
-            onResetToPreset={handleResetToPreset}
-            onOpenPalette={() => openPalette()}
-            commandButtonRight={commandButtonRight}
-            isScreenLocked={isScreenLocked}
-            placement={{
-              progress: placementProgress,
-              isActive: isPlacing,
-              onConfirm: confirmPlacement,
-              onAbort: exitPlacement,
-            }}
-          />
+    <ScreenLockContext.Provider value={isScreenLocked}>
+      <PlacementContext.Provider value={placementCtx}>
+        <PaletteContext.Provider value={paletteCtx}>
+          <View className="bg-background flex-1">
+            <TopBar
+              activePresetId={activePresetId}
+              onPresetSelect={handlePresetSelect}
+              customizeProgress={customizeProgress}
+              isCustomizing={isCustomizing}
+              onCustomize={enterCustomize}
+              onDone={exitCustomize}
+              isLayoutModified={!!isLayoutModified}
+              onResetToPreset={handleResetToPreset}
+              onOpenPalette={() => openPalette()}
+              commandButtonRight={commandButtonRight}
+              isScreenLocked={isScreenLocked}
+              placement={{
+                progress: placementProgress,
+                isActive: isPlacing,
+                onConfirm: confirmPlacement,
+                onAbort: cancelPlacement,
+                onTypeCoordinates: openCoordEntry,
+              }}
+            />
 
-          <View style={{ flex: 1 }}>
-            <View className="flex flex-1">
-              <ComponentRegistryContext.Provider value={extendedRegistry}>
-                <LayoutEditingContext.Provider value={editingCtx}>
-                  <LeafRendererContext.Provider value={PaneShell}>
-                    <Animated.View style={[{ flex: 1 }, layoutOpacity]}>
-                      <LayoutRenderer node={layoutTree} />
-                    </Animated.View>
-                  </LeafRendererContext.Provider>
-                </LayoutEditingContext.Provider>
-              </ComponentRegistryContext.Provider>
+            <View style={{ flex: 1 }}>
+              <View className="flex flex-1">
+                <ComponentRegistryContext.Provider value={extendedRegistry}>
+                  <LayoutEditingContext.Provider value={editingCtx}>
+                    <LeafRendererContext.Provider value={PaneShell}>
+                      <Animated.View style={[{ flex: 1 }, layoutOpacity]}>
+                        <LayoutRenderer node={layoutTree} />
+                      </Animated.View>
+                    </LeafRendererContext.Provider>
+                  </LayoutEditingContext.Provider>
+                </ComponentRegistryContext.Provider>
+              </View>
+              {isScreenLocked && (
+                <View
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    zIndex: Z.SCREEN_LOCK,
+                  }}
+                  pointerEvents="auto"
+                  onStartShouldSetResponder={() => true}
+                />
+              )}
             </View>
-            {isScreenLocked && (
-              <View
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  zIndex: Z.SCREEN_LOCK,
+            {pickerState && (
+              <WidgetPickerModal
+                visible
+                onClose={closePicker}
+                onSelect={(content) => {
+                  handleChangeContent(pickerState.path, content);
+                  closePicker();
                 }}
-                pointerEvents="auto"
-                onStartShouldSetResponder={() => true}
+                currentContent={pickerState.currentContent}
+                additionalWidgets={additionalWidgets}
               />
             )}
-          </View>
-          {pickerState && (
-            <WidgetPickerModal
-              visible
-              onClose={closePicker}
-              onSelect={(content) => {
-                handleChangeContent(pickerState.path, content);
-                closePicker();
-              }}
-              currentContent={pickerState.currentContent}
-              additionalWidgets={additionalWidgets}
-            />
-          )}
-          {entityPickerState && (
-            <PaneEntityPickerModal
-              content={entityPickerState.content}
-              onSelect={(entityId) => {
-                handleChangeContent(
-                  entityPickerState.path,
-                  setPaneEntityId(entityPickerState.content, entityId),
-                );
-                closeEntityPicker();
-              }}
-              onClear={() => {
-                handleChangeContent(
-                  entityPickerState.path,
-                  setPaneEntityId(entityPickerState.content, undefined),
-                );
-                closeEntityPicker();
-              }}
-              onClose={closeEntityPicker}
-            />
-          )}
-          {paletteMode && (
-            <CommandPalette
-              onClose={closePalette}
-              initialMode={paletteMode}
-              layoutActions={{
-                presetSelect: handlePresetSelect,
-                customize: enterCustomize,
-                resetLayout: handleResetToPreset,
-                shareView: handleShareView,
-                saveCustomTree,
-                clearCustomTree,
-                toggleScreenLock: () => {
-                  let nowLocked = false;
-                  setIsScreenLocked((v) => {
-                    nowLocked = !v;
+            {entityPickerState && (
+              <PaneEntityPickerModal
+                content={entityPickerState.content}
+                onSelect={(entityId) => {
+                  handleChangeContent(
+                    entityPickerState.path,
+                    setPaneEntityId(entityPickerState.content, entityId),
+                  );
+                  closeEntityPicker();
+                }}
+                onClear={() => {
+                  handleChangeContent(
+                    entityPickerState.path,
+                    setPaneEntityId(entityPickerState.content, undefined),
+                  );
+                  closeEntityPicker();
+                }}
+                onClose={closeEntityPicker}
+              />
+            )}
+            {paletteMode && (
+              <CommandPalette
+                onClose={closePalette}
+                initialMode={paletteMode}
+                layoutActions={{
+                  presetSelect: handlePresetSelect,
+                  customize: enterCustomize,
+                  resetLayout: handleResetToPreset,
+                  shareView: handleShareView,
+                  saveCustomTree,
+                  clearCustomTree,
+                  toggleScreenLock: () => {
+                    let nowLocked = false;
+                    setIsScreenLocked((v) => {
+                      nowLocked = !v;
+                      return nowLocked;
+                    });
                     return nowLocked;
-                  });
-                  return nowLocked;
-                },
-              }}
-            />
-          )}
-          <FloatingChatInput />
-          <PIPPlayer minTop={70} />
-          <DropZone />
-        </View>
-      </PaletteContext.Provider>
-    </PlacementContext.Provider>
+                  },
+                }}
+              />
+            )}
+            {isPlacing && coordEntry && (
+              <CoordinateEntryModal
+                initial={coordEntry}
+                onApply={applyTypedCoords}
+                onClose={() => setCoordEntry(null)}
+              />
+            )}
+            <FloatingChatInput />
+            <PIPPlayer minTop={70} />
+            <DropZone />
+          </View>
+        </PaletteContext.Provider>
+      </PlacementContext.Provider>
+    </ScreenLockContext.Provider>
   );
 }
 

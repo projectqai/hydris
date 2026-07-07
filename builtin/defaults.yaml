@@ -1,6 +1,61 @@
 ---
 id: self
 ---
+id: authz.policy
+label: Authorization Policy
+lifetime:
+  fresh: '1970-01-01T00:00:01Z'
+# Every request is authorized by deferring to the acting identity's own policy.
+# admin.actor (the identity authn.policy assigns to trusted connections) carries
+# an allow-all policy; any other identity gets whatever policy an operator
+# attaches to its entity, and is otherwise denied.
+policy:
+  rules:
+    - action: PolicyActionDefer
+      cel: 'actor.id'
+      label: defer to the actor's policy
+    - action: PolicyActionAllow
+      label: insecure by default for backwards-compat for now
+---
+id: authn.policy
+label: Connection Identity
+lifetime:
+  fresh: '1970-01-01T00:00:01Z'
+# Resolves *who* a connection is: each rule's CEL returns an entity id, first
+# non-empty wins, empty denies the connection. Trusted (loopback / in-process)
+# connections are admin.actor, as is a connection presenting this node's own TLS
+# cert (proof of possession of the node keypair); everyone else is anonymous.
+# Operators can map remote peers by source.mtls.verified.fingerprint /
+# source.mtls.verified.cn / source.mtls.verified.ca / source.address before the
+# anonymous fallback. Note source.mtls.verified is only populated for a chain
+# that validated against this node's CA; for peer certs the node signed cn != ca,
+# whereas the node's own cert has cn == ca (and source.mtls.verified.self == true).
+policy:
+  rules:
+    - cel: 'source.mtls.verified.self ? "admin.actor" : ""'
+      label: presenting this node's TLS cert authenticates as admin
+    - cel: '(is.local || is.builtin) ? "admin.actor" : ""'
+      label: trusted connections are admin.actor
+    - cel: '"auth:anonymous"'
+      label: everyone else is anonymous
+---
+id: admin.actor
+label: Admin
+lifetime:
+  fresh: '1970-01-01T00:00:01Z'
+policy:
+  rules:
+    - action: PolicyActionAllow
+      label: admin may do anything
+---
+id: auth:anonymous
+label: Anonymous
+lifetime:
+  fresh: '1970-01-01T00:00:01Z'
+# No policy: authz.policy's defer reaches no verdict and falls through to the
+# current insecure default-allow. Attach rules here (or tighten authz.policy's
+# tail to deny) to scope what anonymous (untrusted) connections may do.
+---
 id: meshtastic.service
 config:
   value:

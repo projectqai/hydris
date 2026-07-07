@@ -8,26 +8,19 @@ const Updated = EntityChange.EntityChangeUpdated;
 const Expired = EntityChange.EntityChangeExpired;
 const Unobserved = EntityChange.EntityChangeUnobserved;
 
-function entity(id: string, expired = false): Entity {
+function entity(id: string): Entity {
   return {
     id,
     geo: { latitude: 0, longitude: 0, altitude: 0 },
     symbol: { milStd2525C: "SFGPU------" },
-    ...(expired ? { lifetime: { until: { seconds: BigInt(0), nanos: 0 } } } : {}),
   } as Entity;
 }
 
-const neverExpired = () => false;
-const expiredByFlag = (e: Entity) => !!e.lifetime?.until;
-
-function classify(
-  events: Array<{ entity?: Entity; t: EntityChange }>,
-  isExpiredFn: (e: Entity) => boolean = neverExpired,
-) {
+function classify(events: Array<{ entity?: Entity; t: EntityChange }>) {
   const updates = new Map<string, Entity>();
   const deletes = new Set<string>();
   for (const event of events) {
-    classifyEvent(event, updates, deletes, isExpiredFn);
+    classifyEvent(event, updates, deletes);
   }
   return { updates, deletes };
 }
@@ -69,56 +62,6 @@ describe("classifyEvent", () => {
     expect(updates.has("a")).toBe(false);
   });
 
-  it("Updated(expired) routes to deletes", () => {
-    const { updates, deletes } = classify(
-      [{ entity: entity("a", true), t: Updated }],
-      expiredByFlag,
-    );
-    expect(updates.size).toBe(0);
-    expect(deletes.has("a")).toBe(true);
-  });
-
-  it("ec clear: Updated(expired) then Expired — in deletes", () => {
-    const { updates, deletes } = classify(
-      [
-        { entity: entity("a", true), t: Updated },
-        { entity: entity("a"), t: Expired },
-      ],
-      expiredByFlag,
-    );
-    expect(updates.size).toBe(0);
-    expect(deletes.has("a")).toBe(true);
-  });
-
-  it("ec clear: Expired then Updated(expired) — still in deletes", () => {
-    const { updates, deletes } = classify(
-      [
-        { entity: entity("a"), t: Expired },
-        { entity: entity("a", true), t: Updated },
-      ],
-      expiredByFlag,
-    );
-    expect(updates.size).toBe(0);
-    expect(deletes.has("a")).toBe(true);
-  });
-
-  it("ec clear interleaved with live entities", () => {
-    const { updates, deletes } = classify(
-      [
-        { entity: entity("live1"), t: Updated },
-        { entity: entity("dead1", true), t: Updated },
-        { entity: entity("live2"), t: Updated },
-        { entity: entity("dead1"), t: Expired },
-      ],
-      expiredByFlag,
-    );
-    expect(updates.size).toBe(2);
-    expect(updates.has("live1")).toBe(true);
-    expect(updates.has("live2")).toBe(true);
-    expect(deletes.size).toBe(1);
-    expect(deletes.has("dead1")).toBe(true);
-  });
-
   it("delete then re-add — ends in updates", () => {
     const { updates, deletes } = classify([
       { entity: entity("a"), t: Expired },
@@ -126,6 +69,15 @@ describe("classifyEvent", () => {
     ]);
     expect(updates.has("a")).toBe(true);
     expect(deletes.has("a")).toBe(false);
+  });
+
+  it("update then expire — ends in deletes", () => {
+    const { updates, deletes } = classify([
+      { entity: entity("a"), t: Updated },
+      { entity: entity("a"), t: Expired },
+    ]);
+    expect(updates.has("a")).toBe(false);
+    expect(deletes.has("a")).toBe(true);
   });
 
   it("unobserved then re-observed — ends in updates", () => {
@@ -150,15 +102,13 @@ describe("classifyEvent", () => {
   });
 
   it("entity never in both updates and deletes", () => {
-    const { updates, deletes } = classify(
-      [
-        { entity: entity("a"), t: Updated },
-        { entity: entity("a"), t: Expired },
-        { entity: entity("a"), t: Updated },
-        { entity: entity("a", true), t: Updated },
-      ],
-      expiredByFlag,
-    );
+    const { updates, deletes } = classify([
+      { entity: entity("a"), t: Updated },
+      { entity: entity("a"), t: Expired },
+      { entity: entity("a"), t: Updated },
+      { entity: entity("b"), t: Updated },
+      { entity: entity("b"), t: Unobserved },
+    ]);
     for (const id of updates.keys()) {
       expect(deletes.has(id)).toBe(false);
     }

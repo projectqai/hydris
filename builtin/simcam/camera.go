@@ -28,6 +28,7 @@ const (
 const (
 	panRateDegPerSec  = 60.0
 	tiltRateDegPerSec = 30.0
+	moveSpeedMPerSec  = 3.0
 )
 
 func focalPointID(camID string) string {
@@ -35,12 +36,13 @@ func focalPointID(camID string) string {
 }
 
 type cameraConfig struct {
-	FovWide          float64
-	FovTele          float64
-	RangeMax         float64
-	RenderBehindWall bool
-	InstantSlew      bool
-	EnableDetections bool
+	FovWide           float64
+	FovTele           float64
+	RangeMax          float64
+	RenderBehindWall  bool
+	InstantSlew       bool
+	EnableDetections  bool
+	EnableDirectDrive bool
 }
 
 func parseCameraConfig(entity *pb.Entity) cameraConfig {
@@ -70,6 +72,9 @@ func parseCameraConfig(entity *pb.Entity) cameraConfig {
 	}
 	if v, ok := fields["enable_detections"]; ok {
 		cfg.EnableDetections = v.GetBoolValue()
+	}
+	if v, ok := fields["enable_direct_drive"]; ok {
+		cfg.EnableDirectDrive = v.GetBoolValue()
 	}
 	return cfg
 }
@@ -203,6 +208,9 @@ func runCamera(ctx context.Context, logger *slog.Logger, entity *pb.Entity, read
 	go watchCameraPosition(ctx, logger, entityID, state, dirtyCh)
 	go watchEntities(ctx, logger, entityID, fpID, lat, lon, cfg.RangeMax, wc, dirtyCh)
 	go watchShapes(ctx, logger, lat, lon, cfg.RangeMax, walls, dirtyCh)
+	if cfg.EnableDirectDrive {
+		go watchManualControl(ctx, logger, entityID, state, dirtyCh)
+	}
 
 	return renderLoop(ctx, logger, entityID, fpID, cfg.EnableDetections, state, wc, walls, fs)
 }
@@ -236,6 +244,9 @@ func pushCameraComponents(ctx context.Context, camID, fpID string, cfg cameraCon
 		Interactivity: &pb.InteractivityComponent{
 			Icon: proto.String("video"),
 		},
+	}
+	if cfg.EnableDirectDrive {
+		cam.ManualControl = &pb.ManualControlComponent{}
 	}
 
 	pan, tilt, zoom := s.snapshotRaw()
@@ -372,6 +383,73 @@ func watchCameraPosition(ctx context.Context, logger *slog.Logger, camID string,
 			alt = *geo.Altitude
 		}
 		s.setPosition(geo.Latitude, geo.Longitude, alt)
+		signalDirty(dirtyCh)
+	}
+}
+
+// -- manual control watching --------------------------------------------------
+
+func watchManualControl(ctx context.Context, logger *slog.Logger, camID string, s *camState, dirtyCh chan struct{}) {
+	grpcConn, err := builtin.BuiltinClientConn("simcam")
+	if err != nil {
+		logger.Warn("simcam: manual control connect", "error", err)
+		return
+	}
+	defer func() { _ = grpcConn.Close() }()
+	client := pb.NewWorldServiceClient(grpcConn)
+
+	stream, err := goclient.WatchEntitiesWithRetry(ctx, client, &pb.ListEntitiesRequest{
+		Filter: &pb.EntityFilter{
+			Id:        &camID,
+			Component: []uint32{65},
+		},
+	})
+	if err != nil {
+		logger.Warn("simcam: manual control watch", "error", err)
+		return
+	}
+
+	for {
+		event, err := stream.Recv()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			logger.Warn("simcam: manual control recv", "error", err)
+			return
+		}
+		if event.Entity == nil || event.T != pb.EntityChange_EntityChangeUpdated {
+			continue
+		}
+		tmc := event.Entity.TargetManualControl
+		if tmc == nil || len(tmc.Input) == 0 {
+			s.mu.Lock()
+			s.manualPan = 0
+			s.manualTilt = 0
+			s.manualZoom = 0
+			s.manualRight = 0
+			s.lastManual = time.Time{}
+			s.mu.Unlock()
+			continue
+		}
+		axes := tmc.Input[0].Axes
+		if axes == nil {
+			s.mu.Lock()
+			s.manualPan = 0
+			s.manualTilt = 0
+			s.manualZoom = 0
+			s.manualRight = 0
+			s.lastManual = time.Time{}
+			s.mu.Unlock()
+			continue
+		}
+		s.mu.Lock()
+		s.manualPan = axes.GetPan()
+		s.manualTilt = axes.GetTilt()
+		s.manualZoom = axes.GetForward()
+		s.manualRight = axes.GetRight()
+		s.lastManual = time.Now()
+		s.mu.Unlock()
 		signalDirty(dirtyCh)
 	}
 }
@@ -608,6 +686,7 @@ func renderLoop(ctx context.Context, logger *slog.Logger, camID, fpID string, en
 	lastPublish := time.Now()
 	publishInterval := time.Second / 5
 	var lastPan, lastTilt, lastZoom float64
+	var lastCamLat, lastCamLon float64
 
 	activeDetections := make(map[string]bool)
 	defer func() {
@@ -693,6 +772,21 @@ func renderLoop(ctx context.Context, logger *slog.Logger, camID, fpID string, en
 				pushPose(ctx, client, fpID, camID, url, pan, tilt, zoom, fovW, fovT, rm)
 				lastPan, lastTilt, lastZoom = pan, tilt, zoom
 			}
+			if significantlyDifferent(camLat, lastCamLat, 0.000001) ||
+				significantlyDifferent(camLon, lastCamLon, 0.000001) {
+				_, _ = client.Push(ctx, &pb.EntityChangeRequest{
+					Changes: []*pb.Entity{{
+						Id: camID,
+						Geo: &pb.GeoSpatialComponent{
+							Latitude:  camLat,
+							Longitude: camLon,
+							Altitude:  proto.Float64(camAlt),
+						},
+					}},
+				})
+				lastCamLat = camLat
+				lastCamLon = camLon
+			}
 			lastPublish = now
 		}
 	}
@@ -749,6 +843,9 @@ type camState struct {
 	renderBehindWall                  bool
 	instantSlew                       bool
 	frame                             atomic.Uint64
+	manualPan, manualTilt, manualZoom float32
+	manualRight                       float32
+	lastManual                        time.Time
 }
 
 func (s *camState) optics() (fovWide, fovTele, rangeMax float64) {
@@ -782,6 +879,29 @@ func (s *camState) setTarget(pan, tilt, zoom float64) {
 func (s *camState) advance(dt float64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.lastManual.IsZero() {
+		if time.Since(s.lastManual) > time.Second/15 {
+			s.manualPan = 0
+			s.manualTilt = 0
+			s.manualZoom = 0
+			s.manualRight = 0
+			s.lastManual = time.Time{}
+		} else {
+			s.targetPan = wrap360(s.targetPan + float64(s.manualPan)*panRateDegPerSec*0.15*dt)
+			s.targetTilt = clamp(s.targetTilt+float64(s.manualTilt)*tiltRateDegPerSec*0.15*dt, -89, 89)
+			s.targetZoom = clamp(s.targetZoom+float64(s.manualZoom)*s.rangeMax*0.6*dt, 0, s.rangeMax)
+			if s.manualRight != 0 {
+				panRad := s.pan * math.Pi / 180
+				cosLat := math.Cos(s.lat * math.Pi / 180)
+				dEast := math.Cos(panRad) * float64(s.manualRight) * moveSpeedMPerSec * dt
+				dNorth := -math.Sin(panRad) * float64(s.manualRight) * moveSpeedMPerSec * dt
+				s.lat += dNorth / 111320
+				if cosLat > 0 {
+					s.lon += dEast / (111320 * cosLat)
+				}
+			}
+		}
+	}
 	if s.instantSlew {
 		s.pan = wrap360(s.targetPan)
 		s.tilt = s.targetTilt

@@ -17,7 +17,8 @@ import { LineStyle } from "@projectqai/proto/geometry";
 import type { Entity } from "@projectqai/proto/world";
 
 import type { TrackStatus } from "../../../lib/api/use-track-utils";
-import { getTrackStatus, isExpired } from "../../../lib/api/use-track-utils";
+import { getTrackStatus } from "../../../lib/api/use-track-utils";
+import { deriveConnectorHealth } from "./connector-health";
 import { degreesToSectors } from "./sensors";
 
 export type ChangeSet = {
@@ -157,8 +158,6 @@ export function extractShape(entity: Entity): ShapeGeometry | undefined {
 }
 
 function transformEntity(entity: Entity): Omit<EntityData, "activeSectors"> | null {
-  if (isExpired(entity)) return null;
-
   const shape = extractShape(entity);
   const hasPosition = hasGeo(entity);
   const layerComponent = entity.mapLayer;
@@ -226,6 +225,7 @@ function transformEntity(entity: Entity): Omit<EntityData, "activeSectors"> | nu
     assemblyOutlineIds: assemblyOutlineIds?.length ? assemblyOutlineIds : undefined,
     isDetection: entity.detection != null ? true : undefined,
     mapLayer,
+    health: deriveConnectorHealth(entity),
   };
 }
 
@@ -240,7 +240,6 @@ function computeDetectorSectors(
   for (const id of detectionEntityIds) {
     const entity = entities.get(id);
     if (!entity) continue;
-    if (isExpired(entity)) continue;
 
     const detectorId = entity.detection?.detectorEntityId;
     const azimuth = entity.bearing?.azimuth;

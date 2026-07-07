@@ -1,6 +1,6 @@
 import type { BadgeVariant } from "@hydris/ui/badge";
 import type { Entity } from "@projectqai/proto/world";
-import { ClassificationBattleDimension, ClassificationIdentity } from "@projectqai/proto/world";
+import { ClassificationIdentity } from "@projectqai/proto/world";
 import { format } from "date-fns";
 
 export type TrackStatus = "Blue" | "Red" | "Neutral" | "Unknown" | "Unclassified";
@@ -67,92 +67,65 @@ export function isTrack(entity: Entity): boolean {
 }
 
 /**
- * Assets are entities with geo and symbol but no track component
+ * Assets are entities with a device and a symbol. Gated on device.state,
+ * not just the device component, so it holds if state becomes optional.
  */
 export function isAsset(entity: Entity): boolean {
-  return !entity.track && !!entity.symbol && !!entity.geo;
+  return entity.device?.state != null && entity.symbol != null;
 }
 
-const GROUND_FUNCTION: Record<string, string> = {
-  U: "Units",
-  E: "Equipment",
-  I: "Installations",
-};
-
-const AIR_FUNCTION: Record<string, string> = {
-  M: "Military",
-  C: "Civilian",
-};
-
-const SEA_FUNCTION: Record<string, string> = {
-  C: "Combatant",
-  N: "Non-Combatant",
-};
-
-const SUBSURFACE_FUNCTION: Record<string, string> = {
-  S: "Submarine",
-  W: "Weapon",
-  N: "Non-Submarine",
-};
-
-const SPACE_FUNCTION: Record<string, string> = {
-  S: "Military",
-  V: "Civilian",
-};
-
-const FUNCTION_BY_DIMENSION: Record<string, Record<string, string>> = {
-  G: GROUND_FUNCTION,
-  A: AIR_FUNCTION,
-  S: SEA_FUNCTION,
-  U: SUBSURFACE_FUNCTION,
-  P: SPACE_FUNCTION,
-};
-
 /**
- * Extract MIL-STD-2525C function category from SIDC position [4],
- * interpreted per battle dimension at position [2].
+ * Repositionable entities can be placed or moved on the map by the user.
  */
-export function getFunctionCategory(entity: Entity): string {
-  const sidc = entity.symbol?.milStd2525C;
-  if (!sidc || sidc.length < 5) return "Unknown";
-  const dim = sidc[2]?.toUpperCase();
-  const func = sidc[4]?.toUpperCase();
-  if (!dim || !func) return "Unknown";
-  return FUNCTION_BY_DIMENSION[dim]?.[func] ?? "Unknown";
+export function isRepositionable(entity: Entity): boolean {
+  return entity.symbol != null && entity.pose == null;
 }
 
-const SIDC_DIMENSION: Record<string, string> = {
-  A: "Air",
-  G: "Ground",
-  S: "Sea Surface",
-  U: "Subsurface",
-  P: "Space",
-};
+/**
+ * Detections are entities marked with the DetectionComponent (contact reports).
+ */
+export function isDetectionEntity(entity: Entity): boolean {
+  return entity.detection != null;
+}
+
+function primaryTaxonomy(entity: Entity) {
+  return entity.classification?.taxonomy?.find((t) => t.kind.case != null);
+}
+
+function formatKindLabel(kind: string): string {
+  return kind
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
 
 /**
- * Extract battle dimension from classification component,
- * falling back to SIDC position [2].
+ * Asset category is the taxonomy kind's own name, title-cased, so a new kind
+ * needs no client change. Entities the engine leaves unclassified get their
+ * own bucket.
  */
+export function getAssetCategory(entity: Entity): string {
+  const kind = primaryTaxonomy(entity)?.kind.case;
+  return kind ? formatKindLabel(kind) : "Unclassified";
+}
+
+// SIDC battle-dimension position [2]. rank orders space, air, ground, sea, subsurface for sorting.
+const SIDC_DIMENSION: Record<string, { label: string; rank: number }> = {
+  P: { label: "Space", rank: 2 },
+  A: { label: "Air", rank: 3 },
+  G: { label: "Ground", rank: 4 },
+  S: { label: "Sea Surface", rank: 5 },
+  U: { label: "Subsurface", rank: 6 },
+};
+
+/** Battle dimension label from the engine-populated SIDC position [2]. */
 export function getBattleDimension(entity: Entity): string {
-  const dim = entity.classification?.dimension;
-  if (dim != null && dim !== ClassificationBattleDimension.ClassificationBattleDimensionInvalid) {
-    const label = DIMENSION_LABELS[dim];
-    if (label) return label;
-  }
   const char = entity.symbol?.milStd2525C?.[2]?.toUpperCase();
-  return (char && SIDC_DIMENSION[char]) ?? "Unknown";
+  return char ? (SIDC_DIMENSION[char]?.label ?? "Unknown") : "Unknown";
 }
 
-const DIMENSION_LABELS: Partial<Record<ClassificationBattleDimension, string>> = {
-  [ClassificationBattleDimension.ClassificationBattleDimensionAir]: "Air",
-  [ClassificationBattleDimension.ClassificationBattleDimensionGround]: "Ground",
-  [ClassificationBattleDimension.ClassificationBattleDimensionSeaSurface]: "Sea Surface",
-  [ClassificationBattleDimension.ClassificationBattleDimensionSubsurface]: "Subsurface",
-  [ClassificationBattleDimension.ClassificationBattleDimensionSpace]: "Space",
-  [ClassificationBattleDimension.ClassificationBattleDimensionUnknown]: "Unknown",
-};
-
-export function isExpired(entity: Entity): boolean {
-  if (!entity.lifetime?.until) return false;
-  return timestampToMs(entity.lifetime.until) < Date.now();
+/** Battle dimension as a sortable rank, zero when the entity carries no dimension. */
+export function getBattleDimensionRank(entity: Entity): number {
+  const char = entity.symbol?.milStd2525C?.[2]?.toUpperCase();
+  return char ? (SIDC_DIMENSION[char]?.rank ?? 0) : 0;
 }

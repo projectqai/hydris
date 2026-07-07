@@ -42,6 +42,10 @@ type BridgeManager struct {
 	bridges  map[string]*Bridge
 	settings *webrtc.SettingEngine
 	OnEpoch  func(key string, epoch time.Time)
+
+	// DialContext, if set, is used by RTSP bridges to connect to the source.
+	// This allows routing RTSP through a tunnel or custom transport.
+	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 func NewBridgeManager() *BridgeManager {
@@ -49,13 +53,21 @@ func NewBridgeManager() *BridgeManager {
 }
 
 // SetupWebRTCMux configures a shared SettingEngine that multiplexes all ICE
-// UDP traffic through the given listener.
-func (bm *BridgeManager) SetupWebRTCMux(conn net.PacketConn) {
-	udpMux := ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: conn})
+// traffic through the given listeners. UDP and TCP ICE candidates are both
+// gathered so browsers can fall back to TCP when UDP is blocked.
+// conn may be nil when the UDP port could not be bound; ICE then gathers
+// TCP mux candidates (and per-connection UDP candidates where possible).
+func (bm *BridgeManager) SetupWebRTCMux(conn net.PacketConn, tcpListener net.Listener) {
+	tcpMux := ice.NewTCPMuxDefault(ice.TCPMuxParams{Listener: tcpListener})
 	s := &webrtc.SettingEngine{}
-	s.SetICEUDPMux(udpMux)
+	s.SetICETCPMux(tcpMux)
+	if conn != nil {
+		s.SetICEUDPMux(ice.NewUDPMuxDefault(ice.UDPMuxParams{UDPConn: conn}))
+		slog.Info("webrtc: UDP+TCP mux enabled", "addr", conn.LocalAddr().String())
+	} else {
+		slog.Info("webrtc: TCP mux enabled (no UDP mux)", "addr", tcpListener.Addr().String())
+	}
 	bm.settings = s
-	slog.Info("webrtc: UDP mux enabled", "addr", conn.LocalAddr().String())
 }
 
 func (bm *BridgeManager) buildAPI() (*webrtc.API, error) {
@@ -70,15 +82,40 @@ func (bm *BridgeManager) buildAPI() (*webrtc.API, error) {
 	return webrtc.NewAPI(opts...), nil
 }
 
+// InvalidateEntity closes all bridges for the given entity ID.
+// This forces browsers to reconnect and pick up new stream URLs.
+func (bm *BridgeManager) InvalidateEntity(entityID string) {
+	prefix := entityID + "/"
+	bm.mu.Lock()
+	var toClose []*Bridge
+	for key, b := range bm.bridges {
+		if strings.HasPrefix(key, prefix) {
+			toClose = append(toClose, b)
+			delete(bm.bridges, key)
+		}
+	}
+	bm.mu.Unlock()
+	for _, b := range toClose {
+		slog.Info("whep: invalidating bridge", "entity", entityID)
+		go b.close()
+	}
+}
+
 // GetOrCreate returns an existing bridge or creates a new one.
+// If the source URL changed the old bridge is torn down first.
 // Supports rtsp://, rtsps://, and v4l2:// source URLs.
 func (bm *BridgeManager) GetOrCreate(key, sourceURL string) (*Bridge, error) {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
 
 	if b, ok := bm.bridges[key]; ok {
-		b.cancelGrace()
-		return b, nil
+		if b.sourceURL == sourceURL {
+			b.cancelGrace()
+			return b, nil
+		}
+		slog.Info("whep: source URL changed, replacing bridge", "key", key)
+		delete(bm.bridges, key)
+		go b.close()
 	}
 
 	onEmpty := func() {
@@ -123,6 +160,7 @@ func (bm *BridgeManager) GetOrCreate(key, sourceURL string) (*Bridge, error) {
 type Bridge struct {
 	mu sync.Mutex
 
+	sourceURL  string
 	rtspClient *gortsplib.Client  // non-nil for RTSP sources
 	videoMedia *description.Media // non-nil for RTSP sources, used for upstream RTCP
 	cancel     context.CancelFunc // non-nil for local sources (ffmpeg)
@@ -139,6 +177,9 @@ type Bridge struct {
 	// before in-band parameter sets arrive.
 	sourceSPS []byte
 	sourcePPS []byte
+
+	cachedKeyframe         []byte
+	cachedKeyframeDuration time.Duration
 
 	epoch       time.Time
 	firstRTPTS  uint32
@@ -196,16 +237,27 @@ func (b *Bridge) Codec() string {
 
 func (b *Bridge) requestKeyframe() {
 	b.mu.Lock()
-	c, m := b.rtspClient, b.videoMedia
+	c, m, started := b.rtspClient, b.videoMedia, b.epochSet
 	b.mu.Unlock()
 	if c == nil || m == nil {
+		return
+	}
+	// Don't send upstream RTCP until the stream has produced its first packet.
+	// gortsplib's automatic UDP->TCP fallback transiently clears its internal
+	// setuppedMedias map while it re-runs DESCRIBE/SETUP/PLAY; calling
+	// WritePacketRTCP during that window dereferences a nil clientMedia and
+	// panics. The fallback only happens before any packet arrives (and never
+	// again afterwards), so the first packet is a safe gate against the race.
+	if !started {
 		return
 	}
 	_ = c.WritePacketRTCP(m, &rtcp.PictureLossIndication{})
 }
 
-var h264FmtpPattern = regexp.MustCompile(`(?m)^a=fmtp:(\d+) ([^\r\n]+)`)
-var h264RtpmapPattern = regexp.MustCompile(`(?mi)^a=rtpmap:(\d+) H264/`)
+var (
+	h264FmtpPattern   = regexp.MustCompile(`(?m)^a=fmtp:(\d+) ([^\r\n]+)`)
+	h264RtpmapPattern = regexp.MustCompile(`(?mi)^a=rtpmap:(\d+) H264/`)
+)
 
 func injectH264Params(sdp string, sps, pps []byte) string {
 	if len(sps) == 0 || len(pps) == 0 {
@@ -278,8 +330,9 @@ func newRTSPBridge(rtspURL string, onEmpty func(), bm *BridgeManager) (*Bridge, 
 	}
 
 	c := &gortsplib.Client{
-		Scheme: u.Scheme,
-		Host:   u.Host,
+		Scheme:      u.Scheme,
+		Host:        u.Host,
+		DialContext: bm.DialContext,
 	}
 
 	err = c.Start()
@@ -353,6 +406,7 @@ func newRTSPBridge(rtspURL string, onEmpty func(), bm *BridgeManager) (*Bridge, 
 	}
 
 	b := &Bridge{
+		sourceURL:  rtspURL,
 		rtspClient: c,
 		videoMedia: videoMedia,
 		videoTrack: videoTrack,
@@ -377,8 +431,8 @@ func newRTSPBridge(rtspURL string, onEmpty func(), bm *BridgeManager) (*Bridge, 
 			b.mu.Lock()
 			b.epoch = epoch
 			b.firstRTPTS = pkt.Timestamp
-			b.mu.Unlock()
 			b.epochSet = true
+			b.mu.Unlock()
 			if b.onEpoch != nil {
 				b.onEpoch(epoch)
 			}
@@ -453,6 +507,13 @@ func newRTSPBridge(rtspURL string, onEmpty func(), bm *BridgeManager) (*Bridge, 
 		}
 		lastTS = pkt.Timestamp
 
+		if hasIDR {
+			b.mu.Lock()
+			b.cachedKeyframe = append([]byte(nil), au...)
+			b.cachedKeyframeDuration = duration
+			b.mu.Unlock()
+		}
+
 		if err := videoTrack.WriteSample(media.Sample{Data: au, Duration: duration}); err != nil &&
 			!errors.Is(err, io.ErrClosedPipe) {
 			slog.Debug("whep: write sample", "error", err)
@@ -471,6 +532,10 @@ func newRTSPBridge(rtspURL string, onEmpty func(), bm *BridgeManager) (*Bridge, 
 		if err != nil {
 			slog.Warn("whep: RTSP connection closed", "error", err)
 		}
+		b.mu.Lock()
+		b.rtspClient = nil
+		b.videoMedia = nil
+		b.mu.Unlock()
 		b.closeAllPeers()
 	}()
 
@@ -497,6 +562,7 @@ func newLocalBridge(devicePath string, onEmpty func(), bm *BridgeManager) (*Brid
 	ctx, cancel := context.WithCancel(context.Background())
 
 	b := &Bridge{
+		sourceURL:  "v4l2://" + devicePath,
 		cancel:     cancel,
 		videoTrack: videoTrack,
 		codec:      webrtc.MimeTypeH264,
@@ -876,6 +942,13 @@ func (b *Bridge) AddPeer(offerSDP string) (string, error) {
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		slog.Debug("whep: peer connection state", "peer", peerID, "state", state.String())
 		if state == webrtc.PeerConnectionStateConnected {
+			b.mu.Lock()
+			kf := b.cachedKeyframe
+			kfDur := b.cachedKeyframeDuration
+			b.mu.Unlock()
+			if len(kf) > 0 {
+				_ = b.videoTrack.WriteSample(media.Sample{Data: kf, Duration: kfDur})
+			}
 			b.requestKeyframe()
 		}
 		if state == webrtc.PeerConnectionStateDisconnected ||
@@ -955,6 +1028,16 @@ func (b *Bridge) startGracePeriod() {
 			b.onEmpty()
 		}
 	})
+}
+
+func (b *Bridge) close() {
+	b.closeAllPeers()
+	if b.rtspClient != nil {
+		b.rtspClient.Close()
+	}
+	if b.cancel != nil {
+		b.cancel()
+	}
 }
 
 func (b *Bridge) cancelGrace() {

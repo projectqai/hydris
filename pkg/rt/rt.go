@@ -84,7 +84,6 @@ func (r *Runtime) RunScript(ctx context.Context, name, src string) error {
 		if r.dataDir != "" {
 			setupFileAccess(r.loop, vm, r.dataDir)
 		}
-
 		// Crash on unhandled promise rejections so RunPlugin can restart us.
 		vm.SetPromiseRejectionTracker(func(p *goja.Promise, op goja.PromiseRejectionOperation) {
 			if op == goja.PromiseRejectionReject {

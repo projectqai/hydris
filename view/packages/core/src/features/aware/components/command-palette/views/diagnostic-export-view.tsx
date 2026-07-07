@@ -2,7 +2,7 @@
 
 import { ControlButton, ControlInput } from "@hydris/ui/controls";
 import { useCallback, useState } from "react";
-import { Platform, Text, View } from "react-native";
+import { Platform, ScrollView, Text, View } from "react-native";
 
 import { baseUrl } from "../../../../../lib/api/world-client";
 import { downloadFromEndpoint } from "../../../../../lib/download";
@@ -47,7 +47,7 @@ export function DiagnosticExportView({ onClose }: { onClose: () => void }) {
   }, [note, onClose]);
 
   return (
-    <View className="px-4 py-2">
+    <ScrollView className="flex-1" contentContainerClassName="px-4 py-2">
       <Text className="text-muted-foreground py-3 font-mono text-xs">
         This will download a diagnostic bundle containing the following data from this node.
       </Text>
@@ -85,6 +85,6 @@ export function DiagnosticExportView({ onClose }: { onClose: () => void }) {
         labelClassName="font-mono text-xs font-semibold uppercase"
         className="mt-3"
       />
-    </View>
+    </ScrollView>
   );
 }

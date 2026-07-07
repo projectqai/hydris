@@ -10,6 +10,7 @@
   "exports": {
     "./assets/logo.png": "./assets/logo.png",
     "./card": "./src/card.tsx",
+    "./collapsible-section": "./src/collapsible-section.tsx",
     "./keyboard": "./src/keyboard/index.ts",
     "./panels": "./src/panels/resizable-panel.tsx",
     "./widgets/time-widget": "./src/widgets/time-widget.tsx",
@@ -20,14 +21,21 @@
     "./lib/platform": "./src/lib/platform.ts",
     "./lib/theme": "./src/lib/theme.tsx",
     "./lib/widget-scale": "./src/lib/widget-scale.ts",
+    "./lib/tile-layout": "./src/lib/tile-layout.ts",
+    "./lib/metric-tokens": "./src/lib/metric-tokens.ts",
     "./badge": "./src/badge.tsx",
+    "./tag": "./src/tag.tsx",
     "./empty-state": "./src/empty-state.tsx",
+    "./tile-frame": "./src/tile-frame.tsx",
+    "./tile-header": "./src/tile-header.tsx",
     "./info-row": "./src/info-row.tsx",
     "./tabs": "./src/tabs/tabs.tsx",
     "./segmented-control": "./src/segmented-control/segmented-control.tsx",
     "./floating-window": "./src/floating-window/floating-window.tsx",
     "./command-palette/palette-reducer": "./src/command-palette/palette-reducer.ts",
     "./command-palette/use-list-nav": "./src/command-palette/use-list-nav.ts",
+    "./command-palette/use-keyed-list-nav": "./src/command-palette/use-keyed-list-nav.ts",
+    "./command-palette/list-detail-drawer": "./src/command-palette/list-detail-drawer.tsx",
     "./command-palette/hold-to-confirm-pressable": "./src/command-palette/hold-to-confirm-pressable.tsx",
     "./command-palette/highlight-text": "./src/command-palette/highlight-text.tsx",
     "./layout/types": "./src/layout/types.ts",
@@ -40,6 +48,7 @@
     "./top-bar/customize-help-icon": "./src/top-bar/customize-help-icon.tsx",
     "./top-bar/placement-help-icon": "./src/top-bar/placement-help-icon.tsx",
     "./action-button": "./src/action-button.tsx",
+    "./screen-lock": "./src/screen-lock.ts",
     "./middle-truncate-text": "./src/middle-truncate-text.tsx",
     "./radial-menu": "./src/radial-menu/radial-menu.tsx",
     "./radial-menu/types": "./src/radial-menu/types.ts"
@@ -53,17 +62,17 @@
   "dependencies": {
     "@hydris/tailwind-config": "workspace:*",
     "clsx": "^2.1.1",
-    "date-fns": "^4.1.0",
+    "date-fns": "^4.4.0",
     "date-fns-tz": "^3.2.0",
     "expo-clipboard": "catalog:",
     "sonner": "^2.0.7",
-    "sonner-native": "^0.24.0",
-    "tailwind-merge": "^3.5.0"
+    "sonner-native": "^0.26.2",
+    "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
     "@hydris/eslint-config": "workspace:*",
     "@hydris/typescript-config": "workspace:*",
-    "@testing-library/react-native": "^13.3.3",
+    "@testing-library/react-native": "^14.0.0",
     "@tsconfig/recommended": "^1.0.13",
     "@types/jest": "^30.0.0",
     "@types/react": "catalog:",
@@ -78,7 +87,7 @@
     "react-native": "catalog:",
     "react-native-web": "catalog:",
     "vitest": "^3.2.4",
-    "zustand": "^5.0.12"
+    "zustand": "^5.0.14"
   },
   "peerDependencies": {
     "expo-image": "*",

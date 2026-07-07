@@ -1,6 +1,16 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_OVERLAYS, useOverlayStore } from "./overlay-store";
+
+// the store now persists via AsyncStorage, which has no native module under the
+// node test env. stub it so persist writes are no-ops.
+vi.mock("@react-native-async-storage/async-storage", () => ({
+  default: {
+    getItem: () => Promise.resolve(null),
+    setItem: () => Promise.resolve(),
+    removeItem: () => Promise.resolve(),
+  },
+}));
 
 describe("overlay toggle isolation", () => {
   beforeEach(() => {

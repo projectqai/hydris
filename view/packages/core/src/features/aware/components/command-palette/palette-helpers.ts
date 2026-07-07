@@ -13,9 +13,14 @@ import {
   Zap,
 } from "lucide-react-native";
 
-import { getBattleDimension, getFunctionCategory } from "../../../../lib/api/use-track-utils";
+import {
+  getAssetCategory,
+  getBattleDimension,
+  isAsset,
+  isTrack,
+} from "../../../../lib/api/use-track-utils";
 
-export { getBattleDimension, getFunctionCategory };
+export { getAssetCategory, getBattleDimension };
 
 export type TrailSegment = {
   label: string;
@@ -49,6 +54,9 @@ export function getTrailSegments(
       case "config":
         label = "Configuration";
         break;
+      case "asset-readiness":
+        label = "Asset readiness";
+        break;
       case "command-group":
         label = mode.groupLabel;
         break;
@@ -57,6 +65,9 @@ export function getTrailSegments(
         break;
       case "diagnostic-export":
         label = "Report a bug";
+        break;
+      case "mission-export":
+        label = "Export mission pack";
         break;
       default:
         label = "Root";
@@ -70,8 +81,8 @@ export function getTrailSegments(
 
 export function classifyEntity(entity: Entity): Category | null {
   if (entity.camera) return "cameras";
-  if (entity.track && entity.geo && entity.symbol) return "tracks";
-  if (entity.symbol && entity.geo) return "assets";
+  if (isTrack(entity)) return "tracks";
+  if (isAsset(entity)) return "assets";
   // internal entities (track history shapes, config-only, service scaffolding) — not searchable
   return null;
 }
@@ -86,6 +97,7 @@ export const CATEGORIES: { id: Category; label: string; icon: LucideIcon }[] = [
 export const CATEGORY_LABEL: Record<string, string> = {};
 
 export const COMMAND_SUBCATEGORIES: { id: string; label: string }[] = [
+  { id: "world", label: "World" },
   { id: "display", label: "Display" },
   { id: "layout", label: "Layout" },
   { id: "map", label: "Map" },
@@ -93,7 +105,6 @@ export const COMMAND_SUBCATEGORIES: { id: string; label: string }[] = [
   { id: "preset", label: "Presets" },
   { id: "selection", label: "Selection" },
   { id: "sharing", label: "Sharing" },
-  { id: "world", label: "World" },
 ];
 
 export const DIMENSION_ICON: Record<string, LucideIcon> = {
@@ -131,16 +142,19 @@ export function groupByDimension(
   return result;
 }
 
-export function groupByFunctionCategory(entities: Map<string, Entity>): DimensionGroup[] {
-  const counts = new Map<string, { count: number; battleDimension: string }>();
+export function groupByAssetCategory(entities: Map<string, Entity>): DimensionGroup[] {
+  const counts = new Map<string, { count: number; battleDimension: string | undefined }>();
   for (const entity of entities.values()) {
     if (classifyEntity(entity) !== "assets") continue;
-    const cat = getFunctionCategory(entity);
+    const cat = getAssetCategory(entity);
+    const dim = getBattleDimension(entity);
     const existing = counts.get(cat);
     if (existing) {
       existing.count++;
+      // a bucket spanning multiple dimensions has no single icon
+      if (existing.battleDimension !== dim) existing.battleDimension = undefined;
     } else {
-      counts.set(cat, { count: 1, battleDimension: getBattleDimension(entity) });
+      counts.set(cat, { count: 1, battleDimension: dim });
     }
   }
   const result: DimensionGroup[] = [];

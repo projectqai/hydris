@@ -1,10 +1,9 @@
 import type { Metric } from "@projectqai/proto/metrics";
 import { MetricKind, MetricUnit } from "@projectqai/proto/metrics";
 import type { Entity } from "@projectqai/proto/world";
-import { LinkStatus } from "@projectqai/proto/world";
-import { format } from "date-fns";
+import { DeviceState, LinkStatus } from "@projectqai/proto/world";
 
-import { RAD_ACCUMULATED_IDS, RAD_DOSE_RATE_IDS } from "./metric-ids";
+import { RAD_ACCUMULATED_IDS, RAD_DOSE_RATE_IDS, SENSOR_ERROR_MASK_IDS } from "./metric-ids";
 import type {
   CardStatus,
   ConnectionState,
@@ -76,6 +75,11 @@ export function getReadingShape(entity: Entity): string | null {
   return kind ? (KIND_SHAPE[kind] ?? null) : null;
 }
 
+export const WIDGET_SHAPE: Record<string, string> = {
+  "sensor:metric": "metric",
+  "sensor:levels": "levels",
+};
+
 function extractReading(entity: Entity, kind: SensorKind): SensorReading | null {
   const metrics = entity.metric?.metrics;
   if (!metrics?.length) return null;
@@ -122,18 +126,16 @@ function extractReading(entity: Entity, kind: SensorKind): SensorReading | null 
   return null;
 }
 
-function extractTimestamp(entity: Entity): string | undefined {
+function extractMeasuredAt(entity: Entity): { seconds: bigint } | undefined {
   const metrics = entity.metric?.metrics;
   if (!metrics?.length) return undefined;
 
-  let latest: bigint | undefined;
+  let latest: { seconds: bigint } | undefined;
   for (const m of metrics) {
-    const s = m.measuredAt?.seconds;
-    if (s != null && (latest == null || s > latest)) latest = s;
+    const t = m.measuredAt;
+    if (t && (latest == null || t.seconds > latest.seconds)) latest = t;
   }
-  if (latest == null) return undefined;
-
-  return format(new Date(Number(latest) * 1000), "HH:mm");
+  return latest;
 }
 
 // Convention: hardware alarm = metric with kind=Count + unit=Bin (hazard threshold flag)
@@ -166,6 +168,13 @@ function deriveConnectionState(entity: Entity): ConnectionState {
   }
 }
 
+function deriveSensorError(entity: Entity): boolean {
+  if (entity.device?.state === DeviceState.DeviceStateFailed || entity.device?.error) return true;
+  return (entity.metric?.metrics ?? []).some(
+    (m) => m.id != null && SENSOR_ERROR_MASK_IDS.has(m.id) && getVal(m) > 0,
+  );
+}
+
 function deriveSignalStrength(entity: Entity): SignalStrength | undefined {
   const rssi = entity.link?.rssiDbm;
   if (rssi == null) return undefined;
@@ -183,7 +192,7 @@ export function entityToSensorData(entity: Entity): SensorWidgetData | null {
   const signalStrength = deriveSignalStrength(entity);
 
   const isInitializing = connectionState !== "disconnected" && !reading;
-  const timestamp = extractTimestamp(entity);
+  const measuredAt = extractMeasuredAt(entity);
 
   const cfgValue = entity.configurable?.value;
   const isLocked = cfgValue?.locked === true;
@@ -201,6 +210,7 @@ export function entityToSensorData(entity: Entity): SensorWidgetData | null {
     isLocked,
     isSilent,
     isInitializing,
-    timestamp,
+    hasSensorError: deriveSensorError(entity),
+    measuredAt,
   };
 }

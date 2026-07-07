@@ -1,10 +1,10 @@
+import { TileFrame } from "@hydris/ui/tile-frame";
 import { MetricKind } from "@projectqai/proto/metrics";
 import { HeartPulse } from "lucide-react-native";
 
-import type { MetricCategoryWidgetConfig } from "./metric-category-widget";
-import { MetricCategoryWidget } from "./metric-category-widget";
+import { MetricTile, type MetricTileConfig } from "./metric-tile";
 
-export const VITAL_CONFIG: MetricCategoryWidgetConfig = {
+export const VITAL_CONFIG: MetricTileConfig = {
   title: "Vitals",
   icon: HeartPulse,
   categories: ["vital"],
@@ -21,5 +21,9 @@ export const VITAL_CONFIG: MetricCategoryWidgetConfig = {
 };
 
 export function VitalWidget() {
-  return <MetricCategoryWidget config={VITAL_CONFIG} />;
+  return (
+    <TileFrame>
+      <MetricTile config={VITAL_CONFIG} />
+    </TileFrame>
+  );
 }

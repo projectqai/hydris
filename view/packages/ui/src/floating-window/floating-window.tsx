@@ -14,6 +14,7 @@ import Animated, {
 import { Z } from "../layout/constants";
 import { GradientPanel } from "../lib/theme";
 import { cn } from "../lib/utils";
+import { useIsScreenLocked } from "../screen-lock";
 
 export type FloatingWindowConfig = {
   minWidth?: number;
@@ -71,6 +72,7 @@ export function FloatingWindow({
   onPositionChange,
 }: FloatingWindowProps) {
   const config = { ...DEFAULT_CONFIG, ...userConfig };
+  const isScreenLocked = useIsScreenLocked();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const [isPositioned, setIsPositioned] = useState(false);
   const hasInitialized = useRef(false);
@@ -118,6 +120,7 @@ export function FloatingWindow({
   });
 
   const dragGesture = Gesture.Pan()
+    .enabled(!isScreenLocked)
     .onBegin(() => {
       isDragging.value = true;
       lastDragX.value = 0;
@@ -144,6 +147,7 @@ export function FloatingWindow({
     const yDir = anchor.includes("s") ? 1 : anchor.includes("n") ? -1 : 0;
 
     return Gesture.Pan()
+      .enabled(!isScreenLocked)
       .onBegin(() => {
         isResizing.value = true;
         lastDragX.value = 0;

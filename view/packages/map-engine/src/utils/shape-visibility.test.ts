@@ -12,7 +12,8 @@ function makeCtx(overrides?: Partial<ShapeVisibilityContext>): ShapeVisibilityCo
   return {
     coverageShapeIds: new Set(),
     assemblyOutlineIds: new Set(),
-    expandedAssemblyOutlineIds: new Set(),
+    visibleAssemblyOutlineIds: new Set(),
+    trackShapeIds: new Set(),
     filter: ALL_TRACKS_ON,
     selectedId: null,
     selectedTrackShapeIds: new Set(),
@@ -111,11 +112,12 @@ describe("isShapeVisible", () => {
     });
   });
 
-  describe("track history/prediction shapes (no label)", () => {
+  describe("track history/prediction shapes", () => {
     it("hidden by default when trackHistoryVisible=false", () => {
       const entity = makeEntity("hist-1", { label: undefined });
       const ctx = makeCtx({
         entityMap: new Map([["hist-1", entity]]),
+        trackShapeIds: new Set(["hist-1"]),
         trackHistoryVisible: false,
       });
       expect(isShapeVisible("hist-1", "blue", ctx)).toBe(false);
@@ -125,6 +127,7 @@ describe("isShapeVisible", () => {
       const entity = makeEntity("hist-1", { label: undefined });
       const ctx = makeCtx({
         entityMap: new Map([["hist-1", entity]]),
+        trackShapeIds: new Set(["hist-1"]),
         trackHistoryVisible: true,
       });
       expect(isShapeVisible("hist-1", "blue", ctx)).toBe(true);
@@ -134,6 +137,7 @@ describe("isShapeVisible", () => {
       const entity = makeEntity("hist-1", { label: undefined });
       const ctx = makeCtx({
         entityMap: new Map([["hist-1", entity]]),
+        trackShapeIds: new Set(["hist-1"]),
         trackHistoryVisible: false,
         selectedTrackShapeIds: new Set(["hist-1"]),
       });
@@ -141,8 +145,8 @@ describe("isShapeVisible", () => {
     });
   });
 
-  describe("labeled geoshapes", () => {
-    it("visible when shapesVisible=true", () => {
+  describe("geoshapes ride the geoshapes toggle", () => {
+    it("labeled shape visible when shapesVisible=true", () => {
       const entity = makeEntity("shape-1", { label: "Geofence A" });
       const ctx = makeCtx({
         entityMap: new Map([["shape-1", entity]]),
@@ -151,7 +155,7 @@ describe("isShapeVisible", () => {
       expect(isShapeVisible("shape-1", "blue", ctx)).toBe(true);
     });
 
-    it("hidden when shapesVisible=false", () => {
+    it("labeled shape hidden when shapesVisible=false", () => {
       const entity = makeEntity("shape-1", { label: "Geofence A" });
       const ctx = makeCtx({
         entityMap: new Map([["shape-1", entity]]),
@@ -159,17 +163,47 @@ describe("isShapeVisible", () => {
       });
       expect(isShapeVisible("shape-1", "blue", ctx)).toBe(false);
     });
+
+    it("label-less, non-track shape is a geoshape, not a track line", () => {
+      const entity = makeEntity("shape-1", { label: undefined });
+      const ctx = makeCtx({
+        entityMap: new Map([["shape-1", entity]]),
+        shapesVisible: true,
+        trackHistoryVisible: false,
+      });
+      expect(isShapeVisible("shape-1", "blue", ctx)).toBe(true);
+    });
+  });
+
+  describe("assembly outlines", () => {
+    it("visible when the root is on the map", () => {
+      const ctx = makeCtx({
+        assemblyOutlineIds: new Set(["hull-1"]),
+        visibleAssemblyOutlineIds: new Set(["hull-1"]),
+        shapesVisible: false,
+      });
+      expect(isShapeVisible("hull-1", "blue", ctx)).toBe(true);
+    });
+
+    it("hidden when the root is swallowed by a cluster", () => {
+      const ctx = makeCtx({
+        assemblyOutlineIds: new Set(["hull-1"]),
+        visibleAssemblyOutlineIds: new Set(),
+        shapesVisible: true,
+      });
+      expect(isShapeVisible("hull-1", "blue", ctx)).toBe(false);
+    });
   });
 
   describe("orphaned shapes (entity not in map)", () => {
-    it("treated as track history (requires trackHistoryVisible)", () => {
-      const ctx = makeCtx({ trackHistoryVisible: false });
-      expect(isShapeVisible("orphan-1", "blue", ctx)).toBe(false);
+    it("treated as a geoshape under the geoshapes toggle", () => {
+      const ctx = makeCtx({ shapesVisible: true });
+      expect(isShapeVisible("orphan-1", "blue", ctx)).toBe(true);
     });
 
-    it("visible when trackHistoryVisible=true", () => {
-      const ctx = makeCtx({ trackHistoryVisible: true });
-      expect(isShapeVisible("orphan-1", "blue", ctx)).toBe(true);
+    it("hidden when shapesVisible=false", () => {
+      const ctx = makeCtx({ shapesVisible: false });
+      expect(isShapeVisible("orphan-1", "blue", ctx)).toBe(false);
     });
   });
 });

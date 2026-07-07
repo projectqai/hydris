@@ -1,15 +1,13 @@
 import { GeoJsonLayer, ScatterplotLayer, TextLayer } from "@deck.gl/layers";
 import type { Feature, LineString, Polygon } from "geojson";
 
-import type { BaseLayer, GeoPosition } from "../types";
+import type { BaseLayer, GeoPosition, RGBA } from "../types";
 import { circleToPolygon } from "../utils/geodesic-circle";
 
 const EARTH_RADIUS = 6_371_008.8;
 const DEG = Math.PI / 180;
 const CIRCLE_SEGMENTS = 128;
 const SPOKE_BEARINGS = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
-
-type RGBA = [number, number, number, number];
 
 type ColorTheme = {
   ring: RGBA;

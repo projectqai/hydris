@@ -1,10 +1,10 @@
+import { TileFrame } from "@hydris/ui/tile-frame";
 import { MetricKind } from "@projectqai/proto/metrics";
 import { Gauge } from "lucide-react-native";
 
-import type { MetricCategoryWidgetConfig } from "./metric-category-widget";
-import { MetricCategoryWidget } from "./metric-category-widget";
+import { MetricTile, type MetricTileConfig } from "./metric-tile";
 
-export const EQUIPMENT_CONFIG: MetricCategoryWidgetConfig = {
+export const EQUIPMENT_CONFIG: MetricTileConfig = {
   title: "Equipment",
   icon: Gauge,
   categories: ["equipment"],
@@ -17,5 +17,9 @@ export const EQUIPMENT_CONFIG: MetricCategoryWidgetConfig = {
 };
 
 export function EquipmentWidget() {
-  return <MetricCategoryWidget config={EQUIPMENT_CONFIG} />;
+  return (
+    <TileFrame>
+      <MetricTile config={EQUIPMENT_CONFIG} />
+    </TileFrame>
+  );
 }

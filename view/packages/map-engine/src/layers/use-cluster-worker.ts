@@ -17,17 +17,27 @@ type UseClusterWorkerOptions = {
   filter: EntityFilter;
   shapesVisible: boolean;
   detectionsVisible: boolean;
+  clusteringEnabled: boolean;
   zoom: number;
   version: number;
   geoChanged: boolean;
 };
 
 export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorkerResult | null {
-  const { entityMap, filter, shapesVisible, detectionsVisible, zoom, version, geoChanged } =
-    options;
+  const {
+    entityMap,
+    filter,
+    shapesVisible,
+    detectionsVisible,
+    clusteringEnabled,
+    zoom,
+    version,
+    geoChanged,
+  } = options;
   const [result, setResult] = useState<ClusterWorkerResult | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const lastSentVersionRef = useRef<number>(-1);
+  const lastSentClusteringRef = useRef<boolean | null>(null);
   const lastZoomRef = useRef<number>(-1);
   const lastFilterRef = useRef<string>("");
   const lastUpdateTimeRef = useRef<number>(0);
@@ -42,6 +52,7 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
     geoChanged,
     shapesVisible,
     detectionsVisible,
+    clusteringEnabled,
   });
   latestRef.current = {
     entityMap,
@@ -51,6 +62,7 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
     geoChanged,
     shapesVisible,
     detectionsVisible,
+    clusteringEnabled,
   };
 
   useEffect(() => {
@@ -81,7 +93,12 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
     const integerZoom = Math.floor(zoom);
     const zoomChanged = integerZoom !== Math.floor(lastZoomRef.current);
     const versionChanged = version !== lastSentVersionRef.current;
-    const filterJson = JSON.stringify({ ...filter.tracks, shapesVisible, detectionsVisible });
+    const filterJson = JSON.stringify({
+      ...filter.tracks,
+      shapesVisible,
+      detectionsVisible,
+      clusteringEnabled,
+    });
     const filterChanged = filterJson !== lastFilterRef.current;
     if (!versionChanged && !zoomChanged && !filterChanged) return;
 
@@ -99,9 +116,11 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
         geoChanged: geo,
         shapesVisible: sv,
         detectionsVisible: dv,
+        clusteringEnabled: ce,
       } = latestRef.current;
 
-      const dataUnchanged = v === lastSentVersionRef.current;
+      const dataUnchanged =
+        v === lastSentVersionRef.current && ce === lastSentClusteringRef.current;
 
       const filterInput: FilterInput = {
         blue: f.tracks.blue,
@@ -111,15 +130,18 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
         unclassified: f.tracks.unclassified,
         shapesVisible: sv,
         detectionsVisible: dv,
+        clustering: ce,
       };
       const currentFilterJson = JSON.stringify({
         ...f.tracks,
         shapesVisible: sv,
         detectionsVisible: dv,
+        clusteringEnabled: ce,
       });
       const filterOnly = dataUnchanged && currentFilterJson !== lastFilterRef.current;
 
       lastSentVersionRef.current = v;
+      lastSentClusteringRef.current = ce;
       lastZoomRef.current = z;
       lastFilterRef.current = currentFilterJson;
       lastUpdateTimeRef.current = performance.now();
@@ -145,8 +167,8 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
 
       let i = 0;
       for (const e of map.values()) {
-        // Always filter assembly children from worker — they bypass Supercluster
-        if (e.assemblyParentId && map.has(e.assemblyParentId)) {
+        // assembly children bypass Supercluster while clustering is on; off flattens them back in
+        if (ce && e.assemblyParentId && map.has(e.assemblyParentId)) {
           continue;
         }
         if (!e.position) continue;
@@ -198,7 +220,16 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
         pendingUpdateRef.current = null;
       }
     };
-  }, [entityMap, filter, shapesVisible, detectionsVisible, zoom, version, geoChanged]);
+  }, [
+    entityMap,
+    filter,
+    shapesVisible,
+    detectionsVisible,
+    clusteringEnabled,
+    zoom,
+    version,
+    geoChanged,
+  ]);
 
   return result;
 }

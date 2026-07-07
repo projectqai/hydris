@@ -4,10 +4,9 @@ go 1.26.4
 
 require (
 	github.com/projectqai/hydris v0.0.0-20251120150826-be1f2bb9404a
-	github.com/projectqai/proto/go v0.0.0-20260529092417-e89b7d0e1185
+	github.com/projectqai/proto/go v0.0.0-20260624102328-65f952d4b7c6
 	github.com/rs/cors v1.7.0
 	golang.org/x/mobile v0.0.0-20260120165949-40bd9ace6ce4
-	golang.org/x/net v0.55.0
 )
 
 require (
@@ -17,7 +16,6 @@ require (
 	github.com/adrianmo/go-nmea v1.10.0 // indirect
 	github.com/aep/gasterix v0.0.0-20260116071226-38c4600e9ce9 // indirect
 	github.com/aep/gomilstd2525c v0.0.0-20251024192945-ed85e1a55a77 // indirect
-	github.com/aep/goom v0.0.0-20260517145300-dbbedac5b278 // indirect
 	github.com/akhenakh/sgp4 v0.0.0-20250910232432-ca28846088fc // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -35,6 +33,7 @@ require (
 	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/dop251/goja v0.0.0-20260305124333-6a7976c22267 // indirect
 	github.com/dop251/goja_nodejs v0.0.0-20260212111938-1f56ff5bcf14 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/evanw/esbuild v0.27.3 // indirect
 	github.com/fatih/color v1.18.0 // indirect
@@ -48,7 +47,7 @@ require (
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/cel-go v0.28.1 // indirect
 	github.com/google/go-containerregistry v0.21.2 // indirect
-	github.com/google/pprof v0.0.0-20240727154555-813a5fbdbec8 // indirect
+	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/klauspost/compress v1.18.4 // indirect
@@ -57,6 +56,7 @@ require (
 	github.com/maypok86/otter v1.2.4 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/paulmach/orb v0.12.0 // indirect
@@ -82,6 +82,7 @@ require (
 	github.com/prometheus/common v0.67.4 // indirect
 	github.com/prometheus/otlptranslator v1.0.0 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/saltosystems/winrt-go v0.0.0-20260317170058-9c2fec580d96 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/soypat/cyw43439 v0.1.0 // indirect
@@ -105,6 +106,7 @@ require (
 	golang.org/x/exp v0.0.0-20241204233417-43b7b7cde48d // indirect
 	golang.org/x/image v0.41.0 // indirect
 	golang.org/x/mod v0.35.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
@@ -118,6 +120,10 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gvisor.dev/gvisor v0.0.0-20250503011706-39ed1f5ac29c // indirect
+	modernc.org/libc v1.72.3 // indirect
+	modernc.org/mathutil v1.7.1 // indirect
+	modernc.org/memory v1.11.0 // indirect
+	modernc.org/sqlite v1.51.0 // indirect
 	tinygo.org/x/bluetooth v0.14.0 // indirect
 )
 

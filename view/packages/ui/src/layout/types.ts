@@ -6,8 +6,8 @@ export type PaneId = string;
 export type PaneContent =
   | { type: "component"; componentId: string; entityId?: string; props?: Record<string, unknown> }
   | { type: "iframe"; url: string }
-  | { type: "camera"; entityId: string }
-  | { type: "sensor"; entityId: string; widgetId: string }
+  | { type: "camera"; entityId?: string }
+  | { type: "sensor"; entityId?: string; widgetId: string }
   | { type: "empty"; missingWidgetId?: string };
 
 export type SplitLayout = {
@@ -74,6 +74,9 @@ export type WidgetGroup = {
   icon?: ComponentType<{ size: number; strokeWidth: number; color: string }>;
   widgets: WidgetDefinition[];
   EntityPicker?: ComponentType<EntityPickerProps>;
+  // mint a pane for a widget id without binding an entity. the user binds later
+  // via the pin. groups that provide this skip the entity picker at creation.
+  createContent?: (widgetId: string) => PaneContent;
 };
 
 export type LayoutEditingContextValue = {

@@ -32,3 +32,9 @@ func InitPrometheus() (http.Handler, error) {
 
 	return promhttp.HandlerFor(registry, promhttp.HandlerOpts{}), nil
 }
+
+// RegisterCollector registers a raw prometheus collector on the registry
+// served at /metrics. Must be called after InitPrometheus.
+func RegisterCollector(c prometheus.Collector) error {
+	return registry.Register(c)
+}

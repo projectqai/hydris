@@ -1,14 +1,5 @@
 {
-  "hydris_version": "0.0.23",
-  "distribution": {
-	  "hydris-cli-linux-amd64": "https://github.com/projectqai/hydris/releases/download/v0.0.23/hydris-cli-linux-amd64-v0.0.23.tar.xz",
-	  "hydris-cli-linux-arm64": "https://github.com/projectqai/hydris/releases/download/v0.0.23/hydris-cli-linux-arm64-v0.0.23.tar.xz",
-	  "hydris-cli-windows-amd64": "https://github.com/projectqai/hydris/releases/download/v0.0.23/hydris-cli-windows-amd64-v0.0.23.zip",
-	  "hydris-cli-macos-arm64": "https://github.com/projectqai/hydris/releases/download/v0.0.23/hydris-cli-macos-arm64-v0.0.23.tar.xz",
-	  "hydris-desktop-windows-amd64": "https://github.com/projectqai/hydris/releases/download/v0.0.23/hydris-desktop-windows-amd64-v0.0.23.zip",
-	  "hydris-desktop-macos-arm64": "https://github.com/projectqai/hydris/releases/download/v0.0.23/hydris-desktop-macos-arm64-v0.0.23.zip",
-	  "hydris-android": "https://github.com/projectqai/hydris/releases/download/v0.0.23/app-release.apk"
-  },
+  "hydris_version": "0.0.20",
   "plugins": [
     {
       "name": "hexdb",
@@ -36,7 +27,7 @@
     },
     {
       "name": "cue",
-      "ref": "ghcr.io/projectqai/hydris/plugins/cue:0.0.4",
+      "ref": "ghcr.io/projectqai/hydris/plugins/cue:0.0.5",
       "label": "Autocue",
       "description": "Mission → slew PTZ cameras to follow tracked entities",
       "icon": "video",

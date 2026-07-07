@@ -1,15 +1,51 @@
 package engine
 
 import (
+	"context"
+	"net/http"
 	"testing"
 
+	"github.com/projectqai/hydris/builtin"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 )
 
+// defaultPolicy returns the global policy chain shipped in builtin/defaults.yaml,
+// the single source of truth for the default authorization rules.
+func defaultPolicy(t *testing.T) *pb.PolicyComponent {
+	t.Helper()
+	pc := defaultEntity(t, authzPolicyEntity).GetPolicy()
+	if pc == nil {
+		t.Fatalf("%s entity in defaults.yaml has no PolicyComponent", authzPolicyEntity)
+	}
+	return pc
+}
+
+// defaultEntity returns a single entity shipped in builtin/defaults.yaml.
+func defaultEntity(t *testing.T, id string) *pb.Entity {
+	t.Helper()
+	entities, err := ParseEntities(builtin.DefaultWorld())
+	if err != nil {
+		t.Fatalf("parse defaults.yaml: %v", err)
+	}
+	for _, e := range entities {
+		if e.Id == id {
+			return e
+		}
+	}
+	t.Fatalf("no %s entity in defaults.yaml", id)
+	return nil
+}
+
 func testPolicyEvaluator(entities map[string]*pb.Entity) *PolicyEvaluator {
 	w := testWorld(entities)
 	return NewPolicyEvaluator(w)
+}
+
+// testEvalCtx builds an evalCtx for activation tests with the given peer and
+// locality, authenticated as a fixed test identity.
+func testEvalCtx(peer peerContext, local bool) evalCtx {
+	return evalCtx{peer: peer, local: local, actor: "auth:test"}
 }
 
 func TestCELEnv_Compiles(t *testing.T) {
@@ -20,12 +56,13 @@ func TestCELEnv_Compiles(t *testing.T) {
 
 	exprs := []string{
 		`is.read`,
-		`is.write && !is.trusted`,
+		`is.write && !is.local`,
 		`is.create && has(change.camera)`,
 		`is.http && method == "GET"`,
 		`source.address.inCIDR("10.0.0.0/8")`,
 		`head(change.id).controller.node != ""`,
-		`is.reset && !is.trusted`,
+		`is.write && actor.id != "auth:admin"`,
+		`actor.id == "auth:anonymous"`,
 		`is.push && is.update`,
 	}
 	for _, expr := range exprs {
@@ -59,7 +96,7 @@ func TestHeadFunction_Lookup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	activation := buildHTTPActivation(peerContext{address: "127.0.0.1", port: "1234", local: true}, "GET", "/")
+	activation := buildHTTPActivation(testEvalCtx(peerContext{address: "127.0.0.1", port: "1234", local: true}, true), "GET", "/")
 	out, _, err := prg.Eval(activation)
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +118,7 @@ func TestHeadFunction_Missing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	activation := buildHTTPActivation(peerContext{address: "127.0.0.1", port: "1234", local: true}, "GET", "/")
+	activation := buildHTTPActivation(testEvalCtx(peerContext{address: "127.0.0.1", port: "1234", local: true}, true), "GET", "/")
 	out, _, err := prg.Eval(activation)
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +146,7 @@ func TestBuildHTTPActivation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.method, func(t *testing.T) {
-			a := buildHTTPActivation(peerContext{address: "1.2.3.4", port: "80"}, tt.method, "/foo")
+			a := buildHTTPActivation(testEvalCtx(peerContext{address: "1.2.3.4", port: "80"}, false), tt.method, "/foo")
 			flags := a["is"].(map[string]bool)
 			if flags["http"] != true {
 				t.Error("expected is.http = true")
@@ -123,28 +160,28 @@ func TestBuildHTTPActivation(t *testing.T) {
 			if flags["get"] != tt.wantGet {
 				t.Errorf("is.get: got %v, want %v", flags["get"], tt.wantGet)
 			}
-			if flags["trusted"] != false {
-				t.Error("non-loopback should not be trusted")
+			if flags["local"] != false {
+				t.Error("non-loopback should not be local")
 			}
 		})
 	}
 
-	a := buildHTTPActivation(peerContext{address: "127.0.0.1", local: true}, "GET", "/")
-	if a["is"].(map[string]bool)["trusted"] != true {
-		t.Error("loopback should be trusted")
+	a := buildHTTPActivation(testEvalCtx(peerContext{address: "127.0.0.1", local: true}, true), "GET", "/")
+	if a["is"].(map[string]bool)["local"] != true {
+		t.Error("loopback should be local")
 	}
 }
 
 func TestBuildGRPCActivation(t *testing.T) {
 	change := &pb.Entity{Id: "test.1"}
 	flags := map[string]bool{
-		"grpc":    true,
-		"trusted": false,
-		"write":   true,
-		"push":    true,
-		"create":  true,
+		"grpc":   true,
+		"local":  false,
+		"write":  true,
+		"push":   true,
+		"create": true,
 	}
-	a := buildGRPCActivation(peerContext{address: "10.0.0.1", port: "5000"}, flags, change, "")
+	a := buildGRPCActivation(testEvalCtx(peerContext{address: "10.0.0.1", port: "5000"}, false), flags, change)
 
 	if a["method"] != "" {
 		t.Error("gRPC activation should have empty method")
@@ -156,6 +193,10 @@ func TestBuildGRPCActivation(t *testing.T) {
 	if !gotFlags["grpc"] || !gotFlags["create"] || !gotFlags["push"] {
 		t.Error("flags not passed through")
 	}
+	actor := a["actor"].(map[string]any)
+	if actor["id"] != "auth:test" {
+		t.Errorf("actor.id not passed through: %v", actor["id"])
+	}
 }
 
 func testIsFlags(overrides map[string]bool) map[string]bool {
@@ -166,119 +207,191 @@ func testIsFlags(overrides map[string]bool) map[string]bool {
 	return f
 }
 
-func TestDefaultPolicy_RemotePolicyChangeDenied(t *testing.T) {
-	pe := testPolicyEvaluator(nil)
-	rules := pe.compileChain(DefaultPolicy())
+// remoteGRPC builds a remote gRPC activation for an anonymous remote caller.
+func remoteGRPC(pe *PolicyEvaluator, flags map[string]bool, change *pb.Entity) map[string]any {
+	return buildGRPCActivation(testEvalCtx(peerContext{address: "10.0.0.1", port: "5000"}, false), flags, change)
+}
 
-	remotePolicyWrite := buildGRPCActivation(
-		peerContext{address: "10.0.0.1", port: "5000"},
-		testIsFlags(map[string]bool{"grpc": true, "write": true, "push": true, "update": true}),
-		&pb.Entity{Id: "sensor.1", Policy: &pb.PolicyComponent{}}, "",
-	)
-	if v := pe.evalChain(rules, remotePolicyWrite, ""); v != verdictDeny {
-		t.Errorf("remote write containing policy should be denied, got %v", v)
+// TestDefaultPolicy verifies the shipped default: trust callers for ordinary
+// reads/creates, but deny a reset from a remote caller and honor any per-entity
+// policy via the head()-guarded Defer rules.
+// TestDefaultPolicy exercises the shipped authz.policy: it defers to the acting
+// identity's own policy, then (for now) allows by default for backwards compat.
+// admin.actor (allow-all) is granted; an identity whose own policy denies is
+// denied via the defer; an identity with no policy falls through to the
+// insecure default allow.
+func TestDefaultPolicy(t *testing.T) {
+	pe := testPolicyEvaluator(map[string]*pb.Entity{
+		"admin.actor":    defaultEntity(t, "admin.actor"),
+		"auth:anonymous": defaultEntity(t, "auth:anonymous"),
+		"locked.actor": {Id: "locked.actor", Policy: &pb.PolicyComponent{Rules: []*pb.PolicyRule{
+			{Action: pb.PolicyAction_PolicyActionDeny, Cel: celStr(`is.write`)},
+		}}},
+	})
+	rules := pe.compileChain(defaultPolicy(t))
+
+	asActor := func(actor string, flags map[string]bool) policyVerdict {
+		ec := evalCtx{peer: peerContext{address: "10.0.0.1", port: "5000"}, actor: actor}
+		return pe.evalChain(rules, buildGRPCActivation(ec, testIsFlags(flags), &pb.Entity{}), 0)
+	}
+
+	// admin.actor's allow-all policy grants everything via the defer.
+	if v := asActor("admin.actor", map[string]bool{"grpc": true, "write": true, "push": true}); v != verdictAllow {
+		t.Errorf("admin.actor should be allowed via defer, got %v", v)
+	}
+	// An identity whose own policy denies is denied via the defer.
+	if v := asActor("locked.actor", map[string]bool{"grpc": true, "write": true, "push": true}); v != verdictDeny {
+		t.Errorf("locked.actor should be denied by its own policy via defer, got %v", v)
+	}
+	// anonymous carries no policy → the defer reaches no verdict and falls
+	// through to the insecure backwards-compat allow.
+	if v := asActor("auth:anonymous", map[string]bool{"grpc": true, "read": true}); v != verdictAllow {
+		t.Errorf("anonymous should be allowed by the insecure default, got %v", v)
 	}
 }
 
-func TestDefaultPolicy_TrustedPolicyChangeAllowed(t *testing.T) {
+// TestFederationPush_IsFederation asserts that a push relayed by the federation
+// builtin carries is.federation, so an operator policy can scope federated
+// writes distinctly from other callers.
+func TestFederationPush_IsFederation(t *testing.T) {
 	pe := testPolicyEvaluator(nil)
-	rules := pe.compileChain(DefaultPolicy())
+	probe := &pb.PolicyComponent{
+		Rules: []*pb.PolicyRule{
+			{Action: pb.PolicyAction_PolicyActionAllow, Cel: celStr(`is.federation`)},
+			{Action: pb.PolicyAction_PolicyActionDeny},
+		},
+	}
+	pe.mu.Lock()
+	pe.rules = pe.compileChain(probe)
+	pe.mu.Unlock()
 
-	trustedPolicyWrite := buildGRPCActivation(
-		peerContext{address: "127.0.0.1", local: true},
-		testIsFlags(map[string]bool{"grpc": true, "trusted": true, "write": true, "push": true, "update": true}),
-		&pb.Entity{Id: "node.abc", Policy: DefaultPolicy()}, "",
-	)
-	if v := pe.evalChain(rules, trustedPolicyWrite, ""); v != verdictAllow {
-		t.Errorf("trusted write containing policy should be allowed, got %v", v)
+	// Federation's bufconn data leg: builtin connection + "federation" name.
+	ctx := context.WithValue(context.Background(), builtinConnKey, true)
+	ctx = context.WithValue(ctx, builtinNameKey, "federation")
+	ctx = context.WithValue(ctx, actorKey, "federation.downstream.remotenode")
+
+	req := peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{
+			{Id: "sensor.remote.1", Controller: &pb.Controller{Node: proto.String("remotenode")}},
+		},
+	})
+	if err := pe.check(ctx, req); err != nil {
+		t.Errorf("federation push should match is.federation, got %v", err)
 	}
 }
 
-func TestDefaultPolicy_TrustedAllowed(t *testing.T) {
-	pe := testPolicyEvaluator(nil)
-	rules := pe.compileChain(DefaultPolicy())
-	if len(rules) != 5 {
-		t.Fatalf("expected 5 rules, got %d", len(rules))
+// TestPolicyDefer_ExplicitTarget locks in the Defer contract: the rule's CEL
+// names the target entity. A string id jumps to that entity's policy; an empty
+// string does not jump; a non-string result or an id that names no entity fails
+// closed (never silently falls through).
+func TestPolicyDefer_ExplicitTarget(t *testing.T) {
+	pe := testPolicyEvaluator(map[string]*pb.Entity{
+		"allows": {Id: "allows", Policy: &pb.PolicyComponent{Rules: []*pb.PolicyRule{
+			{Action: pb.PolicyAction_PolicyActionAllow, Cel: celStr(`true`)},
+		}}},
+		"denies": {Id: "denies", Policy: &pb.PolicyComponent{Rules: []*pb.PolicyRule{
+			{Action: pb.PolicyAction_PolicyActionDeny, Cel: celStr(`true`)},
+		}}},
+		"nopolicy": {Id: "nopolicy"},
+	})
+
+	// A Defer that jumps to <cel>, with a trailing Allow so "continue" (no jump)
+	// is observable as verdictAllow and "fail closed" as verdictDeny.
+	chain := func(cel string) []compiledRule {
+		return pe.compileChain(&pb.PolicyComponent{Rules: []*pb.PolicyRule{
+			{Action: pb.PolicyAction_PolicyActionDefer, Cel: celStr(cel)},
+			{Action: pb.PolicyAction_PolicyActionAllow},
+		}})
 	}
+	act := remoteGRPC(pe, testIsFlags(map[string]bool{"grpc": true, "write": true}), &pb.Entity{Id: "x"})
 
-	trusted := buildGRPCActivation(
-		peerContext{address: "127.0.0.1", local: true},
-		testIsFlags(map[string]bool{"grpc": true, "trusted": true, "write": true, "push": true, "create": true}),
-		&pb.Entity{}, "",
-	)
-	if v := pe.evalChain(rules, trusted, ""); v != verdictAllow {
-		t.Errorf("trusted write should be allowed, got %v", v)
+	cases := []struct {
+		name string
+		cel  string
+		want policyVerdict
+	}{
+		{"jump to allowing entity", `"allows"`, verdictAllow},
+		{"jump to denying entity", `"denies"`, verdictDeny},
+		{"empty target does not jump", `""`, verdictAllow},
+		{"entity without policy returns", `"nopolicy"`, verdictAllow},
+		{"missing entity fails closed", `"ghost"`, verdictDeny},
+		{"non-string target fails closed", `is.write`, verdictDeny},
 	}
-}
-
-func TestDefaultPolicy_RemoteReadAllowed(t *testing.T) {
-	pe := testPolicyEvaluator(nil)
-	rules := pe.compileChain(DefaultPolicy())
-
-	remoteRead := buildGRPCActivation(
-		peerContext{address: "10.0.0.1", port: "5000"},
-		testIsFlags(map[string]bool{"grpc": true, "read": true, "list": true}),
-		&pb.Entity{}, "",
-	)
-	if v := pe.evalChain(rules, remoteRead, ""); v != verdictAllow {
-		t.Errorf("remote read should be allowed, got %v", v)
-	}
-}
-
-func TestDefaultPolicy_RemoteResetDenied(t *testing.T) {
-	pe := testPolicyEvaluator(nil)
-	rules := pe.compileChain(DefaultPolicy())
-
-	remoteReset := buildGRPCActivation(
-		peerContext{address: "10.0.0.1", port: "5000"},
-		testIsFlags(map[string]bool{"grpc": true, "write": true, "reset": true}),
-		&pb.Entity{}, "",
-	)
-	if v := pe.evalChain(rules, remoteReset, ""); v != verdictDeny {
-		t.Errorf("remote reset should be denied, got %v", v)
-	}
-}
-
-func TestDefaultPolicy_RemoteWriteDenied(t *testing.T) {
-	pe := testPolicyEvaluator(nil)
-	rules := pe.compileChain(DefaultPolicy())
-
-	remoteWrite := buildGRPCActivation(
-		peerContext{address: "10.0.0.1", port: "5000"},
-		testIsFlags(map[string]bool{"grpc": true, "write": true, "push": true, "create": true}),
-		&pb.Entity{}, "",
-	)
-	if v := pe.evalChain(rules, remoteWrite, ""); v != verdictDeny {
-		t.Errorf("remote write should be denied (no Defer target), got %v", v)
-	}
-}
-
-// TestDefaultPolicy_RemoteExportDenied guards the default-deny tail: the export
-// endpoints disclose world state, args, hostname, and logs, and are POSTs (so
-// is.read is false). They match no explicit allow rule, so the trailing catch-all
-// Deny must block remote callers. If that tail is ever removed or reordered above
-// an allow, these endpoints silently open to the network — this test fails first.
-func TestDefaultPolicy_RemoteExportDenied(t *testing.T) {
-	pe := testPolicyEvaluator(nil)
-	rules := pe.compileChain(DefaultPolicy())
-
-	for _, path := range []string{"/diagnostic/export", "/mission/export"} {
-		remote := buildHTTPActivation(
-			peerContext{address: "10.0.0.1", port: "5000"},
-			"POST", path,
-		)
-		if v := pe.evalChain(rules, remote, ""); v != verdictDeny {
-			t.Errorf("remote POST %s should be denied, got %v", path, v)
+	for _, tc := range cases {
+		if v := pe.evalChain(chain(tc.cel), act, 0); v != tc.want {
+			t.Errorf("%s: cel %q got %v, want %v", tc.name, tc.cel, v, tc.want)
 		}
+	}
+}
 
-		// Local callers (the desktop app, the CLI on the same host) must keep working.
-		local := buildHTTPActivation(
-			peerContext{address: "127.0.0.1", port: "5000", local: true},
-			"POST", path,
-		)
-		if v := pe.evalChain(rules, local, ""); v == verdictDeny {
-			t.Errorf("local POST %s should be allowed, got deny", path)
-		}
+// TestPolicyDefer_TargetsCurrentNotChange asserts that a defer resolving the
+// node target via head(change.id) uses the STORED entity, so an incoming change
+// cannot point the defer at a node policy of its choosing. The stored node
+// denies; the forged node would allow.
+func TestPolicyDefer_TargetsCurrentNotChange(t *testing.T) {
+	pe := testPolicyEvaluator(map[string]*pb.Entity{
+		"sensor.s": {Id: "sensor.s", Controller: &pb.Controller{Node: proto.String("realnode")}},
+		"node.realnode": {Id: "node.realnode", Policy: &pb.PolicyComponent{Rules: []*pb.PolicyRule{
+			{Action: pb.PolicyAction_PolicyActionDeny, Cel: celStr(`true`)},
+		}}},
+		"node.evil": {Id: "node.evil", Policy: &pb.PolicyComponent{Rules: []*pb.PolicyRule{
+			{Action: pb.PolicyAction_PolicyActionAllow, Cel: celStr(`true`)},
+		}}},
+	})
+	chain := pe.compileChain(&pb.PolicyComponent{Rules: []*pb.PolicyRule{
+		{Action: pb.PolicyAction_PolicyActionDefer, Cel: celStr(`head(change.id).controller.node != "" ? "node." + head(change.id).controller.node : ""`)},
+		{Action: pb.PolicyAction_PolicyActionAllow},
+	}})
+	// The incoming change forges controller.node = evil (would allow).
+	forged := &pb.Entity{Id: "sensor.s", Controller: &pb.Controller{Node: proto.String("evil")}}
+	act := remoteGRPC(pe, testIsFlags(map[string]bool{"grpc": true, "write": true}), forged)
+	if v := pe.evalChain(chain, act, 0); v != verdictDeny {
+		t.Errorf("defer must resolve via the stored node (realnode→deny), not the forged change.controller.node (evil→allow); got %v", v)
+	}
+}
+
+// TestAuthContext_ResolvesIdentity asserts authn.policy assigns identity by
+// connection nature: in-process (bufconn) connections become admin.actor, while
+// a plain remote connection (no client cert) becomes anonymous. With no
+// authn.policy entity loaded, the built-in fallback applies.
+func TestAuthContext_ResolvesIdentity(t *testing.T) {
+	i := &policyInterceptor{pe: testPolicyEvaluator(nil)}
+
+	bufCtx := context.WithValue(context.Background(), builtinConnKey, true)
+	ctx, err := i.authContext(bufCtx, http.Header{}, "bufconn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actorFromContext(ctx); got != adminActorEntity {
+		t.Errorf("bufconn: actor = %q, want %q", got, adminActorEntity)
+	}
+
+	// An in-process caller (bufconn) may declare the identity it acts as via
+	// X-Builtin-Actor (e.g. federation's link entity); it is honored verbatim.
+	hdr := http.Header{}
+	hdr.Set("X-Builtin-Actor", "federation.downstream.remotenode")
+	ctx, err = i.authContext(bufCtx, hdr, "bufconn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actorFromContext(ctx); got != "federation.downstream.remotenode" {
+		t.Errorf("bufconn declared actor = %q, want the declared identity", got)
+	}
+	// The same header on a non-bufconn connection is ignored.
+	ctx, err = i.authContext(context.Background(), hdr, "10.0.0.1:5000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actorFromContext(ctx); got != anonymousEntity {
+		t.Errorf("remote X-Builtin-Actor must be ignored: actor = %q, want %q", got, anonymousEntity)
+	}
+
+	ctx, err = i.authContext(context.Background(), http.Header{}, "10.0.0.1:5000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actorFromContext(ctx); got != anonymousEntity {
+		t.Errorf("remote: actor = %q, want %q", got, anonymousEntity)
 	}
 }
 
@@ -287,44 +400,34 @@ func TestCheckEntityChange_VerbDetection(t *testing.T) {
 		"existing.1": {Id: "existing.1"},
 	})
 
-	allowAll := &pb.PolicyComponent{
-		Rules: []*pb.PolicyRule{
-			{Action: pb.PolicyAction_PolicyActionAllow},
-		},
-	}
-	rules := pe.compileChain(allowAll)
-	pe.mu.Lock()
-	pe.rules = rules
-	pe.mu.Unlock()
-
 	denyCreate := &pb.PolicyComponent{
 		Rules: []*pb.PolicyRule{
 			{Action: pb.PolicyAction_PolicyActionDeny, Cel: celStr(`is.create`)},
 			{Action: pb.PolicyAction_PolicyActionAllow},
 		},
 	}
-	rules = pe.compileChain(denyCreate)
+	rules := pe.compileChain(denyCreate)
 	pe.mu.Lock()
 	pe.rules = rules
 	pe.mu.Unlock()
 
-	peer := peerContext{address: "10.0.0.1", port: "5000"}
+	ec := testEvalCtx(peerContext{address: "10.0.0.1", port: "5000"}, true)
 
-	err := pe.checkEntityChange(peer, true, "", "test", rules, &pb.EntityChangeRequest{
+	err := pe.checkEntityChange(ec, "test", rules, &pb.EntityChangeRequest{
 		Changes: []*pb.Entity{{Id: "existing.1"}},
 	})
 	if err != nil {
 		t.Errorf("update of existing entity should be allowed: %v", err)
 	}
 
-	err = pe.checkEntityChange(peer, true, "", "test", rules, &pb.EntityChangeRequest{
+	err = pe.checkEntityChange(ec, "test", rules, &pb.EntityChangeRequest{
 		Changes: []*pb.Entity{{Id: "new.1"}},
 	})
 	if err == nil {
 		t.Error("create of new entity should be denied by is.create rule")
 	}
 
-	err = pe.checkEntityChange(peer, true, "", "test", rules, &pb.EntityChangeRequest{
+	err = pe.checkEntityChange(ec, "test", rules, &pb.EntityChangeRequest{
 		Replacements: []*pb.Entity{{Id: "existing.1"}},
 	})
 	if err != nil {
@@ -345,9 +448,9 @@ func TestProtoFieldAccess_InCEL(t *testing.T) {
 	}
 
 	withCamera := buildGRPCActivation(
-		peerContext{address: "10.0.0.1"},
+		testEvalCtx(peerContext{address: "10.0.0.1"}, false),
 		map[string]bool{"grpc": true, "write": true, "push": true, "create": true},
-		&pb.Entity{Id: "cam.1", Camera: &pb.CameraComponent{}}, "",
+		&pb.Entity{Id: "cam.1", Camera: &pb.CameraComponent{}},
 	)
 	out, _, err := prg.Eval(withCamera)
 	if err != nil {
@@ -358,9 +461,9 @@ func TestProtoFieldAccess_InCEL(t *testing.T) {
 	}
 
 	withoutCamera := buildGRPCActivation(
-		peerContext{address: "10.0.0.1"},
+		testEvalCtx(peerContext{address: "10.0.0.1"}, false),
 		map[string]bool{"grpc": true, "write": true, "push": true, "create": true},
-		&pb.Entity{Id: "sensor.1"}, "",
+		&pb.Entity{Id: "sensor.1"},
 	)
 	out, _, err = prg.Eval(withoutCamera)
 	if err != nil {

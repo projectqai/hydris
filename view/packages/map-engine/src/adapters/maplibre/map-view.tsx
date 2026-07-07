@@ -26,11 +26,14 @@ import type {
   EntityData,
   EntityFilter,
   GeoPosition,
+  MapLayer,
   ShapeFeature,
   ShapeProperties,
 } from "../../types";
 import { shapeToFeatures } from "../../utils/shape-to-geojson";
 import { isShapeVisible, type ShapeVisibilityContext } from "../../utils/shape-visibility";
+// source: https://github.com/openmaptiles/positron-gl-style/blob/master/style.json
+import openmaptilesStyle from "./assets/openmaptiles-style.json";
 
 const SECTOR_MIN_ZOOM = 12;
 const OVERLAP_ZOOM_TOLERANCE = 2;
@@ -131,6 +134,21 @@ const createRasterStyle = (
   ],
 });
 
+// mbtiles as full style so maplibre swaps at once.
+function buildOfflineStyle(layer: MapLayer): StyleSpecification {
+  const path = `${API_BASE}${layer.url}`;
+  const url = path.startsWith("http") ? path : `${window.location.origin}${path}`;
+  if (layer.url.endsWith(".pbf")) {
+    const base = openmaptilesStyle as unknown as StyleSpecification;
+    return {
+      ...base,
+      sources: { openmaptiles: { type: "vector", tiles: [url] } },
+      layers: base.layers.filter((l) => l.type !== "symbol"),
+    };
+  }
+  return createRasterStyle([url], "", 22);
+}
+
 const STYLES: Record<BaseLayer, StyleSpecification> = {
   dark: createRasterStyle(
     ["a", "b", "c", "d"].map((s) => `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png`),
@@ -153,10 +171,20 @@ const STYLES: Record<BaseLayer, StyleSpecification> = {
   ),
 };
 
+const isBaseLayer = (s: string): s is BaseLayer => Object.hasOwn(STYLES, s);
+
 const DEFAULT_FILTER: EntityFilter = {
   tracks: { blue: true, red: true, neutral: true, unknown: true, unclassified: true },
   sensors: {},
 };
+
+const PLACEMENT_RETICLE: Record<BaseLayer, { accent: string; shadow: string }> = {
+  dark: { accent: "rgb(16, 185, 129)", shadow: "rgba(0, 0, 0, 0.85)" },
+  satellite: { accent: "rgb(255, 255, 255)", shadow: "rgba(0, 0, 0, 0.85)" },
+  street: { accent: "rgb(15, 23, 42)", shadow: "rgba(255, 255, 255, 0.9)" },
+};
+
+type PlacementCoordColors = { bg: string; border: string; text: string };
 
 export type MapActions = {
   flyTo: (position: GeoPosition, options?: { zoom?: number; duration?: number }) => void;
@@ -177,17 +205,20 @@ export type MapViewProps = {
   filter?: EntityFilter;
   selectedId?: string | null;
   trackedId?: string | null;
-  baseLayer?: BaseLayer;
+  baseLayer?: string;
   colorScheme?: "dark" | "light";
   initialView?: { lat: number; lng: number; zoom: number };
   coverageVisible?: boolean;
   shapesVisible?: boolean;
   detectionsVisible?: boolean;
   trackHistoryVisible?: boolean;
+  clusteringEnabled?: boolean;
   rangeRingCenter?: GeoPosition | null;
   rangeRingsActive?: boolean;
   hiddenMapLayerIds?: ReadonlySet<string>;
   mapLayerOpacityOverrides?: Readonly<Record<string, number>>;
+  isPlacing?: boolean;
+  placementCoordColors?: PlacementCoordColors;
   onEntityClick?: (id: string | null) => void | Promise<void>;
   onMapClick?: (lat: number, lng: number) => void | Promise<void>;
   onRadialRequest?: (
@@ -218,10 +249,13 @@ export function MapView({
   shapesVisible = true,
   detectionsVisible = false,
   trackHistoryVisible = false,
+  clusteringEnabled = true,
   rangeRingCenter = null,
   rangeRingsActive = false,
   hiddenMapLayerIds,
   mapLayerOpacityOverrides,
+  isPlacing = false,
+  placementCoordColors,
   onEntityClick,
   onMapClick,
   onRadialRequest,
@@ -231,6 +265,7 @@ export function MapView({
   onViewChange,
 }: MapViewProps) {
   const mapRef = useRef<MapRef>(null);
+  const onlineBaseLayer: BaseLayer | null = isBaseLayer(baseLayer) ? baseLayer : null;
   const resolvedInitialView = initialView
     ? { longitude: initialView.lng, latitude: initialView.lat, zoom: initialView.zoom }
     : INITIAL_VIEW_STATE;
@@ -263,9 +298,18 @@ export function MapView({
   const [expandedAssemblies, setExpandedAssemblies] = useState<Set<string> | null>(null);
   const overlapActivationZoomRef = useRef<number | null>(null);
   const assemblyMinZoomRef = useRef<number | null>(null);
+  const sizeObserverRef = useRef<ResizeObserver | null>(null);
+  const sizeReconcileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     document.fonts.load("16px Inter").then(() => setFontLoaded(true));
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      sizeObserverRef.current?.disconnect();
+      if (sizeReconcileTimerRef.current) clearTimeout(sizeReconcileTimerRef.current);
+    };
   }, []);
 
   // Update debounce timer when selection changes from outside (e.g., left panel)
@@ -325,31 +369,29 @@ export function MapView({
     if (actionsReadyCalledRef.current) return;
     actionsReadyCalledRef.current = true;
 
-    // TODO: remove when upstream is fixed. maplibre-gl _resizeInternal reads
-    // _containerDimensions twice. if clientWidth changes between the reads,
-    // canvas/painter get sized to value A and transform to value B, rendering
-    // a thin strip with the rest black until something else triggers a resize.
-    // cache the first read.
     const map = mapRef.current?.getMap();
     if (map) {
-      type Internals = {
-        _resizeInternal: (constrainTransform?: boolean) => void;
-        _containerDimensions: () => [number, number];
-      };
-      const internal = map as unknown as Internals;
-      const origResize = internal._resizeInternal.bind(internal);
-      const origDims = internal._containerDimensions.bind(internal);
-      internal._resizeInternal = (constrainTransform) => {
-        const cached = origDims();
-        internal._containerDimensions = () => cached;
-        try {
-          origResize(constrainTransform);
-        } finally {
-          internal._containerDimensions = origDims;
+      setupRadialTriggers(map);
+
+      // windows: the container sometimes reads 0 while the map is sizing, so
+      // maplibre sticks at a small fallback size and never recovers. resize on
+      // mismatch, debounced so window drags don't thrash it.
+      const container = map.getContainer();
+      const reconcileSize = () => {
+        const canvas = map.getCanvas();
+        if (
+          canvas.clientWidth !== container.clientWidth ||
+          canvas.clientHeight !== container.clientHeight
+        ) {
+          map.resize();
         }
       };
-
-      setupRadialTriggers(map);
+      sizeObserverRef.current = new ResizeObserver(() => {
+        if (sizeReconcileTimerRef.current) clearTimeout(sizeReconcileTimerRef.current);
+        sizeReconcileTimerRef.current = setTimeout(reconcileSize, 150);
+      });
+      sizeObserverRef.current.observe(container);
+      reconcileSize();
     }
 
     const actions: MapActions = {
@@ -424,6 +466,8 @@ export function MapView({
 
       for (const { id, layer } of mapLayers) {
         if (hiddenMapLayerIds?.has(id)) continue;
+        // mbtiles render via mapStyle, not here.
+        if (layer.url?.startsWith("/tiles/")) continue;
         wanted.add(id);
 
         const sourceId = `plugin-map-layer-${id}`;
@@ -437,13 +481,16 @@ export function MapView({
         const opacity = mapLayerOpacityOverrides?.[id] ?? (layer.opacity || 1);
 
         if (lastSignature && lastSignature !== signature) {
-          if (map.getLayer(layerId)) map.removeLayer(layerId);
+          for (const ml of map.getStyle().layers ?? []) {
+            if (ml.id === layerId || ml.id.startsWith(sourceId + "-")) {
+              map.removeLayer(ml.id);
+            }
+          }
           if (map.getSource(sourceId)) map.removeSource(sourceId);
           mountedMapLayersRef.current.delete(id);
         }
 
         if (!map.getSource(sourceId)) {
-          // Backend proxies tile/image requests under a fixed path
           if (layer.kind === "tiles") {
             map.addSource(sourceId, {
               type: "raster",
@@ -474,19 +521,31 @@ export function MapView({
         }
       }
 
-      // Drop layers for hidden entities
+      // Drop layers for hidden entities.
+      // Vector tilesets match by prefix instead of exact id.
       for (const id of [...mountedMapLayersRef.current.keys()]) {
         if (wanted.has(id)) continue;
         const sourceId = `plugin-map-layer-${id}`;
-        if (map.getLayer(sourceId)) map.removeLayer(sourceId);
+        for (const ml of map.getStyle().layers ?? []) {
+          if (ml.id === sourceId || ml.id.startsWith(sourceId + "-")) {
+            map.removeLayer(ml.id);
+          }
+        }
         if (map.getSource(sourceId)) map.removeSource(sourceId);
         mountedMapLayersRef.current.delete(id);
       }
     };
 
+    const onStyleLoad = () => {
+      mountedMapLayersRef.current.clear();
+      ensure();
+    };
     if (map.isStyleLoaded()) ensure();
-    else map.once("load", ensure);
-  }, [entityMap, lastChange?.version, hiddenMapLayerIds, mapLayerOpacityOverrides]);
+    map.on("style.load", onStyleLoad);
+    return () => {
+      map.off("style.load", onStyleLoad);
+    };
+  }, [entityMap, lastChange?.version, hiddenMapLayerIds, mapLayerOpacityOverrides, baseLayer]);
 
   const version = lastChange?.version ?? 0;
   if (version !== lastShapeVersionRef.current) {
@@ -612,6 +671,7 @@ export function MapView({
     selectionData,
     labelData,
     coverageEntities,
+    renderedEntityIds,
   } = useEntityClusters({
     entityMap,
     lastChange,
@@ -619,6 +679,7 @@ export function MapView({
     selectedId,
     shapesVisible,
     detectionsVisible,
+    clusteringEnabled,
     zoom: viewState.zoom,
     pickable: !rangeRingsActive,
     overlapOffsets,
@@ -637,10 +698,13 @@ export function MapView({
   });
 
   const coverageShapeIds = new Set<string>();
+  const trackShapeIds = new Set<string>();
   for (const entity of entityMap.values()) {
     if (entity.coverageEntityIds) {
       for (const covId of entity.coverageEntityIds) coverageShapeIds.add(covId);
     }
+    if (entity.trackHistoryId) trackShapeIds.add(entity.trackHistoryId);
+    if (entity.trackPredictionId) trackShapeIds.add(entity.trackPredictionId);
   }
 
   const coverageFeatures: ShapeFeature[] = [];
@@ -672,15 +736,14 @@ export function MapView({
     selectedTrackShapeIds.add(selectedEntity.trackPredictionId);
 
   const assemblyOutlineIds = new Set<string>();
-  const expandedAssemblyOutlineIds = new Set<string>();
+  const visibleAssemblyOutlineIds = new Set<string>();
   for (const entity of entityMap.values()) {
-    if (entity.assemblyOutlineIds) {
-      for (const id of entity.assemblyOutlineIds) {
-        assemblyOutlineIds.add(id);
-        if (expandedAssemblies?.has(entity.id)) {
-          expandedAssemblyOutlineIds.add(id);
-        }
-      }
+    if (!entity.assemblyOutlineIds) continue;
+    // an outline only shows when its root is on the map
+    const rootVisible = renderedEntityIds.has(entity.id);
+    for (const id of entity.assemblyOutlineIds) {
+      assemblyOutlineIds.add(id);
+      if (rootVisible) visibleAssemblyOutlineIds.add(id);
     }
   }
 
@@ -700,7 +763,8 @@ export function MapView({
   const shapeCtx: ShapeVisibilityContext = {
     coverageShapeIds,
     assemblyOutlineIds,
-    expandedAssemblyOutlineIds,
+    visibleAssemblyOutlineIds,
+    trackShapeIds,
     filter,
     selectedId,
     selectedTrackShapeIds,
@@ -743,7 +807,7 @@ export function MapView({
       metersPerPx,
       viewportWidth: vpWidth,
       viewportHeight: vpHeight,
-      baseLayer,
+      baseLayer: onlineBaseLayer ?? "dark",
     });
   }
 
@@ -751,7 +815,7 @@ export function MapView({
     createCoverageLayer({
       data: coverageFeatures,
       visible: coverageVisible || coverageFeatures.length > 0,
-      baseLayer,
+      baseLayer: onlineBaseLayer ?? "dark",
     }),
     createSensorSectorLayer({
       data: sectorData,
@@ -773,7 +837,7 @@ export function MapView({
     createLabelLayer({
       data: labelData,
       visible: fontLoaded && labelData.length > 0,
-      baseLayer,
+      baseLayer: onlineBaseLayer ?? "dark",
     }),
     ...(rangeRingResult ? [rangeRingResult.centerLayer] : []),
   ];
@@ -855,11 +919,16 @@ export function MapView({
     }, 200);
   };
 
+  const offlineBasemap = onlineBaseLayer ? null : entityMap?.get(baseLayer)?.mapLayer;
+  const mapStyle = offlineBasemap
+    ? buildOfflineStyle(offlineBasemap)
+    : STYLES[onlineBaseLayer ?? "dark"];
+
   return (
     <div style={{ width: "100%", height: "100%", position: "relative", zIndex: 0 }}>
       <MapGL
         ref={mapRef}
-        mapStyle={STYLES[baseLayer]}
+        mapStyle={mapStyle}
         attributionControl={false}
         initialViewState={resolvedInitialView}
         onMove={handleMove}
@@ -896,6 +965,63 @@ export function MapView({
         />
         <ScaleControl position="bottom-right" maxWidth={100} unit="metric" />
       </MapGL>
+      {isPlacing && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "none",
+            zIndex: 5,
+          }}
+        >
+          <div
+            style={{
+              position: "relative",
+              width: 48,
+              height: 48,
+              borderRadius: "50%",
+              border: `2px solid ${PLACEMENT_RETICLE[onlineBaseLayer ?? "dark"].accent}`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              boxShadow: `0 0 14px ${PLACEMENT_RETICLE[onlineBaseLayer ?? "dark"].shadow}, 0 0 6px ${PLACEMENT_RETICLE[onlineBaseLayer ?? "dark"].shadow}`,
+            }}
+          >
+            <div
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                backgroundColor: PLACEMENT_RETICLE[onlineBaseLayer ?? "dark"].accent,
+                boxShadow: `0 0 5px ${PLACEMENT_RETICLE[onlineBaseLayer ?? "dark"].shadow}`,
+              }}
+            />
+            <div
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: "50%",
+                transform: "translateX(-50%)",
+                marginTop: 8,
+                whiteSpace: "nowrap",
+                backgroundColor: placementCoordColors?.bg ?? "rgba(20, 20, 20, 0.9)",
+                border: `1px solid ${placementCoordColors?.border ?? "rgba(255, 255, 255, 0.12)"}`,
+                borderRadius: 4,
+                padding: "4px 8px",
+                fontFamily: "monospace",
+                fontSize: 11,
+                color: placementCoordColors?.text ?? "rgb(245, 245, 245)",
+                textAlign: "center",
+              }}
+            >
+              {viewState.latitude.toFixed(6)}, {viewState.longitude.toFixed(6)}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

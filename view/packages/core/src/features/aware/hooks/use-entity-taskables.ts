@@ -5,9 +5,17 @@ import { useEntityStore } from "../store/entity-store";
 
 function references(entity: Entity, targetEntityId: string): boolean {
   if (!entity.taskable) return false;
+  const target = entity.taskable.target;
+  const requiresTarget =
+    target?.position != null || target?.entity != null || target?.waypoints != null;
+  const isAssignee = entity.taskable.assignee.some((a) => a.entityId === targetEntityId);
+  if (requiresTarget && isAssignee) return false;
+
   const inContext = entity.taskable.context.some((c) => c.entityId === targetEntityId);
-  const inAssignee = entity.taskable.assignee.some((a) => a.entityId === targetEntityId);
-  return inContext || inAssignee;
+  const inTarget =
+    target?.entity != null &&
+    (target.entity.entity.length === 0 || target.entity.entity.includes(targetEntityId));
+  return inContext || isAssignee || inTarget;
 }
 
 export function useEntityTaskables(entityId: string | null | undefined): Entity[] {
@@ -22,6 +30,11 @@ export function useEntityTaskables(entityId: string | null | undefined): Entity[
       return result;
     }),
   );
+}
+
+export function isCommissionPositionTaskable(entity: Entity): boolean {
+  const kind = entity.taskable?.taxonomy?.kind;
+  return kind?.case === "commission" && kind.value.kind.case === "position";
 }
 
 // Taskables that accept a geo position for an empty spot.

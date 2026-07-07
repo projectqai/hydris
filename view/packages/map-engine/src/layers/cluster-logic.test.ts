@@ -49,6 +49,7 @@ const ALL_ON: FilterInput = {
   unclassified: true,
   shapesVisible: true,
   detectionsVisible: true,
+  clustering: true,
 };
 
 function filterWith(overrides: Partial<FilterInput>): FilterInput {
@@ -205,6 +206,27 @@ describe("entity visibility filtering", () => {
         .map((r) => r.entityId);
       expect(restored).toContain("blue-1");
       expect(restored).toContain("red-1");
+    });
+  });
+
+  describe("clustering toggle", () => {
+    // stacked at one point: they cluster when on, and must not when off
+    const packed = packEntities([
+      { id: "a", lat: 10, lng: 10, affiliation: "blue" },
+      { id: "b", lat: 10, lng: 10, affiliation: "blue" },
+      { id: "c", lat: 10, lng: 10, affiliation: "blue" },
+      { id: "d", lat: 10, lng: 10, affiliation: "blue" },
+    ]);
+
+    it("collapses stacked entities into a cluster when on", () => {
+      const results = engine.process(packed, ALL_ON, 5, true);
+      expect(results.some((r) => r.isCluster)).toBe(true);
+    });
+
+    it("renders every entity individually when off, even when stacked", () => {
+      const results = engine.process(packed, filterWith({ clustering: false }), 5, true);
+      expect(results.every((r) => !r.isCluster)).toBe(true);
+      expect(results.map((r) => r.entityId).sort()).toEqual(["a", "b", "c", "d"]);
     });
   });
 });

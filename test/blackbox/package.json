@@ -1,0 +1,15 @@
+{
+  "name": "hydris-blackbox",
+  "private": true,
+  "type": "module",
+  "description": "Black-box security/behaviour tests that drive a real hydris node over the wire.",
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.12.0",
+    "@connectrpc/connect": "^2.1.2",
+    "@connectrpc/connect-node": "^2.1.2",
+    "@projectqai/proto": "0.0.67"
+  }
+}

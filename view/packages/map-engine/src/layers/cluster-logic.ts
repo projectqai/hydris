@@ -49,6 +49,7 @@ export type PackedEntities = {
 export type FilterInput = Record<Affiliation, boolean> & {
   shapesVisible: boolean;
   detectionsVisible: boolean;
+  clustering: boolean;
 };
 
 export type ClusterOutput = {
@@ -105,6 +106,7 @@ export function createClusterEngine() {
 
   function buildIndices(packed: PackedEntities, filter: FilterInput, targetIndexType: IndexType) {
     const { count } = packed;
+    const minPoints = filter.clustering ? 3 : Infinity;
 
     if (targetIndexType === "symbol") {
       const featuresBySymbol = new Map<string, Feature<Point, ClusterProperties>[]>();
@@ -125,7 +127,7 @@ export function createClusterEngine() {
         const cluster = new Supercluster<ClusterProperties, { symbol?: string }>({
           radius: CLUSTER_RADIUS,
           maxZoom: CLUSTER_MAX_ZOOM,
-          minPoints: 3,
+          minPoints,
           nodeSize: CLUSTER_NODE_SIZE,
           map: (p) => ({ symbol: p.symbol }),
           reduce: (acc, p) => {
@@ -153,7 +155,7 @@ export function createClusterEngine() {
         const cluster = new Supercluster<ClusterProperties, { affiliation?: Affiliation }>({
           radius: CLUSTER_RADIUS,
           maxZoom: SYMBOL_CLUSTER_MIN_ZOOM - 1,
-          minPoints: 3,
+          minPoints,
           nodeSize: CLUSTER_NODE_SIZE,
           map: (p) => ({ affiliation: p.affiliation }),
           reduce: (acc, p) => {
@@ -177,7 +179,7 @@ export function createClusterEngine() {
       clusterAll = new Supercluster<ClusterProperties, object>({
         radius: CLUSTER_RADIUS,
         maxZoom: AFFILIATION_CLUSTER_MIN_ZOOM - 1,
-        minPoints: 3,
+        minPoints,
         nodeSize: CLUSTER_NODE_SIZE,
       });
       clusterAll.load(features);
@@ -268,7 +270,8 @@ export function createClusterEngine() {
       filter.neutral !== lastFilter.neutral ||
       filter.unknown !== lastFilter.unknown ||
       filter.shapesVisible !== lastFilter.shapesVisible ||
-      filter.detectionsVisible !== lastFilter.detectionsVisible;
+      filter.detectionsVisible !== lastFilter.detectionsVisible ||
+      filter.clustering !== lastFilter.clustering;
     const needsRebuild =
       geoChanged || indexTypeChanged || filterChanged || activeIndexType === null;
 

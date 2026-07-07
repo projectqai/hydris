@@ -12,9 +12,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   orientation: "landscape",
   icon: "./assets/images/icon.png",
   userInterfaceStyle: "automatic",
-  androidStatusBar: {
-    hidden: true,
-  },
   android: {
     adaptiveIcon: {
       backgroundColor: "#E6F4FE",
@@ -24,11 +21,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     package: Env.PACKAGE,
     predictiveBackGestureEnabled: false,
-    splash: {
-      image: "./assets/images/splash-icon.png",
-      resizeMode: "contain",
-      backgroundColor: "#161616",
-    },
   },
   web: {
     bundler: "metro",

@@ -2,6 +2,7 @@
 
 import { Badge } from "@hydris/ui/badge";
 import { HighlightText } from "@hydris/ui/command-palette/highlight-text";
+import { useKeyedListNav } from "@hydris/ui/command-palette/use-keyed-list-nav";
 import { useKeyboardShortcut } from "@hydris/ui/keyboard";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
@@ -9,8 +10,8 @@ import { ChevronRight, Radio, Search, Settings } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 
-import { type ConfigStateLabel, getConfigStateBadgeVariant } from "../../utils/entity-helpers";
-import { filterConfigTree } from "../command-palette/palette-search";
+import type { ConfigStateBadge } from "../../utils/entity-helpers";
+import { filterConfigTree, findAncestorKeys } from "../command-palette/palette-search";
 import type { CategoryGroup, ConfigSelection, DeviceNode } from "./use-config-tree";
 
 function isInputFocused(): boolean {
@@ -36,7 +37,7 @@ type TreeItem = {
   icon: DeviceNode["icon"] | null;
   depth: number;
   hasChildren: boolean;
-  configState: ConfigStateLabel | null;
+  configState: ConfigStateBadge | null;
   isCategoryHeader?: boolean;
   isConfigurable?: boolean;
   ranges?: number[];
@@ -78,7 +79,7 @@ function TreeRow({
             <ChevronRight size={10} strokeWidth={2} color={t.iconSubtle} />
           </View>
         </View>
-        <Text className="font-sans-semibold text-muted-foreground text-xs tracking-wider uppercase">
+        <Text className="font-sans-semibold text-muted-foreground flex-1 text-xs tracking-wider uppercase">
           {item.label}
         </Text>
       </Pressable>
@@ -146,8 +147,8 @@ function TreeRow({
           highlightClassName="text-blue-foreground"
         />
         {item.configState && (
-          <Badge variant={getConfigStateBadgeVariant(item.configState)} size="sm">
-            {item.configState}
+          <Badge variant={item.configState.variant} size="sm">
+            {item.configState.label}
           </Badge>
         )}
       </View>
@@ -192,11 +193,13 @@ function TreeView({
   selection,
   onSelect,
   query,
+  focusCategory,
 }: {
   tree: CategoryGroup[];
   selection: ConfigSelection;
   onSelect: (sel: ConfigSelection) => void;
   query: string;
+  focusCategory?: string;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(() => computeDefaultCollapsed(tree));
   const prevTreeLen = useRef(tree.length);
@@ -206,17 +209,9 @@ function TreeView({
     }
     prevTreeLen.current = tree.length;
   }, [tree]);
-  const [highlightedKey, setHighlightedKey] = useState<string | null>(null);
-  const highlightedElRef = useRef<HTMLElement | null>(null);
 
   const isSearching = query.trim().length > 0;
   const searchResult = useMemo(() => filterConfigTree(tree, query), [tree, query]);
-
-  useEffect(() => {
-    if (isSearching && searchResult.matches.length > 0) {
-      setHighlightedKey(searchResult.matches[0]!.entityId);
-    }
-  }, [isSearching, searchResult]);
 
   const toggleCollapse = useCallback((key: string) => {
     setCollapsed((prev) => {
@@ -289,49 +284,52 @@ function TreeView({
     return result;
   }, [tree, collapsed, isSearching, searchResult, rangesByKey]);
 
-  const highlightedIndex = useMemo(() => {
-    if (highlightedKey) {
-      const idx = rows.findIndex((r) => r.key === highlightedKey);
-      if (idx >= 0) return idx;
-    }
-    return rows.length > 0 ? 0 : -1;
-  }, [rows, highlightedKey]);
-
-  const setHighlightedEl = useCallback((node: any) => {
-    highlightedElRef.current = node;
-  }, []);
+  const { highlightedKey, setHighlightedKey, highlightedIndex, setHighlightedEl } = useKeyedListNav(
+    { rows, guard: isInputFocused },
+  );
 
   useEffect(() => {
-    if (highlightedIndex >= 0) {
-      (highlightedElRef.current as HTMLElement)?.scrollIntoView?.({ block: "nearest" });
+    if (isSearching && searchResult.matches.length > 0) {
+      setHighlightedKey(searchResult.matches[0]!.entityId);
     }
-  }, [highlightedIndex]);
+  }, [isSearching, searchResult, setHighlightedKey]);
 
-  useKeyboardShortcut(
-    "ArrowDown",
-    useCallback(() => {
-      if (isInputFocused()) return false;
-      const nextIdx = highlightedIndex + 1;
-      if (nextIdx < rows.length) {
-        setHighlightedKey(rows[nextIdx]!.key);
+  const revealedForRef = useRef<string | null>(null);
+  useEffect(() => {
+    const id = selection?.entityId ?? null;
+    if (!id) {
+      revealedForRef.current = null;
+      return;
+    }
+    if (revealedForRef.current === id) return;
+    const path = findAncestorKeys(tree, id);
+    if (!path) return;
+    revealedForRef.current = id;
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const key of path) {
+        if (next.delete(key)) changed = true;
       }
-      return true;
-    }, [highlightedIndex, rows]),
-    { priority: 200 },
-  );
+      return changed ? next : prev;
+    });
+    setHighlightedKey(id);
+  }, [selection, tree, setHighlightedKey]);
 
-  useKeyboardShortcut(
-    "ArrowUp",
-    useCallback(() => {
-      if (isInputFocused()) return false;
-      const nextIdx = highlightedIndex - 1;
-      if (nextIdx >= 0) {
-        setHighlightedKey(rows[nextIdx]!.key);
-      }
-      return true;
-    }, [highlightedIndex, rows]),
-    { priority: 200 },
-  );
+  const focusedCategoryRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusCategory || focusedCategoryRef.current === focusCategory) return;
+    if (!tree.some((c) => c.category === focusCategory)) return;
+    focusedCategoryRef.current = focusCategory;
+    const key = `category:${focusCategory}`;
+    setCollapsed((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+    setHighlightedKey(key);
+  }, [focusCategory, tree, setHighlightedKey]);
 
   useKeyboardShortcut(
     "Enter",
@@ -371,7 +369,7 @@ function TreeView({
         }
       }
       return false;
-    }, [rows, highlightedKey, collapsed, toggleCollapse]),
+    }, [rows, highlightedKey, collapsed, toggleCollapse, setHighlightedKey]),
     { priority: 200 },
   );
 
@@ -395,7 +393,7 @@ function TreeView({
         }
       }
       return false;
-    }, [rows, highlightedKey, collapsed, toggleCollapse]),
+    }, [rows, highlightedKey, collapsed, toggleCollapse, setHighlightedKey]),
     { priority: 200 },
   );
 
@@ -440,11 +438,13 @@ export function ConfigTreeSidebar({
   selection,
   onSelect,
   query,
+  focusCategory,
 }: {
   tree: CategoryGroup[];
   selection: ConfigSelection;
   onSelect: (sel: ConfigSelection) => void;
   query: string;
+  focusCategory?: string;
 }) {
   const t = useThemeColors();
 
@@ -461,5 +461,13 @@ export function ConfigTreeSidebar({
     );
   }
 
-  return <TreeView tree={tree} selection={selection} onSelect={onSelect} query={query} />;
+  return (
+    <TreeView
+      tree={tree}
+      selection={selection}
+      onSelect={onSelect}
+      query={query}
+      focusCategory={focusCategory}
+    />
+  );
 }

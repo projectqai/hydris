@@ -4,7 +4,6 @@ import type { LayoutChangeEvent } from "react-native";
 import { Text, View } from "react-native";
 import { useShallow } from "zustand/react/shallow";
 
-import { isExpired } from "../../../../lib/api/use-track-utils";
 import { selectDetectionsByDetector, useEntityStore } from "../../store/entity-store";
 
 type DetectionOverlayProps = {
@@ -60,8 +59,6 @@ export function DetectionOverlay({ cameraEntityId, objectFit = "cover" }: Detect
     return detections.flatMap((det) => {
       const bbox = det.detection?.imageBbox;
       if (!bbox?.frameWidth || !bbox.frameHeight) return [];
-
-      if (isExpired(det)) return [];
 
       const { offsetX, offsetY, scale } = computeContentFit(
         size.width,

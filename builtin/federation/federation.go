@@ -2,17 +2,17 @@ package federation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
-	"net/netip"
 	"net/url"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/controller"
+	"github.com/projectqai/hydris/engine"
 	"github.com/projectqai/hydris/goclient"
 	"github.com/projectqai/hydris/pkg/timesync"
 	pb "github.com/projectqai/proto/go"
@@ -22,26 +22,30 @@ import (
 )
 
 type Instance struct {
-	entityID  string
-	serverURL string
-	remote    string
-	filter    *pb.EntityFilter
-	limiter   *pb.WatchBehavior
-	logger    *slog.Logger
-	wgConfig  *goclient.WireGuardConfig
-	sshDest   string
+	entityID string
+	remote   string // server URL (host:port or http(s)://…)
+	logger   *slog.Logger
 
 	ts timesync.Tracker
 }
 
-var (
-	globalLogger    *slog.Logger
-	globalServerURL string
-)
+const federationKeepaliveMs = 30000 // 30s
 
-func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
+// federationBehavior is the watch behaviour for both federation legs: a fixed
+// keepalive so forwarded entities' TTLs are refreshed.
+func federationBehavior() *pb.WatchBehavior {
+	ms := uint32(federationKeepaliveMs)
+	return &pb.WatchBehavior{KeepaliveIntervalMs: &ms}
+}
+
+// keepaliveTTL is 2× the keepalive interval: a forwarded entity survives one
+// missed keepalive but expires when the link is truly dead.
+const keepaliveTTL = 2 * federationKeepaliveMs * time.Millisecond
+
+var globalLogger *slog.Logger
+
+func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 	globalLogger = logger
-	globalServerURL = serverURL
 	controllerName := "federation"
 
 	enabledProp := map[string]any{
@@ -59,33 +63,9 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 			"source": map[string]any{
 				"type":           "string",
 				"title":          "Source",
-				"description":    "Remote server address to sync with (pull all, push back taskables and changes to pulled entities)",
-				"ui:placeholder": "e.g. 10.0.0.2:9090",
+				"description":    "Remote server URL to sync with, e.g. 10.0.0.2:50051 or https://10.0.0.2:50051. TLS connections authenticate with this node's certificate (mTLS).",
+				"ui:placeholder": "e.g. 10.0.0.2:50051",
 				"ui:order":       0,
-			},
-			"filter": map[string]any{
-				"type":        "object",
-				"title":       "Filter",
-				"description": "Entity filter to select which entities to pull",
-				"ui:order":    1,
-			},
-			"limiter": map[string]any{
-				"type":        "object",
-				"title":       "Rate Limiter",
-				"description": "Watch behavior / rate limiter",
-				"ui:order":    2,
-			},
-			"wireguard": map[string]any{
-				"type":        "object",
-				"title":       "WireGuard",
-				"description": "Inline WireGuard tunnel config",
-				"ui:order":    3,
-			},
-			"ssh": map[string]any{
-				"type":        "object",
-				"title":       "SSH Tunnel",
-				"description": "Inline SSH tunnel config",
-				"ui:order":    4,
 			},
 		},
 		"required": []any{"source"},
@@ -135,7 +115,7 @@ func Run(ctx context.Context, logger *slog.Logger, serverURL string) error {
 			if entity.Device.GetClass() != "downstream" {
 				return fmt.Errorf("unknown device class: %s", entity.Device.GetClass())
 			}
-			return runInstance(ctx, globalLogger, globalServerURL, entity)
+			return runInstance(ctx, globalLogger, entity)
 		})
 	})
 }
@@ -241,7 +221,7 @@ func autoDiscoverDownstream(ctx context.Context, logger *slog.Logger, serviceID,
 	}
 }
 
-func runInstance(ctx context.Context, logger *slog.Logger, serverURL string, entity *pb.Entity) error {
+func runInstance(ctx context.Context, logger *slog.Logger, entity *pb.Entity) error {
 	if entity.Config == nil || entity.Config.Value == nil || entity.Config.Value.Fields == nil {
 		return fmt.Errorf("federation entity %s has no config", entity.Id)
 	}
@@ -249,76 +229,22 @@ func runInstance(ctx context.Context, logger *slog.Logger, serverURL string, ent
 	fields := entity.Config.Value.Fields
 
 	remote := ""
-	var filter *pb.EntityFilter
-	var limiter *pb.WatchBehavior
-	var wgConfig *goclient.WireGuardConfig
-	var sshDest string
-
 	if v, ok := fields["source"]; ok {
 		remote = v.GetStringValue()
-	}
-	if v, ok := fields["filter"]; ok {
-		filter = parseEntityFilter(v)
-	}
-	if v, ok := fields["limiter"]; ok {
-		limiter = parseWatchLimiter(v)
-	}
-	if v, ok := fields["wireguard"]; ok {
-		wgConfig = parseWireGuardConfig(v)
-	}
-	if v, ok := fields["ssh"]; ok {
-		sshDest = v.GetStringValue()
-	}
-
-	if wgConfig != nil && sshDest != "" {
-		return fmt.Errorf("federation config has both wireguard and ssh; pick one")
 	}
 	if remote == "" {
 		return fmt.Errorf("federation config missing source")
 	}
 
 	instance := &Instance{
-		entityID:  entity.Id,
-		serverURL: serverURL,
-		remote:    remote,
-		filter:    filter,
-		limiter:   limiter,
-		logger:    logger,
-		wgConfig:  wgConfig,
-		sshDest:   sshDest,
+		entityID: entity.Id,
+		remote:   remote,
+		logger:   logger,
 	}
 
-	if wgConfig != nil {
-		logger.Info("starting federation with WireGuard", "entityID", entity.Id, "remote", remote)
-	} else if sshDest != "" {
-		logger.Info("starting federation with SSH", "entityID", entity.Id, "remote", remote)
-	} else {
-		logger.Info("starting federation", "entityID", entity.Id, "remote", remote)
-	}
+	logger.Info("starting federation", "entityID", entity.Id, "remote", remote)
 
 	return instance.runDownstream(ctx)
-}
-
-const defaultFederationKeepaliveMs = 30000 // 30s
-
-// ensureKeepalive makes sure the WatchBehavior has a keepalive interval set.
-// Federation relies on keepalive to refresh the TTL of forwarded entities, so
-// we always need one even if the user didn't configure it.
-func (i *Instance) ensureKeepalive() {
-	if i.limiter == nil {
-		i.limiter = &pb.WatchBehavior{}
-	}
-	if i.limiter.KeepaliveIntervalMs == nil || *i.limiter.KeepaliveIntervalMs == 0 {
-		ms := uint32(defaultFederationKeepaliveMs)
-		i.limiter.KeepaliveIntervalMs = &ms
-	}
-}
-
-// keepaliveTTL returns the TTL to stamp on forwarded entities that have no
-// explicit lifetime.until. It is 2× the keepalive interval so that the entity
-// survives one missed keepalive but expires when the connection is truly dead.
-func (i *Instance) keepaliveTTL() time.Duration {
-	return 2 * time.Duration(*i.limiter.KeepaliveIntervalMs) * time.Millisecond
 }
 
 const timeSyncInterval = 30 * time.Second
@@ -344,19 +270,19 @@ func (i *Instance) timeSyncLoop(ctx context.Context, client pb.WorldServiceClien
 	}
 }
 
-// connectToRemote establishes a connection to the remote server
-func (i *Instance) connectToRemote() (*goclient.Connection, error) {
-	if i.wgConfig != nil {
-		conn, tunnel, err := goclient.ConnectViaWireGuard(i.remote, i.wgConfig)
-		if err != nil {
-			return nil, err
-		}
-		return &goclient.Connection{ClientConn: conn, Tunnel: tunnel}, nil
+// connectToRemote establishes a working connection to the remote server. The
+// scheme selects the transport — http:// is plaintext, https:// is TLS — and a
+// bare host:port is tried over TLS first, then plaintext. For TLS we present the
+// node's own certificate (mTLS) so the remote can identify us, and fall back to
+// the same target without a client cert for remotes that predate mTLS
+// federation. Each candidate is probed with GetLocalNode (gRPC dials lazily, so
+// only a real RPC proves the transport and authentication actually work).
+func (i *Instance) connectToRemote(ctx context.Context) (*goclient.Connection, error) {
+	var opts []goclient.ConnectOption
+	if engine.NodeTLSCert != nil {
+		opts = append(opts, goclient.WithClientCert(*engine.NodeTLSCert))
 	}
-	if i.sshDest != "" {
-		return goclient.ConnectWithSSH(i.remote, i.sshDest)
-	}
-	return goclient.Connect(i.remote)
+	return goclient.ConnectURL(ctx, i.remote, "", opts...)
 }
 
 // discoverNode queries a world service for the local node and returns its
@@ -475,22 +401,28 @@ func filterForFederation(entity *pb.Entity, sourceNodeID string, keepaliveTTL ti
 // Only entities with a TaskableComponent or whose Controller.Node matches
 // the remote node (i.e. entities that originated there) are pushed back.
 func (i *Instance) runDownstream(ctx context.Context) error {
-	i.ensureKeepalive()
-
-	localConn, err := builtin.BuiltinClientConn("federation")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = localConn.Close() }()
-
-	remoteConn, err := i.connectToRemote()
+	remoteConn, err := i.connectToRemote(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = remoteConn.Close() }()
-
-	localClient := pb.NewWorldServiceClient(localConn)
 	remoteClient := pb.NewWorldServiceClient(remoteConn)
+
+	// Discover the remote node before opening the local connection: local pushes
+	// are attributed to the link entity (actor) and scoped to this remote node, so
+	// the policy can constrain what the link may write (source.node).
+	remoteNodeID, remoteNodeEntity, err := discoverNode(ctx, remoteClient)
+	if err != nil {
+		return fmt.Errorf("discover remote node ID: %w", err)
+	}
+	i.logger.Info("downstream: discovered remote node", "nodeID", remoteNodeID)
+
+	localConn, err := builtin.BuiltinClientConnForNode("federation", i.entityID, remoteNodeID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = localConn.Close() }()
+	localClient := pb.NewWorldServiceClient(localConn)
 
 	localNodeID, localNodeEntity, err := discoverNode(ctx, localClient)
 	if err != nil {
@@ -498,23 +430,10 @@ func (i *Instance) runDownstream(ctx context.Context) error {
 	}
 	i.logger.Info("downstream: discovered local node", "nodeID", localNodeID)
 
-	remoteNodeID, remoteNodeEntity, err := discoverNode(ctx, remoteClient)
-	if err != nil {
-		return fmt.Errorf("discover remote node ID: %w", err)
-	}
-	i.logger.Info("downstream: discovered remote node", "nodeID", remoteNodeID)
-
 	go i.timeSyncLoop(ctx, remoteClient)
 
-	federateNodeEntity(ctx, localClient, remoteNodeEntity, i.keepaliveTTL(), 0)
-	federateNodeEntity(ctx, remoteClient, localNodeEntity, i.keepaliveTTL(), i.ts.Offset())
-
-	keepaliveTTL := i.keepaliveTTL()
-
-	// pulledFresh tracks the Fresh timestamp (in local clock domain) last
-	// ingested by the pull leg for each entity. The push-back leg uses this
-	// to skip owned-by-remote entities that haven't been locally modified.
-	var pulledFresh sync.Map // entityID → time.Time
+	federateNodeEntity(ctx, localClient, remoteNodeEntity, keepaliveTTL, 0)
+	federateNodeEntity(ctx, remoteClient, localNodeEntity, keepaliveTTL, i.ts.Offset())
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -524,8 +443,7 @@ func (i *Instance) runDownstream(ctx context.Context) error {
 	// Pull: remote → local (same as regular pull)
 	go func() {
 		stream, err := goclient.WatchEntitiesWithRetry(ctx, remoteClient, &pb.ListEntitiesRequest{
-			Filter:    i.filter,
-			Behaviour: i.limiter,
+			Behaviour: federationBehavior(),
 		})
 		if err != nil {
 			cancel()
@@ -554,9 +472,6 @@ func (i *Instance) runDownstream(ctx context.Context) error {
 			if event.Entity.Camera != nil {
 				rewriteCameraURLs(event.Entity, "http://"+i.remote)
 			}
-			if event.Entity.Lifetime != nil && event.Entity.Lifetime.Fresh != nil {
-				pulledFresh.Store(event.Entity.Id, event.Entity.Lifetime.Fresh.AsTime())
-			}
 			_, err = localClient.Push(ctx, &pb.EntityChangeRequest{
 				Changes: []*pb.Entity{event.Entity},
 			})
@@ -566,10 +481,10 @@ func (i *Instance) runDownstream(ctx context.Context) error {
 		}
 	}()
 
-	// Push: local → remote (only TaskableComponent or entities owned by remote)
+	// Push: local → remote (only the TaskExecution component of local tasks)
 	go func() {
 		stream, err := goclient.WatchEntitiesWithRetry(ctx, localClient, &pb.ListEntitiesRequest{
-			Behaviour: i.limiter,
+			Behaviour: federationBehavior(),
 		})
 		if err != nil {
 			cancel()
@@ -588,39 +503,32 @@ func (i *Instance) runDownstream(ctx context.Context) error {
 				errc <- err
 				return
 			}
-			if event.Entity == nil {
+			// Relay the TaskExecution of tasks issued against remote-owned
+			// entities back upstream. Always send a stub carrying ONLY the
+			// command component, never the full entity: defense in depth so a
+			// local controller can never clobber the remote's authoritative
+			// copy even if ownership ever gets misjudged.
+			if event.Entity == nil || (event.Entity.TaskExecution == nil && event.Entity.TargetManualControl == nil) {
 				continue
 			}
-			hasTaskable := event.Entity.Taskable != nil
 			ownedByRemote := event.Entity.Controller != nil &&
 				event.Entity.Controller.Node != nil &&
 				*event.Entity.Controller.Node == remoteNodeID
-			if !hasTaskable && !ownedByRemote {
+			if !ownedByRemote {
 				continue
 			}
-			if ownedByRemote {
-				if event.Entity.Lifetime != nil && event.Entity.Lifetime.Fresh != nil {
-					entityFresh := event.Entity.Lifetime.Fresh.AsTime()
-					if last, ok := pulledFresh.Load(event.Entity.Id); ok {
-						if !entityFresh.After(last.(time.Time)) {
-							continue
-						}
-					}
-				}
+			stub := &pb.Entity{
+				Id:                  event.Entity.Id,
+				TaskExecution:       event.Entity.TaskExecution,
+				TargetManualControl: event.Entity.TargetManualControl,
 			}
-			if !filterForFederation(event.Entity, localNodeID, keepaliveTTL) {
-				continue
-			}
-			if event.Entity.Camera != nil {
-				origin := detectOrigin(i.remote)
-				rewriteCameraURLs(event.Entity, origin)
-			}
-			shiftEntityTimestamps(event.Entity, i.ts.Offset())
+			shiftEntityTimestamps(stub, i.ts.Offset())
 			_, err = remoteClient.Push(ctx, &pb.EntityChangeRequest{
-				Changes: []*pb.Entity{event.Entity},
+				Changes: []*pb.Entity{stub},
 			})
 			if err != nil {
-				i.logger.Error("downstream: failed to push to remote", "targetEntity", event.Entity.Id, "error", err)
+				i.logger.Error("downstream: failed to push to remote", "targetEntity", stub.Id, "error", err)
+				_ = json.NewEncoder(os.Stderr).Encode(stub)
 			}
 		}
 	}()
@@ -631,117 +539,16 @@ func (i *Instance) runDownstream(ctx context.Context) error {
 	return err
 }
 
-// parseWireGuardConfig parses inline WireGuard config from structpb.Value
-func parseWireGuardConfig(v *structpb.Value) *goclient.WireGuardConfig {
-	if v == nil {
-		return nil
-	}
-
-	s := v.GetStructValue()
-	if s == nil {
-		return nil
-	}
-
-	cfg := &goclient.WireGuardConfig{}
-
-	if pk, ok := s.Fields["private_key"]; ok {
-		cfg.PrivateKey = pk.GetStringValue()
-	}
-	if pk, ok := s.Fields["peer_public_key"]; ok {
-		cfg.PeerPublicKey = pk.GetStringValue()
-	}
-	if ep, ok := s.Fields["endpoint"]; ok {
-		cfg.Endpoint = ep.GetStringValue()
-	}
-	if addr, ok := s.Fields["address"]; ok {
-		addrStr := addr.GetStringValue()
-		if parsed, err := netip.ParseAddr(addrStr); err == nil {
-			cfg.Address = parsed
-		}
-	}
-
-	// Validate - return nil if missing required fields
-	if cfg.PrivateKey == "" || cfg.PeerPublicKey == "" || cfg.Endpoint == "" || !cfg.Address.IsValid() {
-		return nil
-	}
-
-	return cfg
-}
-
-func parseEntityFilter(v *structpb.Value) *pb.EntityFilter {
-	if v == nil {
-		return nil
-	}
-
-	s := v.GetStructValue()
-	if s == nil {
-		return nil
-	}
-
-	filter := &pb.EntityFilter{}
-
-	if id, ok := s.Fields["id"]; ok {
-		idStr := id.GetStringValue()
-		filter.Id = &idStr
-	}
-
-	if label, ok := s.Fields["label"]; ok {
-		labelStr := label.GetStringValue()
-		filter.Label = &labelStr
-	}
-
-	if components, ok := s.Fields["component"]; ok {
-		if list := components.GetListValue(); list != nil {
-			for _, c := range list.Values {
-				filter.Component = append(filter.Component, uint32(c.GetNumberValue()))
-			}
-		}
-	}
-
-	if configFilter, ok := s.Fields["config"]; ok {
-		if configFilter.GetStructValue() != nil {
-			filter.Config = &pb.ConfigurationFilter{}
-		}
-	}
-
-	return filter
-}
-
-func parseWatchLimiter(v *structpb.Value) *pb.WatchBehavior {
-	if v == nil {
-		return nil
-	}
-
-	s := v.GetStructValue()
-	if s == nil {
-		return nil
-	}
-
-	limiter := &pb.WatchBehavior{}
-
-	if v, ok := s.Fields["max_rate_hz"]; ok {
-		val := float32(v.GetNumberValue())
-		limiter.MaxRateHz = &val
-	}
-
-	if minPri, ok := s.Fields["min_priority"]; ok {
-		val := pb.Priority(int32(minPri.GetNumberValue()))
-		limiter.MinPriority = &val
-	}
-
-	if ka, ok := s.Fields["keepalive_interval_ms"]; ok {
-		val := uint32(ka.GetNumberValue())
-		limiter.KeepaliveIntervalMs = &val
-	}
-
-	return limiter
-}
-
 // rewriteCameraURLs rewrites private/localhost/credentialed camera stream
-// URLs to use the origin node's media proxy endpoints. This ensures that
-// federated entities carry publicly-reachable URLs.
+// URLs to use the origin node's proxy endpoints. Streaming protocols are
+// pointed at the RTSP relay so that local proxy handlers can bridge them;
+// image/MJPEG go through the HTTP image proxy.
 func rewriteCameraURLs(entity *pb.Entity, origin string) {
 	if entity.Camera == nil || origin == "" {
+		return
+	}
+	originURL, err := url.Parse(origin)
+	if err != nil {
 		return
 	}
 	for idx, stream := range entity.Camera.Streams {
@@ -763,13 +570,12 @@ func rewriteCameraURLs(entity *pb.Entity, origin string) {
 		case pb.MediaStreamProtocol_MediaStreamProtocolImage,
 			pb.MediaStreamProtocol_MediaStreamProtocolMjpeg:
 			stream.Url = fmt.Sprintf("%s/media/image/%s?stream=%d", origin, entity.Id, idx)
-		case pb.MediaStreamProtocol_MediaStreamProtocolWebrtc:
-			stream.Url = fmt.Sprintf("%s/media/whep/%s?stream=%d", origin, entity.Id, idx)
-		case pb.MediaStreamProtocol_MediaStreamProtocolRtsp:
-			stream.Url = fmt.Sprintf("%s/media/whep/%s?stream=%d", origin, entity.Id, idx)
-			stream.Protocol = pb.MediaStreamProtocol_MediaStreamProtocolWebrtc
+		case pb.MediaStreamProtocol_MediaStreamProtocolHls,
+			pb.MediaStreamProtocol_MediaStreamProtocolIframe:
+			continue
 		default:
-			stream.Url = fmt.Sprintf("%s/media/image/%s?stream=%d", origin, entity.Id, idx)
+			stream.Url = fmt.Sprintf("rtsp://%s/media/rtsp/%s?stream=%d", originURL.Host, entity.Id, idx)
+			stream.Protocol = pb.MediaStreamProtocol_MediaStreamProtocolRtsp
 		}
 	}
 }
@@ -784,30 +590,6 @@ func isLoopback(host string) bool {
 		return false
 	}
 	return ip.IsLoopback()
-}
-
-// detectOrigin determines the externally-reachable address of this node
-// relative to the given remote address. It dials UDP to discover which
-// local interface would be used to reach the remote, then combines that
-// IP with the engine's HTTP port.
-func detectOrigin(remoteAddr string) string {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		host = remoteAddr
-	}
-	// Dial UDP (no actual packets sent) to discover the source interface.
-	conn, err := net.Dial("udp", net.JoinHostPort(host, "80"))
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "50051"
-	}
-	return "http://" + net.JoinHostPort(localAddr.IP.String(), port)
 }
 
 func init() {

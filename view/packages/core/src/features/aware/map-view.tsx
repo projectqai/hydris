@@ -2,7 +2,7 @@
 
 import type { MapActions } from "@hydris/map-engine/adapters/maplibre";
 import { MapView as MapAdapter } from "@hydris/map-engine/adapters/maplibre";
-import type { BaseLayer, EntityFilter, GeoPosition } from "@hydris/map-engine/types";
+import type { EntityFilter, GeoPosition } from "@hydris/map-engine/types";
 import type { EntityData } from "@hydris/map-engine/types";
 import type { DOMProps } from "expo/dom";
 import { type DOMImperativeFactory, useDOMImperativeHandle } from "expo/dom";
@@ -27,6 +27,7 @@ export interface MapViewRef {
     shapesVisible: boolean,
     detectionsVisible: boolean,
     trackHistoryVisible: boolean,
+    clusteringEnabled: boolean,
   ) => void;
   pushRangeRing: (centerJson: string | null, active: boolean) => void;
   pushHiddenLayers: (idsJson: string) => void;
@@ -48,7 +49,7 @@ type MapViewProps = {
   filterJson?: string;
   flyToTarget?: FlyToTarget;
   zoomCommand?: ZoomCommand;
-  baseLayer?: BaseLayer;
+  baseLayer?: string;
   colorScheme?: "dark" | "light";
   bgColor?: string;
   initialLat?: number;
@@ -58,6 +59,9 @@ type MapViewProps = {
   shapesVisible?: boolean;
   detectionsVisible?: boolean;
   trackHistoryVisible?: boolean;
+  clusteringEnabled?: boolean;
+  isPlacing?: boolean;
+  placementCoordColors?: { bg: string; border: string; text: string };
   onReady?: () => Promise<void>;
   onEntityClick?: (id: string | null) => Promise<void>;
   onMapClick?: (lat: number, lng: number) => Promise<void>;
@@ -88,6 +92,9 @@ export default function MapView({
   shapesVisible = true,
   detectionsVisible = false,
   trackHistoryVisible = false,
+  clusteringEnabled = true,
+  isPlacing = false,
+  placementCoordColors,
   onReady,
   onEntityClick,
   onMapClick,
@@ -124,12 +131,13 @@ export default function MapView({
   const [updatedIds, setUpdatedIds] = useState<Set<string>>(new Set());
   const [pushedSelectedId, setPushedSelectedId] = useState<string | null>(null);
   const [pushedTrackedId, setPushedTrackedId] = useState<string | null>(null);
-  const [pushedBaseLayer, setPushedBaseLayer] = useState<BaseLayer>(baseLayer);
+  const [pushedBaseLayer, setPushedBaseLayer] = useState<string>(baseLayer);
   const [pushedFilterJson, setPushedFilterJson] = useState<string>(filterJson ?? "");
   const [pushedCoverageVisible, setPushedCoverageVisible] = useState(coverageVisible);
   const [pushedShapesVisible, setPushedShapesVisible] = useState(shapesVisible);
   const [pushedDetectionsVisible, setPushedDetectionsVisible] = useState(detectionsVisible);
   const [pushedTrackHistoryVisible, setPushedTrackHistoryVisible] = useState(trackHistoryVisible);
+  const [pushedClusteringEnabled, setPushedClusteringEnabled] = useState(clusteringEnabled);
   const [pushedRangeRingCenter, setPushedRangeRingCenter] = useState<GeoPosition | null>(null);
   const [pushedRangeRingsActive, setPushedRangeRingsActive] = useState(false);
   const [pushedHiddenLayerIds, setPushedHiddenLayerIds] = useState<Set<string>>(new Set());
@@ -269,13 +277,15 @@ export default function MapView({
           shapesVisible: boolean,
           detectionsVisible: boolean,
           trackHistoryVisible: boolean,
+          clusteringEnabled: boolean,
         ) => {
-          setPushedBaseLayer(baseLayer as BaseLayer);
+          setPushedBaseLayer(baseLayer);
           setPushedFilterJson(filterJson);
           setPushedCoverageVisible(coverageVisible);
           setPushedShapesVisible(shapesVisible);
           setPushedDetectionsVisible(detectionsVisible);
           setPushedTrackHistoryVisible(trackHistoryVisible);
+          setPushedClusteringEnabled(clusteringEnabled);
         },
         pushRangeRing: (centerJson: string | null, active: boolean) => {
           setPushedRangeRingCenter(centerJson ? JSON.parse(centerJson) : null);
@@ -362,6 +372,9 @@ export default function MapView({
         shapesVisible={pushedShapesVisible}
         detectionsVisible={pushedDetectionsVisible}
         trackHistoryVisible={pushedTrackHistoryVisible}
+        clusteringEnabled={pushedClusteringEnabled}
+        isPlacing={isPlacing}
+        placementCoordColors={placementCoordColors}
         rangeRingCenter={pushedRangeRingCenter}
         rangeRingsActive={pushedRangeRingsActive}
         hiddenMapLayerIds={pushedHiddenLayerIds}

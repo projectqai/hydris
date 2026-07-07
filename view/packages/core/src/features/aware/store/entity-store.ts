@@ -1,19 +1,21 @@
 import type { Entity, GeoSpatialComponent } from "@projectqai/proto/world";
-import { Priority, SortField } from "@projectqai/proto/world";
+import { DeviceState, Priority, SortField } from "@projectqai/proto/world";
 import { create } from "zustand";
 
 import {
+  getBattleDimensionRank,
   getEntityName,
   isAsset,
-  isExpired,
+  isDetectionEntity,
   isTrack,
   timestampToMs,
 } from "../../../lib/api/use-track-utils";
 import { worldClient } from "../../../lib/api/world-client";
 import { createBackoff } from "../../../lib/backoff";
+import { readinessSeverity } from "../utils/asset-readiness";
 import type { ChangeSet } from "../utils/transform-entities";
 import { accumulateChanges, resetDeltaState } from "../utils/transform-entities";
-import type { SortConfig } from "./left-panel-store";
+import type { ListSortField, SortConfig } from "./left-panel-store";
 import { useLeftPanelStore } from "./left-panel-store";
 import { classifyEvent } from "./process-events";
 
@@ -28,7 +30,7 @@ const DERIVED_STATE_INTERVAL_MS = 500;
 export const ENTITY_STREAM_FILTER = {
   or: [
     { component: [11] }, // geo: tracks, assets, sensors
-    { component: [16, 17] }, // detection + bearing
+    { component: [16] }, // detection: contact reports, incl. detections with no geo and no bearing
     { component: [50] }, // device: config tree
     { component: [52] }, // configurable: orphaned configs (no device component)
     { component: [25] }, // shape: coverage, history, prediction
@@ -55,10 +57,6 @@ function hasGeoMoved(id: string, geo: Entity["geo"]): boolean {
   if (!geo) return false;
   const prev = previousPositions.get(id);
   return !prev || prev.lat !== geo.latitude || prev.lng !== geo.longitude;
-}
-
-function isDetectionEntity(entity: Entity): boolean {
-  return entity.detection != null;
 }
 
 const EMPTY_CHANGE: ChangeSet = {
@@ -122,11 +120,24 @@ function entitySortComparator(sort: SortConfig) {
     if (sort.field === SortField.SortFieldLabel) return 0;
     const nameA = getEntityName(a);
     const nameB = getEntityName(b);
-    return nameA < nameB ? -1 : nameA > nameB ? 1 : 0;
+    const byName = nameA < nameB ? -1 : nameA > nameB ? 1 : 0;
+    return byName * dir;
   };
 }
 
-function compareByField(a: Entity, b: Entity, field: SortField): number {
+// worse = higher, same direction as BLOCKER_SEVERITY in asset-readiness.ts
+const DEVICE_STATE_SEVERITY: Record<DeviceState, number> = {
+  [DeviceState.DeviceStateActive]: 0,
+  [DeviceState.DeviceStatePending]: 1,
+  [DeviceState.DeviceStateDegraded]: 2,
+  [DeviceState.DeviceStateFailed]: 3,
+};
+
+function deviceSeverity(state: DeviceState | undefined): number {
+  return state === undefined ? -1 : DEVICE_STATE_SEVERITY[state];
+}
+
+function compareByField(a: Entity, b: Entity, field: ListSortField): number {
   switch (field) {
     case SortField.SortFieldLabel: {
       const nameA = getEntityName(a);
@@ -150,7 +161,7 @@ function compareByField(a: Entity, b: Entity, field: SortField): number {
     case SortField.SortFieldClassificationIdentity:
       return (a.classification?.identity ?? 0) - (b.classification?.identity ?? 0);
     case SortField.SortFieldClassificationDimension:
-      return (a.classification?.dimension ?? 0) - (b.classification?.dimension ?? 0);
+      return getBattleDimensionRank(a) - getBattleDimensionRank(b);
     case SortField.SortFieldBearingAzimuth:
       return compareNullableNumbers(a.bearing?.azimuth, b.bearing?.azimuth);
     case SortField.SortFieldBearingElevation:
@@ -165,9 +176,44 @@ function compareByField(a: Entity, b: Entity, field: SortField): number {
         b.power?.batteryChargeRemaining,
       );
     case SortField.SortFieldDeviceState:
-      return (a.device?.state ?? 0) - (b.device?.state ?? 0);
+      return deviceSeverity(a.device?.state) - deviceSeverity(b.device?.state);
+    case "readiness":
+      return readinessSeverity(a) - readinessSeverity(b);
     default:
       return 0;
+  }
+}
+
+export function hasSortValue(entity: Entity, field: ListSortField): boolean {
+  switch (field) {
+    case SortField.SortFieldLabel:
+      return true;
+    case SortField.SortFieldPriority:
+      return entity.priority != null;
+    case SortField.SortFieldLifetimeFrom:
+      return entity.lifetime?.from != null;
+    case SortField.SortFieldLifetimeFresh:
+      return entity.lifetime?.fresh != null;
+    case SortField.SortFieldGeoAltitude:
+      return entity.geo?.altitude != null;
+    case SortField.SortFieldClassificationIdentity:
+      return entity.classification?.identity != null;
+    case SortField.SortFieldClassificationDimension:
+      return getBattleDimensionRank(entity) !== 0;
+    case SortField.SortFieldBearingAzimuth:
+      return entity.bearing?.azimuth != null;
+    case SortField.SortFieldLinkLastSeen:
+      return entity.link?.lastSeen != null;
+    case SortField.SortFieldLinkQuality:
+      return entity.link?.linkQualityPercent != null;
+    case SortField.SortFieldPowerBatteryCharge:
+      return entity.power?.batteryChargeRemaining != null;
+    case "readiness":
+      return isAsset(entity);
+    case SortField.SortFieldDeviceState:
+      return entity.device?.state != null;
+    default:
+      return false;
   }
 }
 
@@ -187,19 +233,24 @@ function computeDerivedState(entities: Map<string, Entity>, sort: SortConfig) {
   const detections: Entity[] = [];
 
   for (const entity of entities.values()) {
-    if (isExpired(entity)) continue;
     if (isDetectionEntity(entity)) {
       detections.push(entity);
     }
     if (isTrack(entity)) {
       tracks.push(entity);
-    } else if (isAsset(entity) && !isDetectionEntity(entity)) {
+    } else if (isAsset(entity)) {
       assets.push(entity);
     }
   }
 
   const comparator = entitySortComparator(sort);
-  tracks.sort(comparator);
+  // readiness is an asset-only sort; sort tracks by name instead so we don't
+  // derive readiness for thousands of tracks on every flush.
+  const trackComparator =
+    sort.field === "readiness"
+      ? entitySortComparator({ field: SortField.SortFieldLabel, descending: sort.descending })
+      : comparator;
+  tracks.sort(trackComparator);
   assets.sort(comparator);
   detections.sort((a, b) => {
     return timestampToMs(b.lifetime?.from) - timestampToMs(a.lifetime?.from);
@@ -243,6 +294,7 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
     if (abortController) return;
 
     abortController = new AbortController();
+    const controller = abortController;
     set({ error: null });
 
     const backoff = createBackoff(250, 5000);
@@ -354,15 +406,16 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
     };
 
     function handleStreamError(err: Error) {
-      const signal = abortController?.signal;
-      if (signal?.aborted) return;
+      const signal = controller.signal;
+      if (signal.aborted) return;
 
       set({ error: err, isConnected: false });
 
       const delay = backoff.next();
 
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
       reconnectTimeout = setTimeout(() => {
-        if (signal?.aborted) return;
+        if (signal.aborted) return;
 
         pendingUpdates.clear();
         pendingDeletes.clear();
@@ -394,6 +447,7 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
             lastChange,
             tracks: [],
             assets: [],
+            detections: [],
             trackCount: 0,
             assetCount: 0,
           });
@@ -422,56 +476,19 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
     }
 
     async function stream() {
-      if (!abortController) return;
-      const signal = abortController.signal;
+      const signal = controller.signal;
+      if (signal.aborted) return;
 
       try {
         const { sort } = useLeftPanelStore.getState();
-        const sortOptions = [{ field: sort.field, descending: sort.descending }];
-
-        const { entities: initial } = await worldClient.listEntities(
-          { filter: ENTITY_STREAM_FILTER, sort: sortOptions },
-          { signal },
-        );
-        if (signal.aborted) return;
-
-        if (initial.length > 0) {
-          set((state) => {
-            const updatedIds = new Set<string>();
-
-            for (const entity of initial) {
-              if (!entity.id) continue;
-              state.entities.set(entity.id, entity);
-              updatedIds.add(entity.id);
-
-              trackPosition(entity.id, entity.geo);
-              if (isDetectionEntity(entity)) {
-                state.detectionEntityIds.add(entity.id);
-              }
-            }
-
-            changeVersion++;
-            const lastChange: ChangeSet = {
-              version: changeVersion,
-              updatedIds,
-              deletedIds: new Set(),
-              geoChanged: true,
-            };
-            accumulateChanges(lastChange);
-            scheduleDerivedStateUpdate();
-
-            return {
-              lastChange,
-              isConnected: true,
-              error: null,
-            };
-          });
-          backoff.reset();
-        }
+        // the server only knows proto fields; the derived "readiness" sort is
+        // applied client-side, so fall back to label for the stream order.
+        const serverField = typeof sort.field === "number" ? sort.field : SortField.SortFieldLabel;
+        const sortOptions = [{ field: serverField, descending: sort.descending }];
 
         fetchHydrisVersion();
 
-        let receivedFirst = initial.length > 0;
+        let receivedFirst = false;
         let eventsSinceYield = 0;
         for await (const event of worldClient.watchEntities(
           { filter: ENTITY_STREAM_FILTER, sort: sortOptions, behaviour: { maxRateHz: 10000 } },

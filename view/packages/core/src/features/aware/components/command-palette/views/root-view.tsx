@@ -6,6 +6,7 @@ import { useListNav } from "@hydris/ui/command-palette/use-list-nav";
 import { EmptyState } from "@hydris/ui/empty-state";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
+import { Tag } from "@hydris/ui/tag";
 import type { Entity } from "@projectqai/proto/world";
 import { FlashList } from "@shopify/flash-list";
 import { ChevronRight, Eye, FileQuestion, LayoutGrid, Search, Settings } from "lucide-react-native";
@@ -22,12 +23,11 @@ import { useEntityStore } from "../../../store/entity-store";
 import { useMapEngine } from "../../../store/map-engine-store";
 import { useSelectionStore } from "../../../store/selection-store";
 import {
-  getConfigState,
-  getConfigStateBadgeVariant,
+  getConfigStateBadge,
   getEntityIcon,
   getEntityTypeLabel,
 } from "../../../utils/entity-helpers";
-import type { Command } from "../command-registry";
+import { type Command, PINNED_COMMAND_IDS } from "../command-registry";
 import {
   CATEGORIES,
   CATEGORY_LABEL,
@@ -35,7 +35,7 @@ import {
   COMMAND_SUBCATEGORIES,
   DIMENSION_ICON,
   type DimensionGroup,
-  groupByFunctionCategory,
+  groupByAssetCategory,
 } from "../palette-helpers";
 import {
   type ConfigurableHit,
@@ -95,7 +95,7 @@ function EntityRow({
   ref?: React.Ref<View>;
 }) {
   const t = useThemeColors();
-  const configState = getConfigState(entity);
+  const configBadge = getConfigStateBadge(entity);
   const typeLabel = getEntityTypeLabel(entity);
   const Icon = getEntityIcon(entity);
   return (
@@ -125,9 +125,9 @@ function EntityRow({
           )}
         </View>
       </View>
-      {configState && (
-        <Badge variant={getConfigStateBadgeVariant(configState)} size="sm">
-          {configState}
+      {configBadge && (
+        <Badge variant={configBadge.variant} size="sm">
+          {configBadge.label}
         </Badge>
       )}
     </Pressable>
@@ -182,11 +182,7 @@ function HoldToConfirmRow({
               <Text className="text-muted-foreground text-11 font-mono">{command.description}</Text>
             )}
           </View>
-          <View className="bg-surface-overlay/6 h-4 items-center justify-center rounded px-1">
-            <Text className="text-11 text-on-surface/70 font-mono leading-none tabular-nums">
-              {remaining !== null ? `${(remaining / 1000).toFixed(1)}s` : "hold"}
-            </Text>
-          </View>
+          <Tag>{remaining !== null ? `${(remaining / 1000).toFixed(1)}s` : "hold"}</Tag>
         </>
       )}
     </HoldToConfirmPressable>
@@ -246,13 +242,7 @@ function CommandRow({
           <Text className="text-muted-foreground text-11 font-mono">{command.description}</Text>
         )}
       </View>
-      {command.shortcut && Platform.OS === "web" && (
-        <View className="bg-surface-overlay/6 h-4 items-center justify-center rounded px-1">
-          <Text className="text-11 text-on-surface/70 font-mono leading-none">
-            {command.shortcut}
-          </Text>
-        </View>
-      )}
+      {command.shortcut && Platform.OS === "web" && <Tag>{command.shortcut}</Tag>}
       {command.mode && <ChevronRight size={14} strokeWidth={2} color={t.iconMuted} />}
     </Pressable>
   );
@@ -393,20 +383,24 @@ export function RootView({
   };
 
   const showCommands = !isSearching && activeCategory === "commands";
-  const showFunctionGroups = !isSearching && activeCategory === "assets";
+  const showAssetGroups = !isSearching && activeCategory === "assets";
   const showTracksList = !isSearching && activeCategory === "tracks";
 
-  const functionGroups = showFunctionGroups ? groupByFunctionCategory(entities) : [];
+  const assetGroups = showAssetGroups ? groupByAssetCategory(entities) : [];
 
   const items: RootItem[] = [];
 
   if (showCommands) {
-    const configCmd = commands.find((c) => c.category === "configuration");
-    if (configCmd) {
-      items.push({ type: "command", command: configCmd, ranges: [], key: configCmd.id });
+    for (const id of PINNED_COMMAND_IDS) {
+      const cmd = commands.find((c) => c.id === id);
+      if (cmd) {
+        items.push({ type: "command", command: cmd, ranges: [], key: cmd.id });
+      }
     }
     for (const sub of COMMAND_SUBCATEGORIES) {
-      const group = commands.filter((c) => c.category === sub.id);
+      const group = commands.filter(
+        (c) => c.category === sub.id && !PINNED_COMMAND_IDS.includes(c.id),
+      );
       if (group.length === 0) continue;
       if (DRILLDOWN_SUBCATEGORIES.has(sub.id)) {
         items.push({ type: "section-header", title: sub.label, key: `hdr-cmd-${sub.id}` });
@@ -445,8 +439,8 @@ export function RootView({
       }
     }
 
-    if (showFunctionGroups && functionGroups.length > 0) {
-      for (const group of functionGroups) {
+    if (showAssetGroups && assetGroups.length > 0) {
+      for (const group of assetGroups) {
         items.push({
           type: "dimension-group",
           group,

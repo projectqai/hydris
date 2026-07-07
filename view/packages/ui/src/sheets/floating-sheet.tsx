@@ -157,8 +157,11 @@ function NestedSheetContent<T>({
     return (
       <ScrollView className="px-4 py-3" style={{ minHeight }} showsVerticalScrollIndicator={false}>
         <View className="flex-row flex-wrap gap-2">
-          {filteredItems.map((item, index) => (
-            <View key={index} className="basis-[calc((100%-8px)/4)]">
+          {filteredItems.map((item) => (
+            <View
+              key={typeof item === "string" ? item : JSON.stringify(item)}
+              className="basis-[calc((100%-8px)/4)]"
+            >
               {config.renderItem!(item, onSelect)}
             </View>
           ))}
@@ -176,7 +179,7 @@ function NestedSheetContent<T>({
 
           return (
             <Pressable
-              key={index}
+              key={label}
               onPress={() => onSelect(value)}
               className="bg-surface-overlay/5 active:bg-surface-overlay/10 items-center justify-center rounded-lg p-3 focus:outline-none"
               style={{ width: `${100 / itemsPerRow - 2}%` }}

@@ -21,6 +21,10 @@ func (ct *ClassificationTransformer) Validate(head map[string]*pb.Entity, incomi
 	return nil
 }
 
+func (ct *ClassificationTransformer) Reindex(_ map[string]*pb.Entity, _ string) {}
+
+func (ct *ClassificationTransformer) Name() string { return "classification" }
+
 func (ct *ClassificationTransformer) Resolve(head map[string]*pb.Entity, changedID string, components map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	entity := head[changedID]
 	if entity == nil {

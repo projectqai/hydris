@@ -79,7 +79,7 @@ func serviceSchema() *structpb.Struct {
 			"enable_sensors": map[string]any{
 				"type":        "boolean",
 				"title":       "Enable Sensor Network",
-				"description": "When enabled, creates 32 weather stations around Lake Geneva with hazard sensors",
+				"description": "When enabled, creates a weather sensor network around Lake Geneva with partially degraded RF",
 			},
 			"enable_blue_team": map[string]any{
 				"type":        "boolean",
@@ -499,11 +499,10 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 	if cfg.EnableAIS {
 		logger.Info("playground: AIS enabled, creating stream")
 		aisCfg, _ := structpb.NewStruct(map[string]any{
+			"address":               "153.44.253.27:5631",
 			"entity_expiry_seconds": float64(300),
-			"host":                  "153.44.253.27",
 			"latitude":              53.55,
 			"longitude":             9.93,
-			"port":                  float64(5631),
 		})
 		pushTrackedEntities(ctx, logger, &aisDevices, "nmea", []*pb.Entity{
 			{
@@ -511,7 +510,7 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 				Label: proto.String("AIS Stream Norway"),
 				Device: &pb.DeviceComponent{
 					Parent: proto.String("nmea.service"),
-					Class:  proto.String("stream"),
+					Class:  proto.String("tcp_client"),
 				},
 				Config: &pb.ConfigurationComponent{Value: aisCfg, Version: 1},
 			},
@@ -549,6 +548,7 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 					Parent:   proto.String(serviceEntityID),
 					Class:    proto.String("drone_radar"),
 					Category: proto.String("Missions"),
+					State:    pb.DeviceState_DeviceStateActive,
 				},
 				Geo: &pb.GeoSpatialComponent{
 					Latitude:  51.9555,

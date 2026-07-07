@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -322,7 +323,7 @@ func TestFlushToFile_SkipsNonLocal(t *testing.T) {
 	}
 }
 
-func TestFlushToFile_SkipsNoConfigOrDevice(t *testing.T) {
+func TestFlushToFile_LabelOnlyEntityKeepsIdentity(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "world.yaml")
 
@@ -340,8 +341,9 @@ func TestFlushToFile_SkipsNoConfigOrDevice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(strings.TrimSpace(string(b))) != 0 {
-		t.Error("entity with no config or device should not be persisted")
+	s := string(b)
+	if !strings.Contains(s, "e1") || !strings.Contains(s, "only-label") {
+		t.Errorf("permanent local entity should persist its identity fields, got %q", s)
 	}
 }
 
@@ -505,6 +507,97 @@ func TestFlushToFile_SortsByID(t *testing.T) {
 	zIdx := strings.Index(s, "z-last")
 	if aIdx > zIdx {
 		t.Error("entities should be sorted by ID")
+	}
+}
+
+// The entity-level lifetime is the union of tracked component lifetimes, so a
+// config pushed with a permanent lifetime keeps the whole entity permanent —
+// expiring components pushed next to it must not push the entity out of
+// persistence. This is what lets isPersisted check only the entity lifetime.
+func TestIsPersisted_PermanentConfigOutlivesExpiringComponents(t *testing.T) {
+	w := NewWorldServer()
+	w.nodeID = "n1"
+	ctx := context.Background()
+	now := time.Now()
+
+	configValue, _ := structpb.NewStruct(map[string]interface{}{"channel": float64(5)})
+	if _, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{{
+			Id:       "dev",
+			Config:   &pb.ConfigurationComponent{Value: configValue},
+			Lifetime: &pb.Lifetime{From: timestamppb.New(now)},
+		}},
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{{
+			Id:    "dev",
+			Track: &pb.TrackComponent{},
+			Lifetime: &pb.Lifetime{
+				From:  timestamppb.New(now.Add(time.Second)),
+				Until: timestamppb.New(now.Add(30 * time.Second)),
+			},
+		}},
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	es := w.head["dev"]
+	if es.entity.GetLifetime().GetUntil().IsValid() {
+		t.Fatal("a permanent config must keep the entity-level lifetime infinite")
+	}
+	if !w.isPersisted(es) {
+		t.Error("entity with a permanent config must be persisted")
+	}
+	stub := es.persistableStub()
+	if stub.Config == nil {
+		t.Error("permanent config must survive in the stub")
+	}
+	if stub.Track != nil {
+		t.Error("expiring track must not survive in the stub")
+	}
+}
+
+// A config pushed without any lifetime inherits the entity's lifetime instead
+// of getting its own. On an expiring entity it expires with the entity, so the
+// entity-level until check alone correctly excludes it from persistence.
+func TestIsPersisted_NoLifetimeConfigInheritsEntityExpiry(t *testing.T) {
+	w := NewWorldServer()
+	w.nodeID = "n1"
+	ctx := context.Background()
+	now := time.Now()
+
+	if _, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{{
+			Id:    "conn",
+			Track: &pb.TrackComponent{},
+			Lifetime: &pb.Lifetime{
+				From:  timestamppb.New(now),
+				Until: timestamppb.New(now.Add(30 * time.Second)),
+			},
+		}},
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	configValue, _ := structpb.NewStruct(map[string]interface{}{"key": "val"})
+	if _, err := w.Push(ctx, peerRequest(&pb.EntityChangeRequest{
+		Changes: []*pb.Entity{{
+			Id:     "conn",
+			Config: &pb.ConfigurationComponent{Value: configValue},
+		}},
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	es := w.head["conn"]
+	if !es.entity.GetLifetime().GetUntil().IsValid() {
+		t.Fatal("a no-lifetime config must not make the expiring entity permanent")
+	}
+	if w.isPersisted(es) {
+		t.Error("expiring entity must not be persisted, even though its config never expires on its own")
 	}
 }
 

@@ -1,0 +1,13 @@
+diff --git a/build/index.js b/build/index.js
+index df2a94d12a443ee0a5043cab4ee09b32fa9b0a8f..d272c9f1fcf169c28418d9c3efb2baf8c123e919 100644
+--- a/build/index.js
++++ b/build/index.js
+@@ -81,7 +81,7 @@ function babelPresetExpo(api, options = {}) {
+             (() => {
+                 const presetOpts = { dev: isDev };
+                 if (isDomComponent) {
+-                    return [require('./configs/webview'), presetOpts];
++                    return [require('./configs/web'), presetOpts];
+                 }
+                 else if (isModernEngine) {
+                     return [require('./configs/web'), presetOpts];

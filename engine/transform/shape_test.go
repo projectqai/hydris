@@ -339,24 +339,55 @@ func TestValidate_RejectsLocalShapeWithoutRelativeTo(t *testing.T) {
 	}
 }
 
-func TestValidate_RejectsBothLocalShapeAndGeoShape(t *testing.T) {
+func TestResolve_OverwritesEchoedGeoShape(t *testing.T) {
 	st := NewShapeTransformer()
-	incoming := &pb.Entity{
-		Id: "shape1",
-		LocalShape: &pb.LocalShapeComponent{
-			RelativeTo: "parent1",
-			Geometry: &pb.LocalGeometry{
-				Shape: &pb.LocalGeometry_Point{Point: &pb.LocalPoint{EastM: 0, NorthM: 0}},
+	stale := &pb.GeoShapeComponent{Geometry: &pb.Geometry{}}
+	head := map[string]*pb.Entity{
+		"parent1": {Id: "parent1", Geo: &pb.GeoSpatialComponent{Latitude: 50, Longitude: 7}},
+		"shape1": {
+			Id: "shape1",
+			LocalShape: &pb.LocalShapeComponent{
+				RelativeTo: "parent1",
+				Geometry: &pb.LocalGeometry{
+					Shape: &pb.LocalGeometry_Point{Point: &pb.LocalPoint{EastM: 0, NorthM: 0}},
+				},
 			},
-		},
-		Shape: &pb.GeoShapeComponent{
-			Geometry: &pb.Geometry{},
+			Shape: stale,
 		},
 	}
 
-	err := st.Validate(nil, incoming)
-	if err == nil {
-		t.Fatal("expected validation error for both LocalShapeComponent and GeoShapeComponent")
+	if err := st.Validate(head, head["shape1"]); err != nil {
+		t.Fatalf("echoed engine-managed geo shape must not be rejected, got: %v", err)
+	}
+	st.Resolve(head, "shape1", nil)
+
+	got := head["shape1"].Shape
+	if got == stale {
+		t.Error("echoed geo shape should be replaced by the computed one")
+	}
+	if got == nil || got.Geometry.GetPlanar() == nil {
+		t.Errorf("geo shape should be recomputed from local_shape, got %v", got)
+	}
+}
+
+func TestResolve_ClearsGeoShapeWithoutParent(t *testing.T) {
+	st := NewShapeTransformer()
+	head := map[string]*pb.Entity{
+		"shape1": {
+			Id: "shape1",
+			LocalShape: &pb.LocalShapeComponent{
+				RelativeTo: "missing",
+				Geometry: &pb.LocalGeometry{
+					Shape: &pb.LocalGeometry_Point{Point: &pb.LocalPoint{EastM: 0, NorthM: 0}},
+				},
+			},
+			Shape: &pb.GeoShapeComponent{Geometry: &pb.Geometry{}},
+		},
+	}
+
+	st.Resolve(head, "shape1", nil)
+	if head["shape1"].Shape != nil {
+		t.Error("unresolvable echoed geo shape should be cleared")
 	}
 }
 

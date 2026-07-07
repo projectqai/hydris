@@ -7,4 +7,4 @@ tmp=$(mktemp -d)
 sed "s|url = \".\"|url = \"file://$repo\"|" "$this/copy.bara.sky" > "$tmp/copy.bara.sky"
 trap "rm -rf $tmp" EXIT
 
-../../copybara.sh migrate "$tmp/copy.bara.sky" default
+../../../copybara.sh migrate "$tmp/copy.bara.sky" default

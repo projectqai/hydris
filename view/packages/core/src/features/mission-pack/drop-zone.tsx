@@ -5,6 +5,7 @@ import { Text, View } from "react-native";
 import Animated, { FadeIn, FadeOut, ReduceMotion } from "react-native-reanimated";
 
 import { Z } from "../aware/constants";
+import { uploadMbtiles } from "./upload-mbtiles";
 import { useMissionPack } from "./use-mission-pack";
 
 const IS_WEB = process.env.EXPO_OS === "web";
@@ -42,7 +43,11 @@ export function DropZone() {
       setActive(false);
       const file = e.dataTransfer?.files?.[0];
       if (!file) return;
-      void importPack({ kind: "web", file });
+      if (file.name.toLowerCase().endsWith(".mbtiles")) {
+        void uploadMbtiles({ kind: "web", file });
+      } else {
+        void importPack({ kind: "web", file });
+      }
     };
 
     window.addEventListener("dragenter", onEnter);
@@ -103,10 +108,10 @@ export function DropZone() {
       >
         <Package size={40} color={t.iconStrong} strokeWidth={1.5} aria-hidden />
         <Text className="font-sans-semibold mt-4 text-base" style={{ color: t.foreground }}>
-          Drop mission pack to load
+          Drop file to load
         </Text>
         <Text className="mt-1.5 font-sans text-xs" style={{ color: t.mutedForeground }}>
-          .zip
+          .zip mission pack or .mbtiles map
         </Text>
       </Animated.View>
     </View>

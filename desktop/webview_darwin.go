@@ -75,6 +75,13 @@ func (w *Webview) Destroy() {
 	w.Shutdown()
 }
 
+// ErrorDialog shows a blocking native error dialog. Safe to call before
+// NewWebview; falls back to stderr-only if osascript is unavailable.
+func ErrorDialog(title, message string) {
+	script := fmt.Sprintf("display alert %q message %q as critical", title, message)
+	_ = exec.Command("osascript", "-e", script).Run()
+}
+
 func findShim() string {
 	exe, err := os.Executable()
 	if err == nil {

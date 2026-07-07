@@ -24,6 +24,10 @@ func (t *ImageBboxTransformer) Validate(_ map[string]*pb.Entity, _ *pb.Entity) e
 	return nil
 }
 
+func (t *ImageBboxTransformer) Reindex(_ map[string]*pb.Entity, _ string) {}
+
+func (t *ImageBboxTransformer) Name() string { return "image_bbox" }
+
 func (t *ImageBboxTransformer) Resolve(head map[string]*pb.Entity, changedID string, _ map[int32]meta.Component) (upsert []*pb.Entity, remove []string) {
 	entity := head[changedID]
 	if entity == nil {

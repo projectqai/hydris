@@ -5,19 +5,19 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/projectqai/hydris/pkg/media"
+	"github.com/projectqai/hydris/pkg/onvif"
 )
 
 type ImageProxyHandler struct {
-	getSourceURL media.GetSourceURLFunc
-	client       *http.Client
+	client *http.Client
 }
 
-func NewImageProxyHandler(getSourceURL media.GetSourceURLFunc) *ImageProxyHandler {
+func NewImageProxyHandler() *ImageProxyHandler {
 	return &ImageProxyHandler{
-		getSourceURL: getSourceURL,
 		client: &http.Client{
 			Transport: &http.Transport{
 				ResponseHeaderTimeout: 10 * time.Second,
@@ -44,10 +44,7 @@ func (h *ImageProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	imageURL := h.getSourceURL(entityID, cameraIndex)
-	if imageURL == "" {
-		imageURL = entity.Camera.Streams[cameraIndex].Url
-	}
+	imageURL := entity.Camera.Streams[cameraIndex].Url
 	if imageURL == "" {
 		http.Error(w, "stream has no URL", http.StatusNotFound)
 		return
@@ -58,14 +55,19 @@ func (h *ImageProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		imageURL = base.String()
 	}
 
+	var user, pass string
+	if u, err := url.Parse(imageURL); err == nil && u.User != nil {
+		user = u.User.Username()
+		pass, _ = u.User.Password()
+	}
+
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, imageURL, nil)
 	if err != nil {
 		http.Error(w, "invalid image URL", http.StatusBadRequest)
 		return
 	}
-	if u, err := url.Parse(imageURL); err == nil && u.User != nil {
-		pass, _ := u.User.Password()
-		req.SetBasicAuth(u.User.Username(), pass)
+	if user != "" {
+		req.SetBasicAuth(user, pass)
 	}
 
 	resp, err := h.client.Do(req)
@@ -74,9 +76,29 @@ func (h *ImageProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to fetch image", http.StatusBadGateway)
 		return
 	}
+
+	if resp.StatusCode == http.StatusUnauthorized && user != "" {
+		wwwAuth := resp.Header.Get("WWW-Authenticate")
+		resp.Body.Close()
+		if strings.HasPrefix(strings.ToLower(wwwAuth), "digest") {
+			req, err = http.NewRequestWithContext(r.Context(), http.MethodGet, imageURL, nil)
+			if err != nil {
+				http.Error(w, "invalid image URL", http.StatusBadRequest)
+				return
+			}
+			req.Header.Set("Authorization", onvif.DigestAuthHeader("GET", imageURL, user, pass, wwwAuth))
+			resp, err = h.client.Do(req)
+			if err != nil {
+				slog.Debug("image proxy: digest retry failed", "url", imageURL, "entity", entityID, "error", err)
+				http.Error(w, "failed to fetch image", http.StatusBadGateway)
+				return
+			}
+		}
+	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		slog.Warn("image proxy: upstream error", "status", resp.Status, "url", imageURL, "entity", entityID)
 		http.Error(w, "upstream returned "+resp.Status, http.StatusBadGateway)
 		return
 	}

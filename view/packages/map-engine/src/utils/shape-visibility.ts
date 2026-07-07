@@ -3,7 +3,8 @@ import type { Affiliation, EntityData, EntityFilter } from "../types";
 export type ShapeVisibilityContext = {
   coverageShapeIds: Set<string>;
   assemblyOutlineIds: Set<string>;
-  expandedAssemblyOutlineIds: Set<string>;
+  visibleAssemblyOutlineIds: Set<string>;
+  trackShapeIds: Set<string>;
   filter: EntityFilter;
   selectedId: string | null;
   selectedTrackShapeIds: Set<string>;
@@ -19,13 +20,14 @@ export function isShapeVisible(
   ctx: ShapeVisibilityContext,
 ): boolean {
   if (ctx.coverageShapeIds.has(shapeId)) return false;
-  if (ctx.assemblyOutlineIds.has(shapeId)) return ctx.expandedAssemblyOutlineIds.has(shapeId);
+  // an outline follows its root's visibility, not the shape toggles
+  if (ctx.assemblyOutlineIds.has(shapeId)) return ctx.visibleAssemblyOutlineIds.has(shapeId);
   if (!ctx.filter.tracks[affiliation]) return false;
   if (shapeId === ctx.selectedId) return true;
 
   const entity = ctx.entityMap.get(shapeId);
   if (entity?.isDetection) return ctx.detectionsVisible;
-  if (!entity?.label) {
+  if (ctx.trackShapeIds.has(shapeId)) {
     return ctx.trackHistoryVisible || ctx.selectedTrackShapeIds.has(shapeId);
   }
   return ctx.shapesVisible;

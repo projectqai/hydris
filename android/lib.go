@@ -21,8 +21,6 @@ import (
 	"github.com/projectqai/hydris/view"
 	pb "github.com/projectqai/proto/go"
 	"github.com/rs/cors"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 const (
@@ -139,9 +137,13 @@ func StartEngine() string {
 		AllowedHeaders: []string{"*"},
 	})
 
+	var protos http.Protocols
+	protos.SetHTTP1(true)
+	protos.SetUnencryptedHTTP2(true)
 	service.server = &http.Server{
-		Addr:    listenAddr,
-		Handler: h2c.NewHandler(corsHandler.Handler(mux), &http2.Server{}),
+		Addr:      listenAddr,
+		Handler:   corsHandler.Handler(mux),
+		Protocols: &protos,
 	}
 
 	go func() {
@@ -151,10 +153,8 @@ func StartEngine() string {
 		}
 	}()
 
-	// Start in-process server for builtin services (uses bufconn)
-	service.builtinServer = &http.Server{
-		Handler: h2c.NewHandler(mux, &http2.Server{}),
-	}
+	// Start in-process server for builtin services (uses bufconn).
+	service.builtinServer = engine.NewBuiltinServer(mux)
 	go func() {
 		slog.Info("starting builtin server")
 		if err := service.builtinServer.Serve(builtin.GetBuiltinListener()); err != nil && err != http.ErrServerClosed {
@@ -165,8 +165,9 @@ func StartEngine() string {
 	time.Sleep(100 * time.Millisecond)
 	globalService = service
 
-	// Start all builtin controllers
-	// Note: most builtins use bufconn (BuiltinClientConn), but tak/federation use TCP to serverAddr
+	// Start all builtin controllers. Builtins talk to the engine over the
+	// bufconn builtin server (BuiltinClientConn); serverAddr is only used by
+	// any builtin that still dials TCP directly.
 	builtin.StartAll(ctx, serverAddr)
 	slog.Info("builtins started")
 

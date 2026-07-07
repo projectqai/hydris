@@ -18,6 +18,7 @@ import {
   Columns,
   Replace,
   Rows,
+  Video,
   X,
 } from "lucide-react-native";
 import { useCallback, useContext } from "react";
@@ -78,14 +79,29 @@ function UnknownWidget({ id }: { id: string }) {
   );
 }
 
-function CameraPane({ entityId }: { entityId: string }) {
+function CameraPane({ entityId }: { entityId?: string }) {
   const t = useThemeColors();
   const { onPin } = usePaneEntity();
-  const entity = useEntityStore((s) => s.entities.get(entityId));
-  const name = entity ? getEntityName(entity) : entityId;
+  const entity = useEntityStore((s) => (entityId ? s.entities.get(entityId) : undefined));
+  const name = entity ? getEntityName(entity) : undefined;
   const stream = entity?.camera?.streams?.[0];
-  const resolved = stream ? resolveStreamUrl(stream, entityId, 0) : null;
+  const resolved = stream && entityId ? resolveStreamUrl(stream, entityId, 0) : null;
   const { scale, onLayout } = useMeasuredScale();
+
+  if (!entityId) {
+    return (
+      <View className="flex-1 p-3" style={{ backgroundColor: t.background }}>
+        {onPin && (
+          <View className="flex-row justify-end">
+            <PinButton pinned={false} onPress={onPin} size={18} />
+          </View>
+        )}
+        <View className="flex-1">
+          <EmptyState icon={Video} title="Camera" subtitle="Pin a camera to view its feed" />
+        </View>
+      </View>
+    );
+  }
 
   const pin = onPin ? (
     <View style={{ position: "absolute", top: 8, right: 8, zIndex: 5 }}>
@@ -102,8 +118,10 @@ function CameraPane({ entityId }: { entityId: string }) {
         className="flex-1 items-center justify-center"
         style={{ backgroundColor: t.background }}
       >
-        <Text className="text-on-surface/70 font-sans text-sm">{name}</Text>
-        <Text className="text-on-surface/70 mt-1 font-sans text-xs">No feed available</Text>
+        <Text className="text-on-surface/70 font-sans text-sm">{name ?? "Camera"}</Text>
+        <Text className="text-on-surface/70 mt-1 font-sans text-xs">
+          {entity ? "No feed available" : "Pinned camera unavailable"}
+        </Text>
         {pin}
       </View>
     );
@@ -263,8 +281,7 @@ export function PaneShell({
 
   const renderContent = () => {
     if (content.type === "camera") return <CameraPane entityId={content.entityId} />;
-    if (content.type === "sensor")
-      return <SensorPane entityId={content.entityId} widgetId={content.widgetId} />;
+    if (content.type === "sensor") return <SensorPane entityId={content.entityId} />;
     if (content.type === "iframe") return <IframePane url={content.url} />;
     if (content.type === "empty") {
       if (content.missingWidgetId) return <UnknownWidget id={content.missingWidgetId} />;

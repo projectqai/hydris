@@ -1,4 +1,23 @@
-import { DeviceState, LinkStatus } from "@projectqai/proto/world";
+import { ConfigurableState, DeviceState, LinkStatus } from "@projectqai/proto/world";
+
+export function formatConfigurableState(state: ConfigurableState) {
+  switch (state) {
+    case ConfigurableState.ConfigurableStateActive:
+      return { label: "Active", className: "text-success-foreground" };
+    case ConfigurableState.ConfigurableStateScheduled:
+      return { label: "Scheduled", className: "text-success-foreground" };
+    case ConfigurableState.ConfigurableStateStarting:
+      return { label: "Starting", className: "text-pending-foreground" };
+    case ConfigurableState.ConfigurableStateFailed:
+      return { label: "Failed", className: "text-red-foreground" };
+    case ConfigurableState.ConfigurableStateConflict:
+      return { label: "Conflict", className: "text-red-foreground" };
+    case ConfigurableState.ConfigurableStateInactive:
+      return { label: "Inactive", className: "text-muted-foreground" };
+    default:
+      return { label: "Unknown", className: "text-muted-foreground" };
+  }
+}
 
 export function formatDeviceState(state: DeviceState) {
   switch (state) {
@@ -6,6 +25,8 @@ export function formatDeviceState(state: DeviceState) {
       return { label: "Active", className: "text-success-foreground" };
     case DeviceState.DeviceStatePending:
       return { label: "Pending", className: "text-pending-foreground" };
+    case DeviceState.DeviceStateDegraded:
+      return { label: "Degraded", className: "text-pending-foreground" };
     case DeviceState.DeviceStateFailed:
       return { label: "Failed", className: "text-red-foreground" };
     default:

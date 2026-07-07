@@ -8,6 +8,7 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from "react-nativ
 
 import { useThemeColors } from "../lib/theme";
 import { cn } from "../lib/utils";
+import { useIsScreenLocked } from "../screen-lock";
 
 const TRACK_H = 6;
 const THUMB_SIZE = 24;
@@ -53,6 +54,7 @@ export function ControlSlider({
   const thumbSize = compact ? COMPACT_THUMB_SIZE : THUMB_SIZE;
   const thumbRadius = compact ? COMPACT_THUMB_RADIUS : THUMB_RADIUS;
   const t = useThemeColors();
+  const isScreenLocked = useIsScreenLocked();
   const range = max - min || 1;
   const trackWidth = useSharedValue(0);
   const thumbRatio = useSharedValue(clamp((value - min) / range, 0, 1));
@@ -83,7 +85,7 @@ export function ControlSlider({
   );
 
   const panGesture = Gesture.Pan()
-    .enabled(!readOnly)
+    .enabled(!readOnly && !isScreenLocked)
     .hitSlop({ top: 12, bottom: 12 })
     .minDistance(0)
     .onStart(() => {
@@ -105,7 +107,7 @@ export function ControlSlider({
     });
 
   const tapGesture = Gesture.Tap()
-    .enabled(!readOnly)
+    .enabled(!readOnly && !isScreenLocked)
     .onEnd((e) => {
       "worklet";
       const travel = trackWidth.value - thumbSize;

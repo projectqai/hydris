@@ -30,19 +30,15 @@ import (
 // GetStreamsFunc returns the camera streams for an entity, or nil if not found.
 type GetStreamsFunc func(entityID string) []*pb.MediaStream
 
-// GetSourceURLFunc returns the original source URL for a camera stream.
-type GetSourceURLFunc func(entityID string, streamIndex int) string
-
 // RTSPServer relays camera streams from entities as an RTSP server.
 // Clients connect to rtsp://host:port/media/rtsp/{entityId}/{cameraIndex}.
 // Supports both RTSP sources (direct relay) and HTTP MJPEG sources
 // (fetches MJPEG, packetizes as RTP/JPEG).
 type RTSPServer struct {
-	getStreams      GetStreamsFunc
-	getSourceURL    GetSourceURLFunc
-	bridges         *BridgeManager
-	server          *gortsplib.Server
-	isRemoteAllowed func() bool
+	getStreams  GetStreamsFunc
+	bridges     *BridgeManager
+	server      *gortsplib.Server
+	checkAccess func(remoteAddr string) bool
 
 	mu       sync.Mutex
 	streams  map[string]*rtspStreamState         // keyed by "entityId/cameraIndex"
@@ -59,15 +55,15 @@ type rtspStreamState struct {
 }
 
 // NewRTSPServer creates an RTSP relay server.
-// isRemoteAllowed is called on each connection to check if non-loopback access is permitted.
-func NewRTSPServer(getStreams GetStreamsFunc, getSourceURL GetSourceURLFunc, bridges *BridgeManager, isRemoteAllowed func() bool) *RTSPServer {
+// checkAccess is called per connection with the client's remote address to
+// decide whether access is permitted (policy evaluation).
+func NewRTSPServer(getStreams GetStreamsFunc, bridges *BridgeManager, checkAccess func(remoteAddr string) bool) *RTSPServer {
 	return &RTSPServer{
-		getStreams:      getStreams,
-		getSourceURL:    getSourceURL,
-		bridges:         bridges,
-		isRemoteAllowed: isRemoteAllowed,
-		streams:         make(map[string]*rtspStreamState),
-		sessions:        make(map[*gortsplib.ServerSession]string),
+		getStreams:  getStreams,
+		bridges:     bridges,
+		checkAccess: checkAccess,
+		streams:     make(map[string]*rtspStreamState),
+		sessions:    make(map[*gortsplib.ServerSession]string),
 	}
 }
 
@@ -81,15 +77,33 @@ func (rs *RTSPServer) Start(ln net.Listener) error {
 		rtpPort++
 	}
 
-	rs.server = &gortsplib.Server{
-		Handler:        rs,
-		RTSPAddress:    addr.String(),
-		UDPRTPAddress:  fmt.Sprintf(":%d", rtpPort),
-		UDPRTCPAddress: fmt.Sprintf(":%d", rtpPort+1),
-		Listen: func(_, _ string) (net.Listener, error) {
-			return ln, nil
-		},
+	newServer := func(rtpAddr, rtcpAddr string) *gortsplib.Server {
+		return &gortsplib.Server{
+			Handler:        rs,
+			RTSPAddress:    addr.String(),
+			UDPRTPAddress:  rtpAddr,
+			UDPRTCPAddress: rtcpAddr,
+			Listen: func(_, _ string) (net.Listener, error) {
+				return ln, nil
+			},
+		}
 	}
+
+	rs.server = newServer(fmt.Sprintf(":%d", rtpPort), fmt.Sprintf(":%d", rtpPort+1))
+	err := rs.server.Start()
+	if err == nil {
+		return nil
+	}
+
+	// UDP transport is optional: the RTP/RTCP ports may be taken by another
+	// app, and Wine fails all UDP binds outright (it doesn't implement the
+	// SIO_UDP_CONNRESET ioctl Go issues on UDP sockets). gortsplib binds its
+	// UDP listeners before calling Listen for the TCP listener, so a failed
+	// Start never consumed ln and we can retry TCP-interleaved only. A fresh
+	// Server is required: the failed Start leaves stale state behind (e.g. a
+	// closed-but-non-nil UDP listener, which sessions use to offer UDP).
+	slog.Warn("rtsp: UDP RTP/RTCP unavailable; serving TCP-interleaved only", "error", err)
+	rs.server = newServer("", "")
 	return rs.server.Start()
 }
 
@@ -111,9 +125,6 @@ func (rs *RTSPServer) closeStreamLocked(st *rtspStreamState) {
 	}
 	if st.cancel != nil {
 		st.cancel()
-	}
-	if st.stream != nil {
-		st.stream.Close()
 	}
 }
 
@@ -188,10 +199,7 @@ func (rs *RTSPServer) getOrCreateStream(entityID string, cameraIndex int) (*rtsp
 	}
 	stream := streams[cameraIndex]
 
-	sourceURL := rs.getSourceURL(entityID, cameraIndex)
-	if sourceURL == "" {
-		sourceURL = stream.Url
-	}
+	sourceURL := stream.Url
 	if sourceURL == "" {
 		return nil, fmt.Errorf("camera has no URL")
 	}
@@ -320,7 +328,10 @@ func (rs *RTSPServer) createV4L2Relay(key, sourceURL string) (*rtspStreamState, 
 		key:       key,
 		sourceURL: sourceURL,
 		stream:    serverStream,
-		cancel:    func() { bridge.OffRTP(tapKey) },
+		cancel: func() {
+			bridge.OffRTP(tapKey)
+			serverStream.Close()
+		},
 	}
 
 	rs.mu.Lock()
@@ -814,16 +825,16 @@ func (rs *RTSPServer) reencodeAndPack(frame []byte, encoder *rtpmjpeg.Encoder) (
 	return encoder.Encode(buf.Bytes())
 }
 
-// OnConnOpen rejects non-loopback connections when remote sharing is disabled.
+// OnConnOpen rejects connections the access policy denies for the client's
+// remote address.
 func (rs *RTSPServer) OnConnOpen(ctx *gortsplib.ServerHandlerOnConnOpenCtx) {
-	if rs.isRemoteAllowed != nil && !rs.isRemoteAllowed() {
-		addr := ctx.Conn.NetConn().RemoteAddr().String()
-		host, _, _ := net.SplitHostPort(addr)
-		ip := net.ParseIP(host)
-		if ip != nil && !ip.IsLoopback() {
-			slog.Debug("rtsp relay: rejecting remote connection", "addr", addr)
-			ctx.Conn.Close()
-		}
+	if rs.checkAccess == nil {
+		return
+	}
+	addr := ctx.Conn.NetConn().RemoteAddr().String()
+	if !rs.checkAccess(addr) {
+		slog.Debug("rtsp relay: rejecting connection denied by policy", "addr", addr)
+		ctx.Conn.Close()
 	}
 }
 

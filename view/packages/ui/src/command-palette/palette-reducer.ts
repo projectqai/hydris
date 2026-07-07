@@ -6,10 +6,12 @@ export type PaletteMode =
   | { kind: "dimension"; dimension: string; dimensionLabel: string; category: Category }
   | { kind: "entity-actions"; entityId: string; entityLabel: string }
   | { kind: "location-search" }
-  | { kind: "config"; entityId?: string }
+  | { kind: "config"; entityId?: string; focusCategory?: string }
+  | { kind: "asset-readiness" }
   | { kind: "command-group"; groupId: string; groupLabel: string; initialCommandId?: string }
   | { kind: "mission-health" }
-  | { kind: "diagnostic-export" };
+  | { kind: "diagnostic-export" }
+  | { kind: "mission-export" };
 
 export type PaletteState = {
   stack: PaletteMode[];

@@ -4,7 +4,9 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"io"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -16,19 +18,29 @@ import (
 	"github.com/rs/cors"
 
 	"github.com/projectqai/hydris/goclient"
+	"github.com/projectqai/hydris/pkg/media"
 	"github.com/projectqai/hydris/pkg/version"
 	"github.com/projectqai/hydris/view"
 )
 
 // proxyHandler serves embedded UI static files locally and proxies
-// everything else to the remote server.
+// everything else to the remote server. WHEP requests are intercepted
+// and handled locally: the proxy connects to the remote's RTSP relay
+// through the tunnel and bridges it to a local WebRTC peer connection.
 type proxyHandler struct {
 	staticFS   http.FileSystem
 	fileServer http.Handler
 	proxy      *httputil.ReverseProxy
+	bridges    *media.BridgeManager
+	remoteAddr string
 }
 
 func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/media/whep/") {
+		h.handleWHEP(w, r)
+		return
+	}
+
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		h.proxy.ServeHTTP(w, r)
 		return
@@ -56,7 +68,48 @@ func (h *proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.proxy.ServeHTTP(w, r)
 }
 
-func newProxyHandler(distFS embed.FS, proxy *httputil.ReverseProxy) (*proxyHandler, error) {
+func (h *proxyHandler) handleWHEP(w http.ResponseWriter, r *http.Request) {
+	entityID := strings.TrimPrefix(r.URL.Path, "/media/whep/")
+	if entityID == "" {
+		http.Error(w, "missing entity ID", http.StatusBadRequest)
+		return
+	}
+
+	streamParam := r.URL.Query().Get("stream")
+	if streamParam == "" {
+		streamParam = "0"
+	}
+
+	offerSDP, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "failed to read offer", http.StatusBadRequest)
+		return
+	}
+
+	rtspURL := fmt.Sprintf("rtsp://%s/media/rtsp/%s?stream=%s", h.remoteAddr, entityID, streamParam)
+	bridgeKey := entityID + "/" + streamParam
+
+	bridge, err := h.bridges.GetOrCreate(bridgeKey, rtspURL)
+	if err != nil {
+		slog.Error("proxy whep: failed to create bridge", "entity", entityID, "url", rtspURL, "error", err)
+		http.Error(w, "failed to connect to camera", http.StatusBadGateway)
+		return
+	}
+
+	answerSDP, err := bridge.AddPeer(string(offerSDP))
+	if err != nil {
+		slog.Error("proxy whep: failed to add peer", "key", bridgeKey, "error", err)
+		http.Error(w, "WebRTC negotiation failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/sdp")
+	w.Header().Set("Location", r.URL.String())
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write([]byte(answerSDP))
+}
+
+func newProxyHandler(distFS embed.FS, proxy *httputil.ReverseProxy, bridges *media.BridgeManager, remoteAddr string) (*proxyHandler, error) {
 	sub, err := fs.Sub(distFS, "apps/foss/build")
 	if err != nil {
 		return nil, err
@@ -66,6 +119,8 @@ func newProxyHandler(distFS embed.FS, proxy *httputil.ReverseProxy) (*proxyHandl
 		staticFS:   fsys,
 		fileServer: http.FileServer(fsys),
 		proxy:      proxy,
+		bridges:    bridges,
+		remoteAddr: remoteAddr,
 	}, nil
 }
 
@@ -77,15 +132,23 @@ func StartProxyServer(server, wgConfigPath string) (listenAddr string, err error
 	targetURL := &url.URL{Scheme: "http", Host: remoteAddr}
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 
-	transport := &http.Transport{}
+	var dialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 	if tunnel != nil {
-		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return tunnel.Dial(ctx, addr)
 		}
 	}
+
+	transport := &http.Transport{}
+	if dialContext != nil {
+		transport.DialContext = dialContext
+	}
 	proxy.Transport = transport
 
-	handler, err := newProxyHandler(view.Dist, proxy)
+	bridges := media.NewBridgeManager()
+	bridges.DialContext = dialContext
+
+	handler, err := newProxyHandler(view.Dist, proxy, bridges, remoteAddr)
 	if err != nil {
 		return "", fmt.Errorf("failed to create proxy handler: %w", err)
 	}

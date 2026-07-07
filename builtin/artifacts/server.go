@@ -91,9 +91,9 @@ func (s *ArtifactServer) DownloadArtifact(
 
 	// Stream blob data if available locally.
 	store := s.getStore()
-	rc, err := store.Get(ctx, art.Id)
+	rc, err := store.Get(ctx, art.Id) //nolint:staticcheck // SA1019: Artifact.Id migration pending
 	if err != nil && store != s.local {
-		rc, err = s.local.Get(ctx, art.Id)
+		rc, err = s.local.Get(ctx, art.Id) //nolint:staticcheck // SA1019: Artifact.Id migration pending
 	}
 	if err != nil {
 		if len(art.Location) > 0 {
@@ -155,41 +155,44 @@ func (s *ArtifactServer) UploadArtifact(
 		return nil, err
 	}
 
-	if err := s.WriteArtifact(ctx, entityID, &buf); err != nil {
+	if _, err := s.WriteArtifact(ctx, entityID, &buf); err != nil {
 		return nil, err
 	}
 	return connect.NewResponse(&pb.UploadArtifactResponse{}), nil
 }
 
 // WriteArtifact stores body as the payload of entityID's artifact component
-// and updates the entity's sha256 and size. Shared by the gRPC UploadArtifact
-// handler and the HTTP POST /artifacts/{id} handler.
-func (s *ArtifactServer) WriteArtifact(ctx context.Context, entityID string, body io.Reader) error {
+// and updates the entity's sha256 and size, returning the content type. Shared
+// by the gRPC UploadArtifact handler and the HTTP POST /artifacts/{id} handler.
+func (s *ArtifactServer) WriteArtifact(ctx context.Context, entityID string, body io.Reader) (string, error) {
 	resp, err := s.world.GetEntity(ctx, &pb.GetEntityRequest{Id: entityID})
 	if err != nil {
-		return connect.NewError(connect.CodeNotFound, fmt.Errorf("entity not found: %w", err))
+		return "", connect.NewError(connect.CodeNotFound, fmt.Errorf("entity not found: %w", err))
 	}
 	if resp.Entity == nil || resp.Entity.Artifact == nil {
-		return connect.NewError(connect.CodeNotFound, fmt.Errorf("entity %s has no artifact component", entityID))
+		return "", connect.NewError(connect.CodeNotFound, fmt.Errorf("entity %s has no artifact component", entityID))
 	}
-	artID := resp.Entity.Artifact.Id
+	existing := resp.Entity.Artifact
+	artID := existing.Id //nolint:staticcheck // SA1019: Artifact.Id migration pending
 
 	hw := &hashSizeWriter{h: sha256.New()}
 	if err := s.getStore().Put(ctx, artID, io.TeeReader(body, hw)); err != nil {
-		return connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("store artifact: %w", err))
+		return "", connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("store artifact: %w", err))
 	}
 
 	sum := hex.EncodeToString(hw.h.Sum(nil))
 	size := hw.n
+	// Component merge replaces the whole Artifact component, so carry the
+	// content type set at entity creation forward with the blob metadata.
 	if _, err := s.world.Push(ctx, &pb.EntityChangeRequest{
 		Changes: []*pb.Entity{{
 			Id:       entityID,
-			Artifact: &pb.ArtifactComponent{Id: artID, Sha256: &sum, SizeBytes: &size},
+			Artifact: &pb.ArtifactComponent{Id: artID, ContentType: existing.ContentType, Sha256: &sum, SizeBytes: &size}, //nolint:staticcheck // SA1019: Artifact.Id migration pending
 		}},
 	}); err != nil {
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("update artifact metadata: %w", err))
+		return "", connect.NewError(connect.CodeInternal, fmt.Errorf("update artifact metadata: %w", err))
 	}
-	return nil
+	return existing.ContentType, nil
 }
 
 type hashSizeWriter struct {
