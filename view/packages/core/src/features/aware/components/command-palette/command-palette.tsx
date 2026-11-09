@@ -5,20 +5,23 @@ import {
   currentMode,
   initialPaletteState,
   type PaletteAction,
-  type PaletteMode,
   paletteReducer,
   type PaletteState,
+  paletteStateAt,
 } from "@hydris/ui/command-palette/palette-reducer";
 import { clearSavedHighlights } from "@hydris/ui/command-palette/use-list-nav";
+import { useNativeModalBox, usePhoneModalFrame } from "@hydris/ui/hooks/use-phone-modal-frame";
 import { useKeyboardShortcut } from "@hydris/ui/keyboard";
+import { KeyboardLayer } from "@hydris/ui/keyboard/keyboard-layer";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
-import { ArrowLeft, ChevronRight, PanelLeft, Search, X } from "lucide-react-native";
+import { ArrowLeft, ChevronRight, PanelLeft, Search, Settings, X } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   useWindowDimensions,
@@ -35,45 +38,24 @@ import Animated, {
 
 import { toast } from "../../../../lib/sonner";
 import { useFilePicker } from "../../../../lib/use-file-picker";
-import { useMissionHealthStore } from "../../../mission-pack/mission-health-store";
+import { awaitsSetup } from "../../../mission/sources";
 import { uploadMbtiles } from "../../../mission-pack/upload-mbtiles";
 import { useMissionPack } from "../../../mission-pack/use-mission-pack";
 import { Z } from "../../constants";
+import { useEntityStore } from "../../store/entity-store";
 import { useVersionLabel } from "../../store/version-store";
+import { BarIconButton } from "./bar-icon-button";
 import { buildCommands, type LayoutActions } from "./command-registry";
-import { CATEGORIES, getTrailSegments, type TrailSegment } from "./palette-helpers";
-import { AssetReadinessView } from "./views/asset-readiness-view";
-import { CommandGroupView } from "./views/command-group-view";
-import { ConfigView } from "./views/config-view";
-import { DiagnosticExportView } from "./views/diagnostic-export-view";
-import { DimensionView } from "./views/dimension-view";
-import { EntityActionsView } from "./views/entity-actions-view";
-import { LocationSearchView } from "./views/location-search-view";
-import { MissionExportView } from "./views/mission-export-view";
-import { MissionHealthView } from "./views/mission-health-view";
-import { RootView } from "./views/root-view";
+import { CATEGORIES } from "./palette-helpers";
+import { getScreen, getTrailSegments, type TrailSegment } from "./palette-screens";
+import { onNextFrame, STACK_SCALE, StackedWindow } from "./stacked-window";
 
-function getSearchPlaceholder(mode: PaletteMode): string | null {
-  switch (mode.kind) {
-    case "root":
-      return "Search entities, commands...";
-    case "dimension":
-      return `Search ${mode.dimensionLabel}...`;
-    case "location-search":
-      return "Search address or place...";
-    case "config":
-      return "Search by id or name...";
-    case "command-group":
-      return `Search ${mode.groupLabel.toLowerCase()}...`;
-    case "asset-readiness":
-      return "Search assets...";
-    case "mission-health":
-    case "diagnostic-export":
-    case "mission-export":
-      return null;
-    default:
-      return null;
-  }
+const STACK_PEEK = 12;
+
+const STACK_DIM = 0.5;
+
+function SegmentLabel({ label, liveLabel }: TrailSegment) {
+  return useEntityStore((s) => liveLabel?.(s)) ?? label;
 }
 
 function TrailBar({
@@ -92,22 +74,32 @@ function TrailBar({
       {segments.map((seg, i) => {
         const isLast = i === segments.length - 1;
         return (
-          <View key={seg.index} className="flex-row items-center gap-0.5">
-            {i > 0 && <ChevronRight size={10} strokeWidth={2} color={t.iconMuted} />}
+          <View
+            key={seg.index}
+            className={cn(
+              "min-w-0 flex-row items-center gap-0.5",
+              isLast ? "flex-1" : "max-w-[40%] shrink",
+            )}
+          >
+            {i > 0 && (
+              <View className="shrink-0">
+                <ChevronRight size={10} strokeWidth={2} color={t.iconMuted} />
+              </View>
+            )}
             {isLast ? (
-              <View className="px-1.5 py-0.5">
+              <View className="min-w-0 shrink px-1.5 py-0.5">
                 <Text className="font-sans-medium text-foreground/90 text-xs" numberOfLines={1}>
-                  {seg.label}
+                  <SegmentLabel {...seg} />
                 </Text>
               </View>
             ) : (
               <Pressable
                 onPress={() => dispatch({ type: "popTo", index: seg.index })}
                 tabIndex={-1}
-                className="hover:bg-glass-hover active:bg-glass-active rounded px-1.5 py-0.5"
+                className="hover:bg-glass-hover active:bg-glass-active min-w-0 shrink rounded px-1.5 py-0.5"
               >
                 <Text className="font-sans-medium text-muted-foreground text-xs" numberOfLines={1}>
-                  {seg.label}
+                  <SegmentLabel {...seg} />
                 </Text>
               </Pressable>
             )}
@@ -142,69 +134,88 @@ function VersionFooter() {
 
 export function CommandPalette({
   onClose,
-  initialMode,
+  onReopen,
+  initialState = initialPaletteState,
   layoutActions,
 }: {
   onClose: () => void;
-  initialMode?: PaletteMode;
+  onReopen: (state: PaletteState) => void;
+  initialState?: PaletteState;
   layoutActions: LayoutActions;
 }) {
   const t = useThemeColors();
-  const [state, dispatch] = useReducer(
-    paletteReducer,
-    initialMode,
-    (mode): PaletteState =>
-      mode && mode.kind !== "root"
-        ? { ...initialPaletteState, stack: [mode], queryStack: [""] }
-        : initialPaletteState,
-  );
+  const [paletteState, dispatch] = useReducer(paletteReducer, initialState);
+  const stateRef = useRef(paletteState);
+  stateRef.current = paletteState;
   const inputRef = useRef<TextInput>(null);
+  const behindRef = useRef<View>(null);
   const previousFocusRef = useRef(
     typeof document !== "undefined" ? (document.activeElement as HTMLElement) : null,
   );
+
+  const top = currentMode(paletteState);
+  const stacked = getScreen(top).layout === "wizard" ? top : undefined;
+  const state = stacked ? paletteReducer(paletteState, { type: "pop" }) : paletteState;
   const mode = currentMode(state);
+  const screen = getScreen(mode);
 
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
 
-  const isCompact = windowWidth < 640;
+  const isNative = Platform.OS !== "web";
+  const phoneFrame = usePhoneModalFrame();
+  const nativeBox = useNativeModalBox();
+  const isCompact = phoneFrame !== undefined || windowWidth < 640;
   // dock decision keys off the modal's content width, not the raw window width.
   const configMaxWidth = Math.min(1600, windowWidth * 0.98);
   const isWide = canDockListDetail(configMaxWidth);
-  const isConfigMode = mode.kind === "config";
   const configEntityId = mode.kind === "config" ? mode.entityId : undefined;
-  const isListDetailMode = isConfigMode || mode.kind === "asset-readiness";
+  const isListDetailMode = screen.layout === "list-detail";
 
-  const [treeOpen, setTreeOpen] = useState(
-    () => isWide || !(initialMode?.kind === "config" ? initialMode.entityId : undefined),
-  );
-  // only the top-of-stack view stays mounted, so its local state is dropped on
-  // push. the selected asset is kept here to survive navigating away and back.
-  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const [treeOpen, setTreeOpen] = useState(() => isWide || !configEntityId);
 
   useEffect(() => {
     if (isListDetailMode) setTreeOpen(isWide || !configEntityId);
   }, [isListDetailMode, configEntityId, isWide]);
 
-  let normalMaxWidth = 560;
-  if (isCompact) normalMaxWidth = windowWidth - 16;
-  else if (windowWidth >= 1536) normalMaxWidth = 800;
-  else if (windowWidth >= 1280) normalMaxWidth = 720;
-
-  const normalMarginTop = isCompact ? 8 : windowHeight * 0.1;
-  const configMarginTop = isCompact ? 8 : windowHeight * 0.02;
-
-  const normalMaxHeight = isCompact ? windowHeight * 0.9 : windowHeight * 0.7;
-  const configMaxHeight = isCompact ? windowHeight * 0.9 : windowHeight * 0.94;
-
   const showFooter = Platform.OS === "web" && !isCompact;
   const chromeHeight = showFooter ? 142 : 94;
-  const contentHeight = Math.min(440, Math.max(200, normalMaxHeight - chromeHeight));
-  const normalDialogHeight = contentHeight + chromeHeight;
+
+  let normalMaxWidth = 560;
+  let normalDialogHeight: number;
+  let normalMarginTop = windowHeight * 0.1;
+
+  if (phoneFrame) {
+    normalMaxWidth = phoneFrame.width;
+    normalDialogHeight = phoneFrame.height;
+    normalMarginTop = phoneFrame.edge;
+  } else if (isNative) {
+    normalMaxWidth = nativeBox.width;
+    normalDialogHeight = nativeBox.height;
+    normalMarginTop = (windowHeight - nativeBox.height) / 2;
+  } else if (isCompact) {
+    normalMaxWidth = windowWidth - 16;
+    normalDialogHeight = windowHeight - 16;
+    normalMarginTop = 8;
+  } else {
+    if (windowWidth >= 1536) normalMaxWidth = 800;
+    else if (windowWidth >= 1280) normalMaxWidth = 720;
+
+    normalDialogHeight =
+      Math.min(440, Math.max(200, windowHeight * 0.7 - chromeHeight)) + chromeHeight;
+  }
+
+  const contentHeight = normalDialogHeight - chromeHeight;
+  const configMarginTop = isCompact ? 8 : windowHeight * 0.02;
+  const configMaxHeight = isCompact ? windowHeight - 16 : windowHeight * 0.94;
 
   const configProgress = useSharedValue(0);
-  useEffect(() => {
-    configProgress.value = withTiming(isListDetailMode ? 1 : 0, { duration: 280 });
-  }, [isListDetailMode]);
+  useEffect(
+    () =>
+      onNextFrame(() => {
+        configProgress.value = withTiming(isListDetailMode ? 1 : 0, { duration: 280 });
+      }),
+    [isListDetailMode],
+  );
 
   const dialogAnimatedStyle = useAnimatedStyle(() => {
     const p = configProgress.value;
@@ -215,48 +226,55 @@ export function CommandPalette({
     };
   });
 
+  const stackProgress = useSharedValue(0);
+
+  const recedeStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: -STACK_PEEK * stackProgress.get() },
+      { scale: 1 - (1 - STACK_SCALE) * stackProgress.get() },
+    ],
+  }));
+
+  const dimStyle = useAnimatedStyle(() => ({ opacity: STACK_DIM * stackProgress.get() }));
+
   const missionPack = useMissionPack();
   const pickFile = useFilePicker();
-
-  // Push mission-health onto the stack whenever an import completes while the
-  // palette is open. Mount-time snapshot of importedAt prevents an initial
-  // push when the palette opens straight into mission-health (aware-screen
-  // owns that case).
-  const latestImportedAt = useMissionHealthStore((s) =>
-    Number(s.mission?.importedAt?.seconds ?? 0),
-  );
-  const lastSeenImportRef = useRef(latestImportedAt);
-  useEffect(() => {
-    if (latestImportedAt > lastSeenImportRef.current) {
-      lastSeenImportRef.current = latestImportedAt;
-      dispatch({ type: "push", mode: { kind: "mission-health" } });
-    }
-  }, [latestImportedAt]);
 
   const missionPackActions = useMemo(
     () => ({
       importFromPicker: async () => {
+        const origin = stateRef.current;
+
         try {
           const file = await pickFile({
             accept: ".zip,application/zip",
           });
-          if (file) await missionPack.importPack(file);
+
+          if (!file) {
+            onReopen(origin);
+          } else if (await missionPack.importPack(file)) {
+            onReopen(paletteStateAt({ kind: "mission-health" }));
+          }
         } catch (err) {
           console.error("[mission-pack] file picker failed", err);
           toast.error("Could not open files");
         }
       },
       importMbtilesFromPicker: async () => {
+        const origin = stateRef.current;
+
         try {
           const file = await pickFile({ accept: ".mbtiles" });
+
           if (file) await uploadMbtiles(file);
+          else onReopen(origin);
         } catch (err) {
           console.error("[mbtiles] file picker failed", err);
           toast.error("Could not open files");
         }
       },
     }),
-    [missionPack, pickFile],
+    [missionPack, pickFile, onReopen],
   );
 
   const commands = useMemo(
@@ -267,11 +285,16 @@ export function CommandPalette({
   useEffect(() => {
     if (Platform.OS !== "web") return;
     if (isCompact || isListDetailMode) {
+      previousFocusRef.current?.blur();
       inputRef.current?.blur();
       return () => {
         previousFocusRef.current?.focus();
       };
     }
+
+    // the macOS webview ignores focus() on a palette reopened after a cancelled
+    // file picker. the list ignores Enter while a control behind it has focus.
+    previousFocusRef.current?.blur();
     const t = setTimeout(() => inputRef.current?.focus(), 100);
     return () => {
       clearTimeout(t);
@@ -288,36 +311,36 @@ export function CommandPalette({
   useKeyboardShortcut(
     "Escape",
     useCallback(() => {
-      if (state.query) {
+      if (paletteState.query) {
         dispatch({ type: "setQuery", query: "" });
-      } else if (state.stack.length > 0) {
+      } else if (paletteState.stack.length > 0) {
         dispatch({ type: "pop" });
       } else {
         handleClose();
       }
       return true;
-    }, [state.query, state.stack.length, handleClose]),
+    }, [paletteState.query, paletteState.stack.length, handleClose]),
     { priority: 200 },
   );
 
   useKeyboardShortcut(
     "Backspace",
     useCallback(() => {
-      if (!state.query && state.stack.length > 0) {
+      if (!paletteState.query && paletteState.stack.length > 0) {
         const tag = (document.activeElement as HTMLElement | null)?.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA") return false;
         dispatch({ type: "pop" });
         return true;
       }
       return false;
-    }, [state.query, state.stack.length]),
+    }, [paletteState.query, paletteState.stack.length]),
     { priority: 200 },
   );
 
   useKeyboardShortcut(
     "Tab",
     useCallback(() => {
-      if (mode.kind === "root") {
+      if (top.kind === "root") {
         const ids = CATEGORIES.map((c) => c.id);
         const idx = ids.indexOf(state.activeCategory);
         const next = (idx + 1) % ids.length;
@@ -326,13 +349,26 @@ export function CommandPalette({
         return true;
       }
       return false;
-    }, [mode.kind, state.activeCategory]),
+    }, [top.kind, state.activeCategory]),
     { priority: 200 },
   );
 
-  const searchPlaceholder = getSearchPlaceholder(mode);
+  const searchPlaceholder = screen.search;
   const hasSearchInput = searchPlaceholder !== null;
   const isSearching = mode.kind === "root" && state.query.trim().length > 0;
+
+  const isTileLevel =
+    screen.keys === "grid" ||
+    (mode.kind === "root" && !isSearching && state.activeCategory === "mission");
+
+  const offersCameraSetup = useEntityStore((s) => {
+    const camera = mode.kind === "camera" ? s.entities.get(mode.entityId) : undefined;
+
+    return !!camera && awaitsSetup(camera);
+  });
+
+  const hasNoKeys = screen.keys === "none" || (mode.kind === "camera" && !offersCameraSetup);
+  const enterHint = screen.enter ?? (offersCameraSetup ? "select" : undefined);
   const trailSegments = getTrailSegments(
     state.stack,
     state.activeCategory,
@@ -341,7 +377,8 @@ export function CommandPalette({
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
-    if (!hasSearchInput || isCompact || isListDetailMode) return;
+
+    if (!hasSearchInput || stacked || isCompact || isListDetailMode) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key.length !== 1) return;
@@ -351,7 +388,33 @@ export function CommandPalette({
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [hasSearchInput, isCompact, isListDetailMode]);
+  }, [hasSearchInput, stacked, isCompact, isListDetailMode]);
+
+  const screenProps = {
+    state,
+    dispatch,
+    commands,
+    onClose: handleClose,
+    isWide,
+    treeOpen,
+    onTreeOpenChange: setTreeOpen,
+  };
+
+  const dialogStyle = [
+    {
+      alignSelf: "center",
+      width: "100%",
+      borderRadius: 10,
+      backgroundColor: t.card,
+      borderWidth: 1,
+      borderColor: t.borderSubtle,
+      borderTopColor: t.borderMedium,
+      borderBottomColor: t.borderFaint,
+      boxShadow: "0 24px 48px rgba(0,0,0,0.7)",
+      overflow: "hidden",
+    } as const,
+    dialogAnimatedStyle,
+  ];
 
   return (
     <Animated.View
@@ -380,27 +443,13 @@ export function CommandPalette({
       />
 
       <Animated.View
+        ref={behindRef}
         role="dialog"
         aria-label="Command palette"
         aria-modal={true}
-        style={[
-          {
-            alignSelf: "center",
-            width: "100%",
-            borderRadius: 10,
-            backgroundColor: t.card,
-            borderWidth: 1,
-            borderColor: t.borderSubtle,
-            borderTopColor: t.borderMedium,
-            borderBottomColor: t.borderFaint,
-            shadowColor: "#000",
-            shadowOffset: { width: 0, height: 24 },
-            shadowOpacity: 0.7,
-            shadowRadius: 48,
-            overflow: "hidden",
-          },
-          dialogAnimatedStyle,
-        ]}
+        aria-hidden={!!stacked}
+        pointerEvents={stacked ? "none" : "auto"}
+        style={[dialogStyle, { transformOrigin: "top" }, recedeStyle]}
       >
         <View className="h-12 flex-row items-center gap-2.5 px-4">
           {state.stack.length > 0 ? (
@@ -448,6 +497,13 @@ export function CommandPalette({
               <X size={14} strokeWidth={2} color={t.iconMuted} />
             </Pressable>
           )}
+          <BarIconButton
+            icon={Settings}
+            size={18}
+            label="Configuration"
+            disabled={mode.kind === "config"}
+            onPress={() => dispatch({ type: "push", mode: { kind: "config" } })}
+          />
         </View>
         <View className="bg-surface-overlay/10 h-px" />
 
@@ -463,6 +519,7 @@ export function CommandPalette({
               >
                 {CATEGORIES.map(({ id, label, icon: Icon }) => {
                   const isActive = !isSearching && state.activeCategory === id;
+
                   return (
                     <Pressable
                       key={id}
@@ -471,7 +528,7 @@ export function CommandPalette({
                         dispatch({ type: "setCategory", category: id });
                       }}
                       accessibilityRole="tab"
-                      accessibilityState={{ selected: isActive }}
+                      aria-selected={isActive}
                       tabIndex={-1}
                       className={cn(
                         "flex-row items-center gap-1.5 rounded-full px-2.5 py-1.5",
@@ -509,9 +566,7 @@ export function CommandPalette({
                 isListDetailMode ? (
                   <Pressable
                     onPress={() => setTreeOpen((v) => !v)}
-                    accessibilityLabel={`${treeOpen ? "Hide" : "Show"} ${
-                      isConfigMode ? "device" : "asset"
-                    } list`}
+                    accessibilityLabel={`${treeOpen ? "Hide" : "Show"} device list`}
                     tabIndex={-1}
                     hitSlop={8}
                     className="bg-surface-overlay/10 hover:bg-glass-hover mr-1.5 rounded p-0.5"
@@ -526,62 +581,7 @@ export function CommandPalette({
         )}
 
         <View style={isListDetailMode ? { flex: 1 } : { height: contentHeight }}>
-          {mode.kind === "root" && (
-            <RootView
-              query={state.query}
-              activeCategory={state.activeCategory}
-              commands={commands}
-              dispatch={dispatch}
-              onClose={handleClose}
-            />
-          )}
-          {mode.kind === "dimension" && (
-            <DimensionView
-              dimension={mode.dimension}
-              category={mode.category}
-              query={state.query}
-              onClose={handleClose}
-            />
-          )}
-          {mode.kind === "entity-actions" && (
-            <EntityActionsView entityId={mode.entityId} onClose={handleClose} dispatch={dispatch} />
-          )}
-          {mode.kind === "location-search" && (
-            <LocationSearchView query={state.query} onClose={handleClose} />
-          )}
-          {mode.kind === "command-group" && (
-            <CommandGroupView
-              groupId={mode.groupId}
-              query={state.query}
-              commands={commands}
-              onClose={handleClose}
-              initialCommandId={mode.initialCommandId}
-            />
-          )}
-          {mode.kind === "config" && (
-            <ConfigView
-              entityId={mode.entityId}
-              focusCategory={mode.focusCategory}
-              query={state.query}
-              isWide={isWide}
-              treeOpen={treeOpen}
-              onTreeOpenChange={setTreeOpen}
-            />
-          )}
-          {mode.kind === "asset-readiness" && (
-            <AssetReadinessView
-              dispatch={dispatch}
-              query={state.query}
-              isWide={isWide}
-              treeOpen={treeOpen}
-              onTreeOpenChange={setTreeOpen}
-              selectedId={selectedAssetId}
-              onSelect={setSelectedAssetId}
-            />
-          )}
-          {mode.kind === "mission-health" && <MissionHealthView onClose={handleClose} />}
-          {mode.kind === "diagnostic-export" && <DiagnosticExportView onClose={handleClose} />}
-          {mode.kind === "mission-export" && <MissionExportView onClose={handleClose} />}
+          <KeyboardLayer>{screen.render(screenProps)}</KeyboardLayer>
         </View>
 
         {showFooter && (
@@ -591,19 +591,31 @@ export function CommandPalette({
           >
             <VersionFooter />
             <View className="flex-row items-center gap-3">
-              <FooterHint label="navigate" shortcut={"\u2191\u2193"} />
-              {mode.kind === "root" && <FooterHint label="select" shortcut={"\u21b5"} />}
+              {!hasNoKeys && (
+                <FooterHint
+                  label="navigate"
+                  shortcut={isTileLevel ? "\u2191\u2193\u2190\u2192" : "\u2191\u2193"}
+                />
+              )}
+              {enterHint && <FooterHint label={enterHint} shortcut={"\u21b5"} />}
               {mode.kind === "root" && <FooterHint label="category" shortcut="Tab" />}
-              {mode.kind === "dimension" && <FooterHint label="select" shortcut={"\u21b5"} />}
-              {mode.kind === "entity-actions" && <FooterHint label="run" shortcut={"\u21b5"} />}
-              {mode.kind === "location-search" && <FooterHint label="go to" shortcut={"\u21b5"} />}
-              {mode.kind === "command-group" && <FooterHint label="toggle" shortcut={"\u21b5"} />}
-              {mode.kind === "config" && <FooterHint label="select" shortcut={"\u21b5"} />}
               {state.stack.length > 0 && <FooterHint label="back" shortcut="Esc" />}
             </View>
           </View>
         )}
+        <Animated.View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { backgroundColor: t.backdrop }, dimStyle]}
+        />
       </Animated.View>
+
+      <StackedWindow
+        mode={stacked}
+        behindRef={behindRef}
+        progress={stackProgress}
+        style={dialogStyle}
+        screenProps={{ ...screenProps, state: paletteState }}
+      />
     </Animated.View>
   );
 }

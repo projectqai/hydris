@@ -1,20 +1,15 @@
+import { PaletteRow } from "@hydris/ui/command-palette/palette-row";
 import { useListNav } from "@hydris/ui/command-palette/use-list-nav";
-import { EmptyState } from "@hydris/ui/empty-state";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@hydris/ui/empty-state";
 import { useThemeColors } from "@hydris/ui/lib/theme";
-import { cn } from "@hydris/ui/lib/utils";
+import { ScrollShadow } from "@hydris/ui/scroll-shadow";
 import { FlashList } from "@shopify/flash-list";
 import { MapPin } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Text, View } from "react-native";
 
+import { type LocationResult, searchLocations } from "../../../../../lib/location-search";
 import { mapEngineActions } from "../../../store/map-engine-store";
-
-type LocationResult = {
-  place_id: number;
-  display_name: string;
-  lat: string;
-  lon: string;
-};
 
 const DEBOUNCE_MS = 300;
 
@@ -49,18 +44,8 @@ export function LocationSearchView({ query, onClose }: { query: string; onClose:
       const controller = new AbortController();
       abortRef.current = controller;
 
-      fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`,
-        {
-          headers: { "User-Agent": "HydrisApp/1.0", Accept: "application/json" },
-          signal: controller.signal,
-        },
-      )
-        .then((res) => {
-          if (!res.ok) throw new Error(`Search failed: ${res.status}`);
-          return res.json();
-        })
-        .then((data: LocationResult[]) => {
+      searchLocations(query, controller.signal)
+        .then((data) => {
           setResults(data);
           setIsLoading(false);
           setError(null);
@@ -99,11 +84,11 @@ export function LocationSearchView({ query, onClose }: { query: string; onClose:
   if (!query.trim()) {
     return (
       <View className="flex-1 items-center justify-center">
-        <EmptyState
-          icon={MapPin}
-          title="Search for a location"
-          subtitle="Type an address or place name"
-        />
+        <Empty>
+          <EmptyMedia icon={MapPin} />
+          <EmptyTitle>Search for a location</EmptyTitle>
+          <EmptyDescription>Type an address or place name</EmptyDescription>
+        </Empty>
       </View>
     );
   }
@@ -119,7 +104,11 @@ export function LocationSearchView({ query, onClose }: { query: string; onClose:
   if (error) {
     return (
       <View className="flex-1 items-center justify-center">
-        <EmptyState icon={MapPin} title="Search failed" subtitle="Try a different search term" />
+        <Empty>
+          <EmptyMedia icon={MapPin} />
+          <EmptyTitle>Search failed</EmptyTitle>
+          <EmptyDescription>Try a different search term</EmptyDescription>
+        </Empty>
       </View>
     );
   }
@@ -127,7 +116,11 @@ export function LocationSearchView({ query, onClose }: { query: string; onClose:
   if (results.length === 0) {
     return (
       <View className="flex-1 items-center justify-center">
-        <EmptyState icon={MapPin} title="No results found" subtitle="Try a different search term" />
+        <Empty>
+          <EmptyMedia icon={MapPin} />
+          <EmptyTitle>No results found</EmptyTitle>
+          <EmptyDescription>Try a different search term</EmptyDescription>
+        </Empty>
       </View>
     );
   }
@@ -139,41 +132,38 @@ export function LocationSearchView({ query, onClose }: { query: string; onClose:
           {results.length} {results.length === 1 ? "result" : "results"}
         </Text>
       </View>
-      <FlashList
-        ref={listRef}
-        data={results}
-        onScroll={handleScroll}
-        keyExtractor={(item: LocationResult) => String(item.place_id)}
-        renderItem={({ item, index }: { item: LocationResult; index: number }) => {
-          const { primary, secondary } = formatResult(item.display_name);
-          const isHighlighted = index === highlightedIndex;
-          return (
-            <Pressable
-              ref={isHighlighted ? setHighlightedEl : undefined}
-              onPress={() => handleActivate(item)}
-              tabIndex={-1}
-              className={cn(
-                "active:bg-surface-overlay/8 flex-row items-center gap-3 px-4 py-3",
-                isHighlighted ? "bg-surface-overlay/8" : "hover:bg-surface-overlay/5",
-              )}
-            >
-              <View className="bg-surface-overlay/6 size-8 items-center justify-center rounded">
-                <MapPin size={16} strokeWidth={2} color={t.iconMuted} />
-              </View>
-              <View className="flex-1 gap-0.5">
-                <Text className="font-sans-medium text-foreground text-sm" numberOfLines={1}>
-                  {primary}
-                </Text>
-                {secondary && (
-                  <Text className="text-muted-foreground font-sans text-xs" numberOfLines={1}>
-                    {secondary}
+      <ScrollShadow size="sm" className="flex-1">
+        <FlashList
+          ref={listRef}
+          data={results}
+          onScroll={handleScroll}
+          keyExtractor={(item: LocationResult) => String(item.place_id)}
+          renderItem={({ item, index }: { item: LocationResult; index: number }) => {
+            const { primary, secondary } = formatResult(item.display_name);
+            const isHighlighted = index === highlightedIndex;
+
+            return (
+              <PaletteRow
+                ref={isHighlighted ? setHighlightedEl : undefined}
+                icon={MapPin}
+                highlighted={isHighlighted}
+                onPress={() => handleActivate(item)}
+              >
+                <View className="flex-1 gap-0.5">
+                  <Text className="font-sans-medium text-foreground text-sm" numberOfLines={1}>
+                    {primary}
                   </Text>
-                )}
-              </View>
-            </Pressable>
-          );
-        }}
-      />
+                  {secondary && (
+                    <Text className="text-muted-foreground font-sans text-xs" numberOfLines={1}>
+                      {secondary}
+                    </Text>
+                  )}
+                </View>
+              </PaletteRow>
+            );
+          }}
+        />
+      </ScrollShadow>
     </View>
   );
 }

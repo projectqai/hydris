@@ -66,7 +66,7 @@ func TestGC_BroadcastsExpiry(t *testing.T) {
 	if !ok || id != "e1" {
 		t.Error("should receive dirty notification for expired entity")
 	}
-	if change != pb.EntityChange_EntityChangeExpired {
+	if change.change != pb.EntityChange_EntityChangeExpired {
 		t.Errorf("expected EntityChangeExpired, got %v", change)
 	}
 }

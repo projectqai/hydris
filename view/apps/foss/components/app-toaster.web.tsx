@@ -18,6 +18,7 @@ export function AppToaster() {
           borderWidth: 1,
           borderRadius: 4,
           color: t.foreground,
+          whiteSpace: "pre-line",
         },
         actionButtonStyle: {
           backgroundColor: t.foreground,
@@ -27,8 +28,8 @@ export function AppToaster() {
           fontWeight: 600,
         },
         cancelButtonStyle: {
-          backgroundColor: t.muted,
-          color: t.controlFg,
+          backgroundColor: t.mutedForeground,
+          color: t.background,
           borderRadius: 4,
           fontSize: 13,
           fontWeight: 600,

@@ -1,9 +1,6 @@
 import type { WidgetGroup } from "@hydris/ui/layout/types";
 import { Activity, BarChart3 } from "lucide-react-native";
 
-export { AlarmOverlay } from "./components/alarm-overlay";
-export { SensorPane } from "./components/sensor-pane";
-
 export const SENSOR_WIDGETS: WidgetGroup[] = [
   {
     tab: "Sensors",

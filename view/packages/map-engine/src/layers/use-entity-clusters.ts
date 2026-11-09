@@ -142,10 +142,12 @@ type UseEntityClustersOptions = {
   clusteringEnabled: boolean;
   zoom: number;
   pickable?: boolean;
+  placementActive?: boolean;
   overlapOffsets?: OverlapOffsets | null;
   expandedAssemblies?: Set<string> | null;
-  onEntityClick?: (id: string) => void | Promise<void>;
-  onClusterClick?: (clusterId: string, lat: number, lng: number, expansionZoom: number) => void;
+  unclusteredIds?: readonly string[];
+  onEntityClick?: (id: string) => boolean;
+  onClusterClick?: (clusterId: string, lat: number, lng: number, expansionZoom: number) => boolean;
   onOverlapSpread?: (offsets: OverlapOffsets) => void;
   onAssemblyExpand?: (rootId: string) => void;
   onAssemblyCollapse?: () => void;
@@ -190,8 +192,10 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
     clusteringEnabled,
     zoom,
     pickable = true,
+    placementActive = false,
     overlapOffsets = null,
     expandedAssemblies = null,
+    unclusteredIds,
     onEntityClick,
     onClusterClick,
     onOverlapSpread,
@@ -236,6 +240,7 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
     zoom,
     version,
     geoChanged,
+    unclusteredIds,
   });
 
   const integerZoom = Math.floor(zoom);
@@ -781,21 +786,22 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
     const clicked = info.object as EntityRenderData;
     const clickedId = clicked.entity.id;
 
+    if (placementActive) return onEntityClickRef.current?.(clickedId) ?? false;
+
     // Collapsed assembly root: select it and expand to reveal children
     if (
       clusteringEnabled &&
       assemblyChildrenOf.has(clickedId) &&
       !expandedAssemblies?.has(clickedId)
     ) {
-      onEntityClickRef.current?.(clickedId);
-      onAssemblyExpandRef.current?.(clickedId);
-      return true;
+      const handled = onEntityClickRef.current?.(clickedId) ?? false;
+      if (handled) onAssemblyExpandRef.current?.(clickedId);
+      return handled;
     }
 
     // If this entity is already spread, select it normally
     if (effectiveOverlapOffsets?.has(clickedId)) {
-      onEntityClickRef.current?.(clickedId);
-      return true;
+      return onEntityClickRef.current?.(clickedId) ?? false;
     }
 
     const clickedKey = positionKey(clicked.position);
@@ -818,23 +824,20 @@ export function useEntityClusters(options: UseEntityClustersOptions): UseEntityC
       return true;
     }
 
-    onEntityClickRef.current?.(clickedId);
-    return true;
+    return onEntityClickRef.current?.(clickedId) ?? false;
   };
 
   const handleClusterClick = (info: PickingInfo): boolean => {
     if (!info.object) return false;
     const data = info.object as ClusterRenderData;
-    onClusterClickRef.current?.(data.id, data.lat, data.lng, integerZoom + 2);
-    return true;
+    return onClusterClickRef.current?.(data.id, data.lat, data.lng, integerZoom + 2) ?? false;
   };
 
   const handleAffiliationClusterClick = (info: PickingInfo): boolean => {
     if (info.index < 0) return false;
     const data = affiliationClusters[info.index];
     if (!data) return false;
-    onClusterClickRef.current?.(data.id, data.lat, data.lng, integerZoom + 2);
-    return true;
+    return onClusterClickRef.current?.(data.id, data.lat, data.lng, integerZoom + 2) ?? false;
   };
 
   const textureParameters = {

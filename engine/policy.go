@@ -15,8 +15,11 @@ import (
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
+	"github.com/projectqai/hydris/pkg/tracing"
 	pb "github.com/projectqai/proto/go"
 	"github.com/projectqai/proto/go/_goconnect"
+	otelcodes "go.opentelemetry.io/otel/codes"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type policyVerdict int
@@ -37,6 +40,7 @@ type PolicyEvaluator struct {
 	mu         sync.RWMutex
 	rules      []compiledRule // global authorization chain (authz.policy)
 	authnRules []compiledRule // connection-identity chain (authn.policy)
+	anchors    *anchorSet     // trust anchors configured under authn.service
 	env        *cel.Env
 	world      *WorldServer
 }
@@ -93,6 +97,27 @@ func newCELEnv(world *WorldServer) (*cel.Env, error) {
 				}),
 			),
 		),
+		// components(entity) lists the populated fields of an entity by proto
+		// field name, so a policy can allow-list what a change may carry:
+		//   components(change).all(c, c in ["geo", "label"])
+		cel.Function("components",
+			cel.Overload("components_entity",
+				[]*cel.Type{cel.ObjectType("world.Entity")},
+				cel.ListType(cel.StringType),
+				cel.UnaryBinding(func(v ref.Val) ref.Val {
+					names := []string{}
+					if e, ok := v.Value().(*pb.Entity); ok && e != nil {
+						e.ProtoReflect().Range(func(fd protoreflect.FieldDescriptor, _ protoreflect.Value) bool {
+							if fd.Name() != "id" {
+								names = append(names, string(fd.Name()))
+							}
+							return true
+						})
+					}
+					return adapter.NativeToValue(names)
+				}),
+			),
+		),
 		cel.Function("inCIDR",
 			cel.MemberOverload("string_inCIDR_string",
 				[]*cel.Type{cel.StringType, cel.StringType},
@@ -143,6 +168,7 @@ func (pe *PolicyEvaluator) Rebuild() {
 	if es, ok := pe.world.head[authnPolicyEntity]; ok {
 		ac = es.entity.GetPolicy()
 	}
+	anchors := pe.world.buildAnchorSetLocked()
 	pe.world.l.RUnlock()
 	if pc == nil {
 		pc = failClosedPolicy()
@@ -154,11 +180,18 @@ func (pe *PolicyEvaluator) Rebuild() {
 	pe.mu.Lock()
 	pe.rules = rules
 	pe.authnRules = authnRules
+	pe.anchors = anchors
 	pe.mu.Unlock()
 
 	if len(rules) > 0 {
-		slog.Info("policy rebuilt", "rules", len(rules), "authn", len(authnRules))
+		slog.Info("policy rebuilt", "rules", len(rules), "authn", len(authnRules), "anchors", len(anchors.ids))
 	}
+}
+
+func (pe *PolicyEvaluator) anchorSet() *anchorSet {
+	pe.mu.RLock()
+	defer pe.mu.RUnlock()
+	return pe.anchors
 }
 
 func (pe *PolicyEvaluator) compileChain(pc *pb.PolicyComponent) []compiledRule {
@@ -213,6 +246,17 @@ func (i *policyInterceptor) authContext(ctx context.Context, header http.Header,
 		if node := header.Get("X-Federation-Node"); node != "" {
 			ctx = context.WithValue(ctx, federationNodeKey, node)
 		}
+		// One value per identity, never split: an id that is not a valid entity
+		// id names no identity and is dropped.
+		var claimed []string
+		for _, id := range header.Values("X-Builtin-Claimed-Actor") {
+			if isURLSafeID(id) {
+				claimed = append(claimed, id)
+			}
+		}
+		if len(claimed) > 0 {
+			ctx = context.WithValue(ctx, claimedActorsKey, claimed)
+		}
 		// A declared actor (e.g. federation's link entity) is honored verbatim;
 		// only authn.policy resolution is skipped, not authorization.
 		if actor := header.Get("X-Builtin-Actor"); actor != "" {
@@ -240,7 +284,7 @@ func (pe *PolicyEvaluator) resolveActor(pc *peerConn, peer peerContext, isBufcon
 		if pc != nil {
 			certs = connPeerCerts(pc)
 		}
-		verified, err := pe.world.verifyMTLS(certs)
+		verified, err := pe.world.verifyMTLS(certs, pe.anchorSet())
 		if err != nil {
 			// A certificate was presented but did not validate against our CA.
 			slog.Warn("authn rejected unverifiable mTLS certificate", "source", peer.address, "error", err)
@@ -297,12 +341,19 @@ func (pe *PolicyEvaluator) evalAuthn(peer peerContext, isBufconn bool, verified 
 	// source.mtls.verified carries only cryptographically validated identity (the
 	// connection is denied before we get here if a presented cert failed to
 	// validate); fields are empty when no client certificate was presented.
-	mtls := map[string]any{"cn": "", "fingerprint": "", "ca": "", "self": false}
+	//
+	// anchor is the trust statement — the entity id of the anchor that rooted the
+	// chain, "" for this node's own CA. serial is the leaf subject serialNumber; a
+	// certificate says whatever its issuer put in it, so a rule must gate on anchor
+	// before it believes a serial.
+	mtls := map[string]any{"cn": "", "fingerprint": "", "ca": "", "self": false, "anchor": "", "serial": ""}
 	if verified != nil {
 		mtls["cn"] = verified.cn
 		mtls["fingerprint"] = verified.fingerprint
 		mtls["ca"] = verified.ca
 		mtls["self"] = verified.self
+		mtls["anchor"] = verified.anchor
+		mtls["serial"] = verified.serial
 	}
 
 	flags := newIsFlags()
@@ -352,15 +403,34 @@ func (i *policyInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc 
 		return next
 	}
 	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		ctx, err := i.authContext(ctx, req.Header(), req.Peer().Addr)
+		ctx, err := i.checkUnary(ctx, req)
 		if err != nil {
-			return nil, err
-		}
-		if err := i.pe.check(ctx, req); err != nil {
 			return nil, err
 		}
 		return next(ctx, req)
 	}
+}
+
+// checkUnary authenticates and authorizes req inside a "policy.check" span
+// that only times the check, and returns the ctx carrying the resolved actor.
+func (i *policyInterceptor) checkUnary(ctx context.Context, req connect.AnyRequest) (context.Context, error) {
+	_, span := tracing.Tracer().Start(ctx, "policy.check")
+	defer span.End()
+	ctx, err := i.authContext(ctx, req.Header(), req.Peer().Addr)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, "authn denied")
+		return nil, err
+	}
+	if actor := actorFromContext(ctx); actor != "" {
+		span.SetAttributes(tracing.AttrActor.String(actor))
+	}
+	if err := i.pe.check(ctx, req); err != nil {
+		span.RecordError(err)
+		span.SetStatus(otelcodes.Error, "authz denied")
+		return nil, err
+	}
+	return ctx, nil
 }
 
 // WrapStreamingClient is a no-op: this interceptor only guards the server side.
@@ -429,6 +499,7 @@ func (pe *PolicyEvaluator) checkArtifactStream(ctx context.Context, proc, peerAd
 	federationNode, _ := ctx.Value(federationNodeKey).(string)
 	peer := parsePeer(peerAddr)
 	ec := pe.evalCtxFor(peer, peer.local, isBuiltin, builtinName, federationNode, actorFromContext(ctx))
+	ec.claimedActors, _ = ctx.Value(claimedActorsKey).([]string)
 	f := newIsFlags()
 	f["grpc"] = true
 	if write {
@@ -550,7 +621,8 @@ func artifactEntityFromPath(path string) string {
 // evalCtx bundles the per-request authorization inputs shared by every
 // activation: the network peer, whether it is a loopback peer (local) and/or an
 // in-process builtin caller (builtin), the originating builtin name (if any),
-// and the authenticated actor identity.
+// the authenticated actor identity, and the identities the builtin declared
+// that actor claims (a plugin's hydris.actors).
 type evalCtx struct {
 	peer           peerContext
 	local          bool
@@ -559,6 +631,7 @@ type evalCtx struct {
 	builtinName    string
 	federationNode string
 	actor          string
+	claimedActors  []string
 }
 
 // evalCtxFor resolves the actor (defaulting to anonymous) and derives the scope
@@ -590,6 +663,7 @@ func (pe *PolicyEvaluator) check(ctx context.Context, req connect.AnyRequest) er
 	builtinName, _ := ctx.Value(builtinNameKey).(string)
 	federationNode, _ := ctx.Value(federationNodeKey).(string)
 	ec := pe.evalCtxFor(peerInfo, peerInfo.local, isBuiltin, builtinName, federationNode, actorFromContext(ctx))
+	ec.claimedActors, _ = ctx.Value(claimedActorsKey).([]string)
 
 	proc := req.Spec().Procedure
 
@@ -602,6 +676,9 @@ func (pe *PolicyEvaluator) check(ctx context.Context, req connect.AnyRequest) er
 
 	case *pb.RunTaskRequest:
 		return pe.checkSingleEntity(ec, proc, rules, m.EntityId, isFlags("task"))
+
+	case *pb.CancelTaskRequest:
+		return pe.checkSingleEntity(ec, proc, rules, m.ExecutionId, isFlags("task"))
 
 	default:
 		flags := isReadFlags(proc)
@@ -736,6 +813,12 @@ func buildActivation(ec evalCtx, flags map[string]bool, change *pb.Entity) map[s
 	flags["local"] = ec.local
 	flags["builtin"] = ec.builtin
 	flags["federation"] = ec.federation
+	// actor.plugin.actors is always a list, so a rule can test membership
+	// without guarding against an actor that claims nothing.
+	actors := ec.claimedActors
+	if actors == nil {
+		actors = []string{}
+	}
 	return map[string]any{
 		"source": map[string]any{
 			"address": ec.peer.address,
@@ -744,7 +827,8 @@ func buildActivation(ec evalCtx, flags map[string]bool, change *pb.Entity) map[s
 			"node":    ec.federationNode,
 		},
 		"actor": map[string]any{
-			"id": ec.actor,
+			"id":     ec.actor,
+			"plugin": map[string]any{"actors": actors},
 		},
 		"is":     flags,
 		"method": "",

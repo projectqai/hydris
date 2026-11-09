@@ -1,14 +1,22 @@
 "use no memo";
 
+import type { ActiveTool } from "@hydris/map-engine/adapters/maplibre";
+import { movePathPoint } from "@hydris/map-engine/geometry/path-geometry";
+import type { GeoPosition, PathPoint } from "@hydris/map-engine/types";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { useColorScheme } from "nativewind";
 import { useEffect, useMemo, useRef } from "react";
 import { View } from "react-native";
+import { useShallow } from "zustand/react/shallow";
 
+import { useEntityMutation } from "../../../../lib/api/use-entity-mutation";
+import { toast } from "../../../../lib/sonner";
 import { MapAttribution } from "../../map-search";
 import type { MapViewRef } from "../../map-view";
 import MapView from "../../map-view";
 import { usePlacement } from "../../placement-context";
+import { useBullseyeStore } from "../../store/bullseye-store";
+import { liveAnchors, useEditStore } from "../../store/edit-store";
 import {
   selectDetectionEntityIds,
   selectLastChange,
@@ -18,23 +26,39 @@ import {
   clearFlyToTarget,
   registerMapRef,
   setCurrentView,
+  setPointerType,
   unregisterMapRef,
   useMapEngineStore,
 } from "../../store/map-engine-store";
 import { useMapStore } from "../../store/map-store";
 import { useOverlayStore } from "../../store/overlay-store";
+import { selectPathKind, usePathStore } from "../../store/path-store";
 import { useRadialMenuStore } from "../../store/radial-menu-store";
-import { useRangeRingStore } from "../../store/range-ring-store";
+import { saveEdit } from "../../store/save-edit";
+import { savePath } from "../../store/save-path";
 import { useSelectionStore } from "../../store/selection-store";
 import { useStoreHydrated } from "../../store/use-store-hydrated";
-import { buildDelta, buildDeltaChunked } from "../../utils/transform-entities";
+import {
+  buildDelta,
+  buildDeltaChunked,
+  readPathPoints,
+  transformEntity,
+} from "../../utils/transform-entities";
 import { RadialMenuController } from "../radial-menu/radial-menu-controller";
 import { MapControls } from "./map-controls";
+import { MapStepLine } from "./map-step-line";
 
 const BRIDGE_CHUNK_SIZE = 5000;
 const THROTTLE_MS = 500;
 
 const VIEW_PERSIST_DEBOUNCE_MS = 250;
+
+async function handlePathInsert(pathId: string, sourceIndex: number, pointJson: string) {
+  const edit = useEditStore.getState();
+  if (pathId !== edit.entityId) return;
+  const point: PathPoint = JSON.parse(pointJson);
+  edit.insertPoint(sourceIndex, point);
+}
 
 export function MapPane() {
   const localRef = useRef<MapViewRef>(null);
@@ -58,8 +82,39 @@ export function MapPane() {
   const visualization = useOverlayStore((state) => state.visualization);
   const hiddenLayers = useOverlayStore((state) => state.hiddenLayers);
   const layerOpacity = useOverlayStore((state) => state.layerOpacity);
-  const rangeRingCenter = useRangeRingStore((s) => s.center);
-  const rangeRingsActive = useRangeRingStore((s) => s.isPlacing);
+  const bullseyeCenter = useBullseyeStore((s) => s.center);
+  const bullseyePlacing = useBullseyeStore((s) => s.isPlacing);
+  const paths = usePathStore((state) => state.paths);
+  const drawingId = usePathStore((state) => state.drawingId);
+  const pathKind = usePathStore(selectPathKind);
+  const anchorablePaths = useMemo(() => paths.filter((path) => path.kind === "range"), [paths]);
+  const rangeAnchorEntities = useEntityStore(
+    useShallow((state) =>
+      anchorablePaths.flatMap((path) =>
+        path.points.map((point) =>
+          point.type === "entity" ? state.entities.get(point.entityId) : undefined,
+        ),
+      ),
+    ),
+  );
+  const { updateRb } = useEntityMutation();
+  const drawingKind = pathKind === "range" ? null : pathKind;
+  const editingEntityId = useEditStore((state) => state.entityId);
+  const editingEntityExists = useEntityStore(
+    (state) => editingEntityId === null || state.entities.has(editingEntityId),
+  );
+  const editingPoints = useEditStore((state) => state.points);
+  const editingKind = useEditStore((state) => state.kind);
+  const editingRings = useEditStore((state) => state.rings);
+  const editingRadiusM = useEditStore((state) => state.radiusM);
+  const activeTool: ActiveTool =
+    pathKind === "range"
+      ? "range"
+      : bullseyePlacing
+        ? "bullseye"
+        : drawingKind
+          ? "drawing"
+          : "none";
   const primaryRef = useMapEngineStore((s) => s.primaryRef);
   const isPrimary = primaryRef === localRef;
   const { isPlacing } = usePlacement();
@@ -70,11 +125,29 @@ export function MapPane() {
   );
 
   useEffect(() => {
+    const positions = new Map<string, GeoPosition>();
+    let index = 0;
+    for (const path of anchorablePaths) {
+      for (const point of path.points) {
+        const entity = rangeAnchorEntities[index];
+        index += 1;
+        if (point.type !== "entity" || !entity) continue;
+        const position = transformEntity(entity)?.position;
+        if (position) positions.set(point.entityId, position);
+      }
+    }
+    usePathStore.getState().updateAnchorPositions(positions);
+  }, [rangeAnchorEntities, anchorablePaths]);
+
+  const unmountedRef = useRef(false);
+
+  useEffect(() => {
     registerMapRef(localRef);
     if (savedView) {
       setCurrentView(savedView.lat, savedView.lng, savedView.zoom);
     }
     return () => {
+      unmountedRef.current = true;
       unregisterMapRef(localRef);
     };
   }, []);
@@ -120,6 +193,10 @@ export function MapPane() {
       pendingVersionRef.current = false;
 
       const pushNext = () => {
+        if (unmountedRef.current) {
+          chunkingRef.current = false;
+          return;
+        }
         const next = iter.next();
         if (!next.done) {
           ref.pushDelta(JSON.stringify(next.value));
@@ -142,8 +219,9 @@ export function MapPane() {
       pushNext();
     };
 
+    // without the bypass your own edit waits up to 500ms to redraw
     const elapsed = Date.now() - lastPushTimeRef.current;
-    if (elapsed >= THROTTLE_MS) {
+    if (lastChange.local || elapsed >= THROTTLE_MS) {
       doPush();
     } else {
       pushTimerRef.current = setTimeout(doPush, THROTTLE_MS - elapsed);
@@ -211,20 +289,56 @@ export function MapPane() {
 
   useEffect(() => {
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const push = () => {
       if (cancelled) return;
+      retryTimer = null;
       const ref = localRef.current;
-      if (!ref || typeof ref.pushRangeRing !== "function") {
-        setTimeout(push, 100);
+      if (!ref || typeof ref.pushBullseye !== "function") {
+        retryTimer = setTimeout(push, 100);
         return;
       }
-      ref.pushRangeRing(rangeRingCenter ? JSON.stringify(rangeRingCenter) : null, rangeRingsActive);
+      ref.pushBullseye(bullseyeCenter ? JSON.stringify(bullseyeCenter) : null);
     };
     push();
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [rangeRingCenter, rangeRingsActive]);
+  }, [bullseyeCenter]);
+
+  const editedPaths =
+    editingEntityId && editingPoints.length
+      ? [
+          {
+            id: editingEntityId,
+            kind: editingKind,
+            points: editingPoints,
+            rings: editingRings,
+            radiusM: editingRadiusM,
+          },
+        ]
+      : [];
+  const pathsJson = JSON.stringify([...paths, ...editedPaths]);
+  useEffect(() => {
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    const push = () => {
+      if (cancelled) return;
+      retryTimer = null;
+      const ref = localRef.current;
+      if (!ref || typeof ref.pushPaths !== "function") {
+        retryTimer = setTimeout(push, 100);
+        return;
+      }
+      ref.pushPaths(pathsJson, drawingId, activeTool, editingEntityId);
+    };
+    push();
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [pathsJson, drawingId, activeTool, editingEntityId]);
 
   const hiddenLayersJson = JSON.stringify(Object.keys(hiddenLayers));
   useEffect(() => {
@@ -270,8 +384,64 @@ export function MapPane() {
     if (gone) useSelectionStore.getState().clearSelection();
   }, [selectedEntityId, lastChange]);
 
-  const handleMapClick = async (lat: number, lng: number) => {
-    useRangeRingStore.getState().setCenter(lat, lng);
+  // The working copy renders in place of the stored shape, so an edit outlasting
+  // its entity leaves the shape on the map after it has been deleted.
+  useEffect(() => {
+    if (!editingEntityExists) useEditStore.getState().cancel();
+  }, [editingEntityExists]);
+
+  const handleMapClick = async (pointJson: string) => {
+    const point: PathPoint = JSON.parse(pointJson);
+    if (activeTool === "range") {
+      await savePath(usePathStore.getState().addPoint(point));
+    } else if (activeTool === "bullseye" && point.type === "coordinate") {
+      useBullseyeStore.getState().setCenter(point.position.lat, point.position.lng);
+    } else if (drawingKind) {
+      const pathState = usePathStore.getState();
+      const drawing = pathState.paths.find((candidate) => candidate.id === pathState.drawingId);
+      const anchorPositions = liveAnchors([...(drawing?.points ?? []), point]);
+      await savePath(pathState.addPoint(point, anchorPositions));
+    }
+  };
+
+  const handleSavedPathsArrived = async (pathIdsJson: string) => {
+    const pathIds: string[] = JSON.parse(pathIdsJson);
+    for (const pathId of pathIds) {
+      usePathStore.getState().remove(pathId);
+    }
+  };
+
+  const handleDoubleClickFinish = async () => {
+    const edit = useEditStore.getState();
+    if (edit.entityId) {
+      await saveEdit(edit.end());
+      return;
+    }
+    const path = usePathStore.getState();
+    if (!path.drawingId || selectPathKind(path) === "range") return;
+    await savePath(path.finishByGesture());
+  };
+
+  const handlePathCommit = async (pathId: string, sourceIndex: number, pointJson: string) => {
+    const point: PathPoint = JSON.parse(pointJson);
+    if (pathId === useEditStore.getState().entityId) {
+      useEditStore.getState().movePoint(sourceIndex, point);
+      return;
+    }
+
+    const entity = useEntityStore.getState().entities.get(pathId);
+    const current = entity && readPathPoints(entity);
+    if (!entity || !current) {
+      usePathStore.getState().movePoint(pathId, sourceIndex, point);
+      return;
+    }
+
+    try {
+      await updateRb(entity, movePathPoint(current, sourceIndex, point));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to move range and bearing point");
+      throw err;
+    }
   };
 
   const handleEntityClick = async (id: string | null) => {
@@ -321,6 +491,10 @@ export function MapPane() {
           placementCoordColors={placementCoordColors}
           onEntityClick={handleEntityClick}
           onMapClick={handleMapClick}
+          onPathCommit={handlePathCommit}
+          onPathInsert={handlePathInsert}
+          onDoubleClickFinish={handleDoubleClickFinish}
+          onSavedPathsArrived={handleSavedPathsArrived}
           onRadialRequest={async (entityId, screenX, screenY, lat, lng) => {
             if (!isPrimary) return;
             if (entityId) {
@@ -333,6 +507,9 @@ export function MapPane() {
               .openFor(entityId, screenX + offset.x, screenY + offset.y, lat, lng);
           }}
           onTrackingLost={async () => useSelectionStore.setState({ isFollowing: false })}
+          onPointerTypeChange={async (pointerType) => {
+            setPointerType(pointerType);
+          }}
           onViewChange={async (lat, lng, zoom) => {
             localViewRef.current = { lat, lng, zoom };
             if (isPrimary) {
@@ -353,6 +530,7 @@ export function MapPane() {
       >
         <MapControls mapRef={localRef} viewRef={localViewRef} />
         <MapAttribution />
+        {isPrimary && <MapStepLine />}
       </View>
       {isPrimary && <RadialMenuController />}
     </View>

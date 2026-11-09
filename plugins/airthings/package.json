@@ -6,6 +6,6 @@
   "type": "module",
   "dependencies": {
     "@projectqai/hal": "file:../../pkg/rt/ts",
-    "@projectqai/proto": "file:../../../proto/ts"
+    "@projectqai/proto": "file:../../proto/ts"
   }
 }

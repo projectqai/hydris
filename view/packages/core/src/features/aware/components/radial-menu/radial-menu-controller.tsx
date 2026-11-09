@@ -1,28 +1,31 @@
 "use no memo";
 
 import { create } from "@bufbuild/protobuf";
-import { Code, ConnectError } from "@connectrpc/connect";
 import { generateSymbol } from "@hydris/map-engine/utils/symbol-atlas";
 import { RadialMenu } from "@hydris/ui/radial-menu";
 import { PlanarPointSchema } from "@projectqai/proto/geometry";
-import {
-  TaskExecutionTargetEntitySchema,
-  TaskExecutionTargetSchema,
-} from "@projectqai/proto/tasking";
+import { TaskExecutionTargetSchema } from "@projectqai/proto/tasking";
 import { useCallback, useContext, useEffect, useMemo } from "react";
 import { Platform } from "react-native";
 
-import { useRunTask } from "../../../../lib/api/use-run-task";
+import { useRunTaskable } from "../../../../lib/api/use-run-task";
 import { getEntityName } from "../../../../lib/api/use-track-utils";
-import { toast } from "../../../../lib/sonner";
 import { useEntityDelete } from "../../hooks/use-entity-delete";
-import { useEntityTaskables, usePositionTaskables } from "../../hooks/use-entity-taskables";
+import {
+  entityTarget,
+  useEntityTaskables,
+  usePositionTaskables,
+} from "../../hooks/use-entity-taskables";
 import { PaletteContext } from "../../palette-context";
 import { usePlacement } from "../../placement-context";
+import { useEditStore } from "../../store/edit-store";
 import { useEntityStore } from "../../store/entity-store";
 import { mapEngineActions } from "../../store/map-engine-store";
+import { moveDrawing } from "../../store/move-drawing";
 import { useRadialMenuStore } from "../../store/radial-menu-store";
 import { useSelectionStore } from "../../store/selection-store";
+import { standDownModes } from "../../store/stand-down";
+import { isDrawn, readDrawing } from "../../utils/transform-entities";
 import { resolvePositionItems, resolveRadialItems } from "./resolve-items";
 
 export function RadialMenuController() {
@@ -33,7 +36,7 @@ export function RadialMenuController() {
   const positionTaskables = usePositionTaskables();
   const palette = useContext(PaletteContext);
   const placement = usePlacement();
-  const { runTask } = useRunTask();
+  const { run: runTaskable } = useRunTaskable();
   const { request: requestDelete, dialog: deleteDialog } = useEntityDelete();
 
   const entity = open?.entityId ? (entities.get(open.entityId) ?? null) : null;
@@ -64,15 +67,9 @@ export function RadialMenuController() {
     async (id: string) => {
       if (id.startsWith("task:")) {
         const taskId = id.slice("task:".length);
+        const taskable = entityTaskables.find((t) => t.id === taskId);
         const target = entity
-          ? create(TaskExecutionTargetSchema, {
-              kind: {
-                case: "entity",
-                value: create(TaskExecutionTargetEntitySchema, {
-                  entity: [entity.id],
-                }),
-              },
-            })
+          ? taskable && entityTarget(taskable, entity.id)
           : open
             ? create(TaskExecutionTargetSchema, {
                 kind: {
@@ -84,24 +81,37 @@ export function RadialMenuController() {
                 },
               })
             : undefined;
-        try {
-          await runTask(taskId, target);
-        } catch (err) {
-          if (err instanceof ConnectError && err.code === Code.AlreadyExists) {
-            toast.warning("Task already running");
-            return;
-          }
-          toast.error(err instanceof Error ? err.message : "Task failed");
-        }
+
+        await runTaskable(taskId, target);
         return;
       }
       if (!entity) return;
       if (id === "built-in:follow") useSelectionStore.getState().toggleFollow();
       if (id === "built-in:configure") palette.open({ kind: "config", entityId: entity.id });
       if (id === "built-in:reposition") placement.enterPlacement(entity, { recenter: true });
-      if (id === "built-in:delete") requestDelete(entity);
+      if (id === "built-in:move") moveDrawing(entity, placement.enterPlacement);
+      if (id === "built-in:edit") {
+        const shape = readDrawing(entity);
+        if (shape) {
+          if (placement.isPlacing) placement.exitPlacement();
+          standDownModes();
+          useEditStore
+            .getState()
+            .start(entity.id, shape.kind, shape.points, shape.rings, shape.radiusM);
+        }
+      }
+      if (id === "built-in:delete") {
+        requestDelete(
+          entity,
+          readDrawing(entity)?.kind === "range"
+            ? "Delete R&B"
+            : isDrawn(entity)
+              ? "Delete drawing"
+              : "Delete device",
+        );
+      }
     },
-    [entity, open, runTask, palette, placement, requestDelete],
+    [entity, entityTaskables, open, runTaskable, palette, placement, requestDelete],
   );
 
   const items = useMemo(

@@ -17,10 +17,15 @@ import (
 	_ "github.com/projectqai/hydris/builtin/all"
 	"github.com/projectqai/hydris/cli"
 	"github.com/projectqai/hydris/engine"
+	"github.com/projectqai/hydris/hal"
 	_ "github.com/projectqai/hydris/view"
 )
 
 func main() {
+	hal.RunMain(run)
+}
+
+func run() {
 	// When spawned as a plugin subprocess (e.g. "hydris plugin run ..."),
 	// delegate to the CLI command tree instead of starting the engine again.
 	if len(os.Args) > 1 && os.Args[1] == "plugin" {

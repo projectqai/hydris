@@ -663,3 +663,48 @@ func TestMatchesEntityFilter_CombinedFilters(t *testing.T) {
 		t.Error("label mismatch, should return false")
 	}
 }
+
+func TestMatchesEntityFilter_Capture(t *testing.T) {
+	w := NewWorldServer()
+	sealed := &pb.Entity{Id: "gw.rx.1", Capture: &pb.CaptureComponent{
+		Port:        proto.Uint32(0x4F),
+		ContentType: proto.String("application/vnd.hydris.lora-frame"),
+		CapturedBy:  proto.String("lora.gw-1"),
+	}}
+	raw := &pb.Entity{Id: "gw.rx.2", Capture: &pb.CaptureComponent{Port: proto.Uint32(0x4E), CapturedBy: proto.String("lora.gw-1")}}
+
+	byPort := &pb.EntityFilter{Capture: &pb.CaptureFilter{Port: proto.Uint32(0x4F)}}
+	if !w.matchesEntityFilter(sealed, byPort) {
+		t.Error("should match the sealed port")
+	}
+	if w.matchesEntityFilter(raw, byPort) {
+		t.Error("a decoder subscribed to one port must not see another")
+	}
+	if w.matchesEntityFilter(&pb.Entity{Id: "e"}, byPort) {
+		t.Error("should not match an entity without capture")
+	}
+
+	noPort := &pb.Entity{Id: "gw.rx.3", Capture: &pb.CaptureComponent{CapturedBy: proto.String("lora.gw-1")}}
+	port0 := &pb.EntityFilter{Capture: &pb.CaptureFilter{Port: proto.Uint32(0)}}
+	if w.matchesEntityFilter(noPort, port0) {
+		t.Error("a capture without a port must not match a port 0 filter")
+	}
+	if !w.matchesEntityFilter(&pb.Entity{Id: "gw.rx.4", Capture: &pb.CaptureComponent{Port: proto.Uint32(0)}}, port0) {
+		t.Error("should match an explicit port 0")
+	}
+	if !w.matchesEntityFilter(noPort, &pb.EntityFilter{Capture: &pb.CaptureFilter{}}) {
+		t.Error("a capture filter without a port should match every capture")
+	}
+
+	byGateway := &pb.EntityFilter{Capture: &pb.CaptureFilter{CapturedBy: proto.String("lora.gw-1"), ContentType: proto.String("application/vnd.hydris.lora-frame")}}
+	if !w.matchesEntityFilter(sealed, byGateway) {
+		t.Error("should match gateway and content type together")
+	}
+	if w.matchesEntityFilter(raw, byGateway) {
+		t.Error("content type must match when set")
+	}
+
+	if !w.matchesEntityFilter(raw, &pb.EntityFilter{Capture: &pb.CaptureFilter{}}) {
+		t.Error("empty capture filter should match any capture")
+	}
+}

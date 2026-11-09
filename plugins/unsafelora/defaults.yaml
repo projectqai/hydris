@@ -1,0 +1,19 @@
+# events from air are pushed as unsafelora.actor (allowed via hydris.actors in package.json), 
+# note that unsafelora is indeed unsafe, so this tries to contain the damage somewhat with this policy
+id: unsafelora.actor
+label: Unsafe LoRa identity
+lifetime:
+  fresh: '1970-01-01T00:00:01Z'
+policy:
+  rules:
+    - action: PolicyActionAllow
+      cel: |
+        is.push
+          && components(change).all(c, c in [
+               "label", "geo", "gnss", "power", "kinematics", "orientation",
+               "detection", "classification", "bearing",
+               "controller", "routing", "link", "lifetime", "pose", "track"])
+          && (head(change.id).controller.id == "" || head(change.id).controller.id == "unsafelora.actor")
+      label: sensor reports into entities that are new, unowned, or from the air
+    - action: PolicyActionDeny
+      label: fail closed

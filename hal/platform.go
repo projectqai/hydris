@@ -36,6 +36,28 @@ type Platform struct {
 
 	// ReadSensors returns a snapshot of all available no-permission sensors.
 	ReadSensors func() []SensorReading
+
+	// MDNSAdvertise announces a DNS-SD service instance (e.g. "_hydris._tcp");
+	// txt entries are published as key=value TXT records.
+	MDNSAdvertise func(instance, service string, port int, txt map[string]string) (stop func(), err error)
+
+	// MDNSBrowse discovers a DNS-SD service type; the callback receives full
+	// snapshots of currently visible peers.
+	MDNSBrowse func(service string, cb func(peers []MDNSPeer)) (stop func(), err error)
+
+	// Joystick discovery. The callback receives full snapshots when the set of
+	// connected devices changes.
+	JoystickWatch func(cb func(devices []JoystickDevice)) (stop func())
+
+	// Joystick access. Handle-based. Read returns the latest state without
+	// blocking, and an error once the device is gone.
+	JoystickOpen  func(id string) (handle int64, err error)
+	JoystickRead  func(handle int64) (JoystickState, error)
+	JoystickClose func(handle int64) error
+
+	// MainThread takes over the main thread and never returns. Set on platforms
+	// where a framework needs it, see RunMain.
+	MainThread func()
 }
 
 // P is the active platform implementation. Set by platform-specific init().

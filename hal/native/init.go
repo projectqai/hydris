@@ -26,5 +26,13 @@ func init() {
 		BLESubscribe:    bleSubscribe,
 		BLEUnsubscribe:  bleUnsubscribe,
 		BLEOnDisconnect: bleOnDisconnect,
+
+		MDNSAdvertise: mdnsAdvertise,
+		MDNSBrowse:    mdnsBrowse,
+
+		JoystickWatch: joystickWatch,
+		JoystickOpen:  joystickOpen,
+		JoystickRead:  joystickRead,
+		JoystickClose: joystickClose,
 	}
 }

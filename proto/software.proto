@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package world;
+
+option go_package = "github.com/projectqai/proto/go";
+
+enum SoftwareState {
+  SoftwareStateUnspecified = 0;
+  SoftwareStateBooted = 1;
+  SoftwareStateNext = 2;
+  SoftwareStateInactive = 3;
+  SoftwareStateBad = 4;
+  SoftwareStateInstallable = 5;
+}
+
+message Software {
+  // ordered by semver precedence if both are semver.
+  // bare numbers count as semver: "7" is 7.0.0, "1.2" is 1.2.0, "0x1f" or "0X1F" is 31.0.0.
+  // anything else is opaque: any difference is an update
+  string version = 1;
+
+  // must match, e.g. "sentient-toaster-mk2.motor"
+  optional string compatible = 2;
+
+  // build identity, e.g. RAUC manifest hash, OSTree commit. if set on both, overrides version
+  optional string digest = 3;
+}
+
+message DeviceSoftwareEntry {
+  Software software = 1;
+  SoftwareState state = 2;
+  optional string slot = 3;
+  optional string task = 4; // task which installs or is currently installing this software
+}
+
+message DeviceSoftware {
+  repeated DeviceSoftwareEntry software = 1;
+}
+
+message SoftwareArtifact {
+  repeated Software software = 1;
+}

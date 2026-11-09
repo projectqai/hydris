@@ -4,7 +4,7 @@ import { create } from "zustand";
 import type { MapViewRef } from "../map-view";
 import { resetDeltaState } from "../utils/transform-entities";
 
-export type FlyToTarget = {
+type FlyToTarget = {
   lat: number;
   lng: number;
   alt?: number;
@@ -12,16 +12,16 @@ export type FlyToTarget = {
   zoom?: number;
   commandId: number;
 } | null;
-export type ZoomCommand = string | null;
+type ZoomCommand = string | null;
 
 type ViewState = { lat: number; lng: number; zoom: number };
 
 type MapEngineState = {
   primaryRef: RefObject<MapViewRef | null> | null;
-  isReady: boolean;
   flyToTarget: FlyToTarget;
   zoomCommand: ZoomCommand;
   currentView: ViewState;
+  pointerType: string | null;
 };
 
 const DEFAULT_VIEW: ViewState = { lat: 0, lng: 0, zoom: 2 };
@@ -30,10 +30,10 @@ const registeredRefs: RefObject<MapViewRef | null>[] = [];
 
 export const useMapEngineStore = create<MapEngineState>()(() => ({
   primaryRef: null,
-  isReady: false,
   flyToTarget: null,
   zoomCommand: null,
   currentView: DEFAULT_VIEW,
+  pointerType: null,
 }));
 
 export function registerMapRef(ref: RefObject<MapViewRef | null>) {
@@ -59,24 +59,12 @@ export function setCurrentView(lat: number, lng: number, zoom: number) {
   useMapEngineStore.setState({ currentView: { lat, lng, zoom } });
 }
 
-export function setMapReady(ready: boolean) {
-  useMapEngineStore.setState({ isReady: ready });
-}
-
-export function useMapRef() {
-  return useMapEngineStore((s) => s.primaryRef);
-}
-
-export function useFlyToTarget() {
-  return useMapEngineStore((s) => s.flyToTarget);
+export function setPointerType(pointerType: string) {
+  useMapEngineStore.setState({ pointerType });
 }
 
 export function clearFlyToTarget() {
   useMapEngineStore.setState({ flyToTarget: null });
-}
-
-export function useZoomCommand() {
-  return useMapEngineStore((s) => s.zoomCommand);
 }
 
 const getRef = () => useMapEngineStore.getState().primaryRef?.current ?? null;

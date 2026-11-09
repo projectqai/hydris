@@ -1,0 +1,41 @@
+name: Nix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**.nix'
+      - 'flake.lock'
+      - 'bun.lock'
+      - 'package.json'
+      - '.github/workflows/nix.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '**.nix'
+      - 'flake.lock'
+      - 'bun.lock'
+      - 'package.json'
+      - '.github/workflows/nix.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      # Check nix formatting except bun.nix
+      - name: Check formatting
+        run: nix fmt -- --check $(git ls-files '*.nix' ':!nix/bun.nix')
+
+      # Evaluates every output for every system without building anything:
+      - name: Evaluate flake
+        run: nix flake check --no-build --all-systems

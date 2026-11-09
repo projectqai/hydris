@@ -91,6 +91,16 @@ func serviceSchema() *structpb.Struct {
 				"title":       "Enable Demo Ship",
 				"description": "When enabled, creates a demo vessel with assembly outline, cameras, and radar",
 			},
+			"enable_modes": map[string]any{
+				"type":        "boolean",
+				"title":       "Enable Mode Demo",
+				"description": "When enabled, creates a demo sensor with switchable modes and tasks",
+			},
+			"enable_isr": map[string]any{
+				"type":        "boolean",
+				"title":       "Enable ISR Drone",
+				"description": "When enabled, flies a drone in a circle over flat farmland with a downward camera detecting vehicles and people",
+			},
 			"enable_map_layers": map[string]any{
 				"type":        "boolean",
 				"title":       "Enable Map Layers",
@@ -309,6 +319,11 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 					Label:       "Blue Team",
 					Description: "Simulated hiking teams in the Swiss Alps carrying sensors and radios. Useful for demoing friendly-force tracking.",
 				},
+				{
+					Class:       "isr",
+					Label:       "ISR Drone Simulator",
+					Description: "A drone orbiting over flat farmland with a gimballed camera that detects the vehicles and people moving below.",
+				},
 			},
 		},
 		Interactivity: &pb.InteractivityComponent{
@@ -332,6 +347,8 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 		{Class: "drone_radar", Label: "Simulated Drone Radar", Schema: radarSchema()},
 		{Class: "sensor_network", Label: "Sensor Network", Schema: sensorNetworkSchema()},
 		{Class: "blue_team", Label: "Blue Team", Schema: blueTeamSchema()},
+		{Class: modeDemoClass, Label: "Mode Demo Sensor"},
+		{Class: "isr", Label: "ISR Drone Simulator", Schema: isrSchema()},
 		// "broken" is deliberately NOT in the class list — WatchChildren
 		// will not push a Configurable onto it, so it stays schema-less.
 	}
@@ -359,7 +376,9 @@ var (
 	sensorDevices     []string
 	blueTeamDevices   []string
 	shipDevices       []string
+	isrDevices        []string
 	mapLayerDevices   []string
+	modeDemoDevices   []string
 )
 
 type serviceConfig struct {
@@ -373,7 +392,9 @@ type serviceConfig struct {
 	EnableSensors   bool
 	EnableBlueTeam  bool
 	EnableShip      bool
+	EnableISR       bool
 	EnableMapLayers bool
+	EnableModes     bool
 }
 
 func parseServiceConfig(entity *pb.Entity) serviceConfig {
@@ -411,8 +432,14 @@ func parseServiceConfig(entity *pb.Entity) serviceConfig {
 	if v, ok := entity.Config.Value.Fields["enable_ship"]; ok {
 		cfg.EnableShip = v.GetBoolValue()
 	}
+	if v, ok := entity.Config.Value.Fields["enable_isr"]; ok {
+		cfg.EnableISR = v.GetBoolValue()
+	}
 	if v, ok := entity.Config.Value.Fields["enable_map_layers"]; ok {
 		cfg.EnableMapLayers = v.GetBoolValue()
+	}
+	if v, ok := entity.Config.Value.Fields["enable_modes"]; ok {
+		cfg.EnableModes = v.GetBoolValue()
 	}
 	return cfg
 }
@@ -636,13 +663,52 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 		expireTrackedEntities(ctx, logger, &shipDevices, "ship")
 	}
 
+	if cfg.EnableModes {
+		logger.Info("playground: mode demo enabled, creating demo sensor")
+		pushTrackedEntities(ctx, logger, &modeDemoDevices, "mode demo", []*pb.Entity{
+			{
+				Id:      controllerName + ".discovered." + modeDemoClass,
+				Label:   proto.String("Mode Demo Sensor"),
+				Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
+				Controller: &pb.Controller{
+					Id: proto.String(controllerName),
+				},
+				Device: &pb.DeviceComponent{
+					Parent:   proto.String(controllerName + ".service"),
+					Class:    proto.String(modeDemoClass),
+					Category: proto.String("Sensors"),
+					State:    pb.DeviceState_DeviceStateActive,
+				},
+				Symbol: &pb.SymbolComponent{MilStd2525C: "SFGPESU---"},
+				// no settings: modes are switched through taskables, not config
+				Config: &pb.ConfigurationComponent{Value: &structpb.Struct{}, Version: 1},
+				Geo: &pb.GeoSpatialComponent{
+					Latitude:  51.9605,
+					Longitude: 4.1520,
+				},
+			},
+		})
+	} else {
+		logger.Info("playground: mode demo disabled, cleaning up")
+		expireTrackedEntities(ctx, logger, &modeDemoDevices, "mode demo")
+	}
+
+	if cfg.EnableISR {
+		logger.Info("playground: ISR enabled, launching drone")
+		pushTrackedEntities(ctx, logger, &isrDevices, "isr", []*pb.Entity{isrDevice()})
+	} else {
+		logger.Info("playground: ISR disabled, cleaning up")
+		expireTrackedEntities(ctx, logger, &isrDevices, "isr")
+	}
+
 	if cfg.EnableMapLayers {
 		logger.Info("playground: map layers enabled, publishing demo layers")
 		pushTrackedEntities(ctx, logger, &mapLayerDevices, "map layers", []*pb.Entity{
 			{
-				Id:       "playground.layers.osm-tiles",
-				Label:    proto.String("OSM tiles"),
-				Lifetime: &pb.Lifetime{From: timestamppb.Now(), Fresh: timestamppb.Now()},
+				Id:         "playground.layers.osm-tiles",
+				Label:      proto.String("OSM tiles"),
+				Controller: &pb.Controller{Id: proto.String(controllerName)},
+				Lifetime:   &pb.Lifetime{From: timestamppb.Now(), Fresh: timestamppb.Now()},
 				MapLayer: &pb.MapLayerComponent{
 					ZIndex: 0,
 					Source: &pb.MapLayerComponent_Tiles{
@@ -653,9 +719,10 @@ func runServiceConfig(ctx context.Context, logger *slog.Logger, entity *pb.Entit
 				},
 			},
 			{
-				Id:       "playground.layers.night-lights",
-				Label:    proto.String("Night Lights"),
-				Lifetime: &pb.Lifetime{From: timestamppb.Now(), Fresh: timestamppb.Now()},
+				Id:         "playground.layers.night-lights",
+				Label:      proto.String("Night Lights"),
+				Controller: &pb.Controller{Id: proto.String(controllerName)},
+				Lifetime:   &pb.Lifetime{From: timestamppb.Now(), Fresh: timestamppb.Now()},
 				MapLayer: &pb.MapLayerComponent{
 					ZIndex: 1,
 					Source: &pb.MapLayerComponent_Tiles{
@@ -832,7 +899,7 @@ func demoCameras() []*pb.Entity {
 			id: "camera.Hamburg-Strandweg-Port", label: "Hamburg - Strandweg - Port",
 			lat: 53.557779405425684, lon: 9.795713307927747, cameras: []*pb.MediaStream{{
 				Label: "Hamburg - Strandweg - Port", Protocol: pb.MediaStreamProtocol_MediaStreamProtocolImage,
-				Url: "https://www.hafen-hamburg.de/assets/files/wcpath_uuGl4KkwyCyXd39jVZyN4J6jiKQLVz1u/blankenese.jpg",
+				Url: "https://cdn.blkknt.net/blankenese.jpg",
 			}},
 		},
 		{
@@ -853,14 +920,14 @@ func demoCameras() []*pb.Entity {
 			id: "camera.Kristiansand-Port", label: "Kristiansand Port",
 			lat: 58.14666929312107, lon: 8.00609350204468, cameras: []*pb.MediaStream{{
 				Label: "Kristiansand Port", Protocol: pb.MediaStreamProtocol_MediaStreamProtocolHls,
-				Url: "https://polarislive-lh.akamaized.net/hls/live/2039438/fvn/jqGugHSmKzQwRw5pMerRL/source.m3u8",
+				Url: "https://polarislive-lh.akamaized.net/hls/live/msl5/20001082/fvn/jqGugHSmKzQwRw5pMerRL/master.m3u8",
 			}},
 		},
 		{
 			id: "camera.Vest-Agder-Lindesnes-Lighthouse", label: "Vest-Agder - Lindesnes Lighthouse",
 			lat: 57.98463738395755, lon: 7.04800844192505, cameras: []*pb.MediaStream{{
 				Label: "Vest-Agder - Lindesnes Lighthouse", Protocol: pb.MediaStreamProtocol_MediaStreamProtocolHls,
-				Url: "https://polarislive-lh.akamaized.net/hls/live/2039440/fvn/9wOObU20Nmtsqt8WRITUL/source.m3u8",
+				Url: "https://polarislive-lh.akamaized.net/hls/live/msl5/20001083/fvn/9wOObU20Nmtsqt8WRITUL/master.m3u8",
 			}},
 		},
 		{
@@ -1007,6 +1074,18 @@ func runChild(ctx context.Context, logger *slog.Logger, entityID string) error {
 		// Simulated hiking teams in the Swiss Alps with sensors and radios.
 		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
 			return runBlueTeam(ctx, logger, entity, ready)
+		})
+
+	case modeDemoClass:
+		// Simulated demo sensor with switchable modes.
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+			return runModeDemo(ctx, logger, entity, ready)
+		})
+
+	case "isr":
+		// Drone orbit with a simcam gimbal detecting ground targets.
+		return controller.Run(ctx, controllerName, entityID, func(ctx context.Context, entity *pb.Entity, ready func()) error {
+			return runISR(ctx, logger, entity, ready)
 		})
 
 	default:

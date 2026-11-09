@@ -51,12 +51,18 @@ export async function downloadFromEndpoint(opts: EndpointDownloadOpts): Promise<
   }
 
   const tempPath = `${ReactNativeBlobUtil.fs.dirs.CacheDir}/${opts.fallbackFilename}`;
-  const res = await ReactNativeBlobUtil.config({ fileCache: true, path: tempPath }).fetch(
-    method,
-    opts.url,
-    opts.headers,
-    opts.body,
-  );
+  let res;
+  try {
+    res = await ReactNativeBlobUtil.config({ fileCache: true, path: tempPath }).fetch(
+      method,
+      opts.url,
+      opts.headers,
+      opts.body,
+    );
+  } catch (err) {
+    await ReactNativeBlobUtil.fs.unlink(tempPath).catch(() => {});
+    throw err;
+  }
   const status = res.respInfo.status;
   if (status < 200 || status >= 300) {
     // blob-util wrote the response body to tempPath even on non-2xx. read it

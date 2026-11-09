@@ -2,6 +2,8 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useColorScheme } from "nativewind";
 import type { ComponentProps } from "react";
 
+export const ON_DARK_ICON_MUTED = "rgba(255, 255, 255, 0.5)";
+
 const DARK_GRADIENTS = {
   default: [
     "rgba(22, 22, 22, 0.98)",
@@ -83,23 +85,17 @@ type ThemeColorValues = {
   surfaceInset: string;
   surfaceInsetSelected: string;
   placeholder: string;
-  controlBg: string;
-  controlBgHover: string;
-  controlBorder: string;
-  controlBorderHover: string;
   controlFg: string;
   controlFgActive: string;
   controlFgDisabled: string;
   controlTrackOff: readonly [string, string];
   controlTrackOn: readonly [string, string];
   controlInputBg: string;
-  controlTextMuted: string;
   divider: string;
   dividerPill: string;
   topBarBg: string;
   topBarCustomizeBg: string;
   topBarBorderBottom: string;
-  gradientOverlay: string;
   paneHeaderBg: string;
   switchTrackBg: string;
   switchTrackBorder: string;
@@ -109,8 +105,12 @@ type ThemeColorValues = {
   insetHighlight: string;
   insetShadow: string;
   activeGreen: string;
+  activeGreenGlow: string;
+  green: string;
+  blue: string;
   warning: string;
   destructiveRed: string;
+  destructiveRedGlow: string;
   successForeground: string;
   pendingForeground: string;
   redForeground: string;
@@ -124,12 +124,7 @@ type ThemeColorValues = {
   placementAccent: string;
   placementAccentSubtle: string;
   topBarPlacementBg: string;
-  controlShadow: {
-    color: string;
-    offset: number;
-    opacity: number;
-    radius: number;
-  };
+  controlBoxShadow: string;
   gradients: {
     default: readonly [string, string, ...string[]];
     active: readonly [string, string, ...string[]];
@@ -158,23 +153,17 @@ const THEME_COLORS: Record<"dark" | "light", ThemeColorValues> = {
     surfaceInset: "rgba(255, 255, 255, 0.04)",
     surfaceInsetSelected: "rgba(0, 0, 0, 0.3)",
     placeholder: "rgba(255, 255, 255, 0.4)",
-    controlBg: "#222",
-    controlBgHover: "#2a2a2e",
-    controlBorder: "#27272a",
-    controlBorderHover: "#3f3f46",
     controlFg: "rgb(163, 163, 163)",
     controlFgActive: "rgb(220, 220, 220)",
     controlFgDisabled: "rgb(113, 113, 113)",
     controlTrackOff: ["#52525b", "#3f3f46"],
     controlTrackOn: ["#e5e5e5", "#d4d4d4"],
     controlInputBg: "#09090b",
-    controlTextMuted: "rgb(140, 140, 140)",
     divider: "rgb(0, 0, 0)",
     dividerPill: "rgba(255, 255, 255, 0.5)",
     topBarBg: "rgb(22, 22, 24)",
     topBarCustomizeBg: "rgb(36, 28, 18)",
     topBarBorderBottom: "rgba(0, 0, 0, 0.6)",
-    gradientOverlay: "rgba(0, 0, 0, 0.6)",
     paneHeaderBg: "rgba(0, 0, 0, 0.80)",
     switchTrackBg: "#09090b",
     switchTrackBorder: "#27272a",
@@ -184,8 +173,12 @@ const THEME_COLORS: Record<"dark" | "light", ThemeColorValues> = {
     insetHighlight: "rgba(255, 255, 255, 0.08)",
     insetShadow: "inset 0 1px 3px rgba(0,0,0,0.45)",
     activeGreen: "rgb(34, 197, 94)",
+    activeGreenGlow: "rgba(34, 197, 94, 0.4)",
+    green: "rgb(34, 197, 94)",
+    blue: "rgb(59, 130, 246)",
     warning: "rgb(249, 87, 56)",
     destructiveRed: "rgb(205, 24, 24)",
+    destructiveRedGlow: "rgba(205, 24, 24, 0.4)",
     successForeground: "rgb(52, 211, 153)",
     pendingForeground: "rgb(251, 191, 36)",
     redForeground: "rgb(248, 113, 113)",
@@ -199,7 +192,7 @@ const THEME_COLORS: Record<"dark" | "light", ThemeColorValues> = {
     placementAccent: "rgb(16, 185, 129)",
     placementAccentSubtle: "rgba(16, 185, 129, 0.25)",
     topBarPlacementBg: "rgb(8, 32, 26)",
-    controlShadow: { color: "#000", offset: 1, opacity: 0.3, radius: 3 },
+    controlBoxShadow: "0 2px 4px rgba(0,0,0,0.65)",
     gradients: DARK_GRADIENTS,
   },
   light: {
@@ -221,23 +214,17 @@ const THEME_COLORS: Record<"dark" | "light", ThemeColorValues> = {
     surfaceInset: "rgba(0, 0, 0, 0.10)",
     surfaceInsetSelected: "rgba(0, 0, 0, 0.15)",
     placeholder: "rgba(0, 0, 0, 0.45)",
-    controlBg: "rgb(226, 226, 228)",
-    controlBgHover: "rgb(216, 216, 218)",
-    controlBorder: "rgb(180, 180, 184)",
-    controlBorderHover: "rgb(148, 148, 152)",
     controlFg: "rgb(72, 72, 78)",
     controlFgActive: "rgb(24, 24, 26)",
     controlFgDisabled: "rgb(164, 164, 170)",
     controlTrackOff: ["#ffffff", "#f2f2f4"],
     controlTrackOn: ["#ffffff", "#f2f2f4"],
     controlInputBg: "rgb(240, 240, 242)",
-    controlTextMuted: "rgb(84, 84, 90)",
     divider: "rgb(180, 180, 184)",
     dividerPill: "rgba(0, 0, 0, 0.25)",
     topBarBg: "rgb(222, 222, 224)",
     topBarCustomizeBg: "rgb(36, 28, 18)",
     topBarBorderBottom: "rgba(0, 0, 0, 0.12)",
-    gradientOverlay: "rgba(240, 240, 242, 0.7)",
     paneHeaderBg: "rgba(222, 222, 224, 0.95)",
     switchTrackBg: "rgb(200, 200, 204)",
     switchTrackBorder: "rgb(180, 180, 184)",
@@ -247,8 +234,12 @@ const THEME_COLORS: Record<"dark" | "light", ThemeColorValues> = {
     insetHighlight: "rgba(255, 255, 255, 0.60)",
     insetShadow: "inset 0 1px 3px rgba(0,0,0,0.12)",
     activeGreen: "rgb(40, 180, 99)",
+    activeGreenGlow: "rgba(40, 180, 99, 0.4)",
+    green: "rgb(14, 108, 48)",
+    blue: "rgb(28, 82, 208)",
     warning: "rgb(168, 52, 8)",
     destructiveRed: "rgb(190, 18, 18)",
+    destructiveRedGlow: "rgba(190, 18, 18, 0.4)",
     successForeground: "rgb(2, 90, 65)",
     pendingForeground: "rgb(132, 58, 0)",
     redForeground: "rgb(148, 18, 18)",
@@ -262,7 +253,7 @@ const THEME_COLORS: Record<"dark" | "light", ThemeColorValues> = {
     placementAccent: "rgb(5, 150, 105)",
     placementAccentSubtle: "rgba(5, 150, 105, 0.25)",
     topBarPlacementBg: "rgb(200, 232, 222)",
-    controlShadow: { color: "#000", offset: 1, opacity: 0.15, radius: 4 },
+    controlBoxShadow: "0 2px 4px rgba(0,0,0,0.22)",
     gradients: LIGHT_GRADIENTS,
   },
 };
@@ -272,6 +263,13 @@ export type ThemeColors = ThemeColorValues;
 export function useThemeColors(): ThemeColors {
   const { colorScheme } = useColorScheme();
   return THEME_COLORS[colorScheme ?? "dark"];
+}
+
+export function useOnGreenColor(): string {
+  const t = useThemeColors();
+  const { colorScheme } = useColorScheme();
+
+  return colorScheme === "light" ? t.foreground : t.controlInputBg;
 }
 
 export const GRADIENT_PROPS = {

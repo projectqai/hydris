@@ -75,18 +75,31 @@ func (t *ImageBboxTransformer) Resolve(head map[string]*pb.Entity, changedID str
 		}
 	}
 
-	azimuthDeg := cameraPan + math.Atan2(cx-fw/2.0, focalPx)*180.0/math.Pi
-	elevationDeg := cameraTilt + math.Atan2(-(cy-fh/2.0), focalPx)*180.0/math.Pi
+	// Cast the ray through a pixel and rotate it by the camera tilt. Adding
+	// pixel angles to pan/tilt directly is only right for a level camera:
+	// tilted, a horizontal pixel offset spans more azimuth (≈1/cos tilt) and
+	// shifts elevation.
+	sinT, cosT := math.Sincos(cameraTilt * math.Pi / 180.0)
+	ray := func(px, py float64) (azDeg, elDeg float64) {
+		right := px - fw/2.0
+		up := fh/2.0 - py
+		north := focalPx*cosT - up*sinT // along the pan direction
+		vert := focalPx*sinT + up*cosT
+		azDeg = cameraPan + math.Atan2(right, north)*180.0/math.Pi
+		elDeg = math.Atan2(vert, math.Hypot(right, north)) * 180.0 / math.Pi
+		return azDeg, elDeg
+	}
 
+	azimuthDeg, elevationDeg := ray(cx, cy)
 	azimuthDeg = math.Mod(azimuthDeg+360, 360)
 
-	leftRad := math.Atan2(float64(bbox.X)-fw/2.0, focalPx)
-	rightRad := math.Atan2(float64(bbox.X+bbox.Width)-fw/2.0, focalPx)
-	topRad := math.Atan2(-(float64(bbox.Y) - fh/2.0), focalPx)
-	bottomRad := math.Atan2(-(float64(bbox.Y+bbox.Height) - fh/2.0), focalPx)
+	leftAz, _ := ray(float64(bbox.X), cy)
+	rightAz, _ := ray(float64(bbox.X+bbox.Width), cy)
+	_, topEl := ray(cx, float64(bbox.Y))
+	_, bottomEl := ray(cx, float64(bbox.Y+bbox.Height))
 
-	azExtentDeg := (rightRad - leftRad) * 180.0 / math.Pi
-	elExtentDeg := (topRad - bottomRad) * 180.0 / math.Pi
+	azExtentDeg := math.Mod(rightAz-leftAz+720, 360)
+	elExtentDeg := topEl - bottomEl
 
 	entity.Pose = &pb.PoseComponent{
 		Parent: *det.DetectorEntityId,
@@ -98,6 +111,16 @@ func (t *ImageBboxTransformer) Resolve(head map[string]*pb.Entity, changedID str
 		},
 	}
 
+	// A downward-looking camera at a known height bounds the range: for a
+	// ground target the line of sight ends where it meets the ground, and
+	// the bbox's top and bottom edges give the near and far limits. Without
+	// this the detection is a bare line of bearing, tens of kilometres long.
+	if rng, rngErr, ok := groundRange(head, camera, det, azimuthDeg, elevationDeg, topEl, bottomEl); ok {
+		polar := entity.Pose.Offset.(*pb.PoseComponent_Polar).Polar
+		polar.Range = &rng
+		polar.RangeErrorM = &rngErr
+	}
+
 	// Pre-set bearing extent fields. PoseTransformer will compute the absolute
 	// center bearing and preserve these values.
 	entity.Bearing = &pb.BearingComponent{
@@ -106,4 +129,54 @@ func (t *ImageBboxTransformer) Resolve(head map[string]*pb.Entity, changedID str
 	}
 
 	return nil, nil
+}
+
+// groundRange intersects the detection's line of sight with flat ground at
+// altitude 0, seen from the camera. It reports the slant range to the bbox
+// centre and half the spread between the bbox's bottom and top edges.
+//
+// It only applies to ground targets: it is skipped when the camera has no
+// altitude, when the sight line does not reach the ground (at or above the
+// horizon, including the bbox's top edge), or when the evidence is known to
+// be airborne.
+func groundRange(head map[string]*pb.Entity, camera *pb.Entity, det *pb.DetectionComponent,
+	azDeg, elDeg, topEl, bottomEl float64) (rng, rngErr float64, ok bool) {
+	if camera.Geo == nil || camera.Geo.Altitude == nil || *camera.Geo.Altitude <= 0 {
+		return 0, 0, false
+	}
+	for _, id := range det.Evidence {
+		if ev := head[id]; ev != nil {
+			switch ev.GetClassification().GetDimension() {
+			case pb.ClassificationBattleDimension_ClassificationBattleDimensionAir,
+				pb.ClassificationBattleDimension_ClassificationBattleDimensionSpace:
+				return 0, 0, false
+			}
+		}
+	}
+	alt := *camera.Geo.Altitude
+	var q *pb.Quaternion
+	if camera.Orientation != nil {
+		q = camera.Orientation.Orientation
+	}
+	// Slant range along (az, el) given in the camera's frame to the ground.
+	slant := func(el float64) (float64, bool) {
+		az, e := azDeg*math.Pi/180.0, el*math.Pi/180.0
+		east := math.Cos(e) * math.Sin(az)
+		north := math.Cos(e) * math.Cos(az)
+		up := math.Sin(e)
+		if q != nil {
+			_, _, up = rotateByQuaternion(east, north, up, q)
+		}
+		if up >= -1e-3 {
+			return 0, false
+		}
+		return alt / -up, true
+	}
+	centre, ok1 := slant(elDeg)
+	near, ok2 := slant(bottomEl)
+	far, ok3 := slant(topEl)
+	if !ok1 || !ok2 || !ok3 {
+		return 0, 0, false
+	}
+	return centre, math.Abs(far-near) / 2, true
 }

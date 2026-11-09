@@ -157,8 +157,6 @@ function DetailTabs() {
   );
 }
 
-export { useEntityDetails };
-
 export const EntityDetails = {
   Root,
   Header,

@@ -6,19 +6,21 @@ Expo/React Native monorepo for web and Android.
 
 - [Go](https://go.dev)
 - [Bun](https://bun.sh)
-- [Android SDK](https://developer.android.com/studio) + NDK 26.1 (for Android)
+- [JDK 17](https://adoptium.net/temurin/releases/?version=17) (for Android)
+- [Android SDK](https://developer.android.com/studio) (for Android)
+- Platform and NDK dependencies are automatically handled by Expo
 
 ## Setup
 
-From the repo root:
+From the repo root (you have probably already done this):
 
 ```bash
 make setup
 ```
 
-## Web
+Then setup the [env file](#environment-variables).
 
-No Android SDK needed.
+## Web
 
 ```bash
 bun dev:web              # dev server
@@ -133,4 +135,5 @@ bun dev --clear
 
 ## Protocol Buffers
 
-Proto types are provided by [`@projectqai/proto`](https://www.npmjs.com/package/@projectqai/proto).
+Proto types come from the in-repo `proto/ts` package, also published on npm as
+`@projectqai/proto`. The `.proto` sources live in `proto/`; regenerate with `make proto_ts`.

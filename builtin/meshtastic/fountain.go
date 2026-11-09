@@ -1,14 +1,13 @@
 package meshtastic
 
 import (
-	"bytes"
-	"compress/zlib"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"math"
 	"sync"
 	"time"
+
+	"github.com/projectqai/hydris/pkg/zlibutil"
 )
 
 // Fountain code decoder for ATAK_FORWARDER (port 257) packets.
@@ -143,7 +142,7 @@ func (r *ftnReassembler) addBlock(block *ftnDataBlock) ([]byte, bool) {
 	}
 
 	// Decompress zlib
-	xml, err := zlibDecompress(payload)
+	xml, err := zlibutil.Decompress(payload)
 	if err != nil {
 		// Try raw — maybe it's not compressed
 		if len(payload) > 0 && payload[0] == '<' {
@@ -425,28 +424,4 @@ func ftnEncode(data []byte, transferID int) [][]byte {
 
 func ftnGenerateSeed(transferID, blockIndex int) int {
 	return (transferID*31337 + blockIndex*7919) & 0xFFFF
-}
-
-func zlibCompress(data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	w := zlib.NewWriter(&buf)
-	if _, err := w.Write(data); err != nil {
-		_ = w.Close()
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-const maxDecompressedSize = 1 << 20 // 1 MiB
-
-func zlibDecompress(data []byte) ([]byte, error) {
-	r, err := zlib.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = r.Close() }()
-	return io.ReadAll(io.LimitReader(r, maxDecompressedSize))
 }

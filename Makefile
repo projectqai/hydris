@@ -1,13 +1,23 @@
-.PHONY: all build clean frontend aio android desktop desktop-dev all pre-release release install-tools docker desktop_windows setup deeptest blackbox
+.PHONY: all build clean frontend aio android desktop desktop-dev all pre-release release install-tools docker desktop_windows setup deeptest blackbox cli_headless proto proto_go proto_ts proto_python
 
 VERSION := $(shell git describe --always --dirty --tags)
 LDFLAGS  = -X 'github.com/projectqai/hydris/pkg/version.Version=$(VERSION)'
+
+# Build variant knobs. TAGS selects Go build tags; VARIANT is a filename infix
+# so variant artifacts don't collide with the stock ones. Both empty by default.
+TAGS    ?=
+VARIANT ?=
+# Expands to "-ext" for VARIANT=ext, empty otherwise (the "-" is added here so
+# callers pass a bare name, e.g. VARIANT=ext).
+variant_infix = $(if $(VARIANT),-$(VARIANT))
+
+export PATH := $(shell go env GOPATH)/bin:$(PATH)
 
 default: all
 
 setup:
 	go tool lefthook install
-	cd view && bun i
+	bun i
 
 install-tools:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
@@ -15,14 +25,32 @@ install-tools:
 	go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
 	go install github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc@latest
 	go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+
+# Regenerate the vendored proto bindings from proto/*.proto. The proto sources
+# now live in-tree under proto/ (Go bindings wired via the go.mod replace, TS
+# bindings consumed by view/ as the @projectqai/proto workspace package).
+proto: proto_go proto_ts proto_python
+
+proto_go:
+	$(MAKE) -C proto/go generate
+
+proto_ts:
+	$(MAKE) -C proto/ts generate
+
+proto_python:
+	$(MAKE) -C proto/python generate
 
 frontend:
-	cd view && bun i
-	cd view && bun run build:web
+	bun i
+	$(MAKE) proto_ts
+	bun run build:web
 
 all:
 	make frontend
 	make cli
+	make cli_headless
 	make desktop
 	make android
 	make docker
@@ -30,21 +58,27 @@ all:
 cli: cli_linux cli_windows cli_mac
 
 cli_linux:
-	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o bin/hydris-cli-linux-amd64-$(VERSION) .
-	tar -cJf bin/hydris-cli-linux-amd64-$(VERSION).tar.xz -C bin hydris-cli-linux-amd64-$(VERSION)
-	rm bin/hydris-cli-linux-amd64-$(VERSION)
-	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o bin/hydris-cli-linux-arm64-$(VERSION) .
-	tar -cJf bin/hydris-cli-linux-arm64-$(VERSION).tar.xz -C bin hydris-cli-linux-arm64-$(VERSION)
-	rm bin/hydris-cli-linux-arm64-$(VERSION)
+	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build $(if $(TAGS),-tags "$(TAGS)") -ldflags="$(LDFLAGS)" -o bin/hydris-cli$(variant_infix)-linux-amd64-$(VERSION) .
+	tar -cJf bin/hydris-cli$(variant_infix)-linux-amd64-$(VERSION).tar.xz -C bin hydris-cli$(variant_infix)-linux-amd64-$(VERSION)
+	rm bin/hydris-cli$(variant_infix)-linux-amd64-$(VERSION)
+	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build $(if $(TAGS),-tags "$(TAGS)") -ldflags="$(LDFLAGS)" -o bin/hydris-cli$(variant_infix)-linux-arm64-$(VERSION) .
+	tar -cJf bin/hydris-cli$(variant_infix)-linux-arm64-$(VERSION).tar.xz -C bin hydris-cli$(variant_infix)-linux-arm64-$(VERSION)
+	rm bin/hydris-cli$(variant_infix)-linux-arm64-$(VERSION)
+
+# Headless build without embedded frontend
+cli_headless:
+	CGO_ENABLED=0 GOOS=linux   GOARCH=arm GOARM=5 go build -tags "noui $(TAGS)" -ldflags="$(LDFLAGS) -s -w" -o bin/hydris-cli$(variant_infix)-linux-armv5-$(VERSION) .
+	tar -cJf bin/hydris-cli$(variant_infix)-linux-armv5-$(VERSION).tar.xz -C bin hydris-cli$(variant_infix)-linux-armv5-$(VERSION)
+	rm bin/hydris-cli$(variant_infix)-linux-armv5-$(VERSION)
 
 cli_windows:
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o bin/hydris-cli-windows-amd64-$(VERSION).exe .
-	cd bin && zip hydris-cli-windows-amd64-$(VERSION).zip hydris-cli-windows-amd64-$(VERSION).exe && rm hydris-cli-windows-amd64-$(VERSION).exe
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(if $(TAGS),-tags "$(TAGS)") -ldflags="$(LDFLAGS)" -o bin/hydris-cli$(variant_infix)-windows-amd64-$(VERSION).exe .
+	cd bin && zip hydris-cli$(variant_infix)-windows-amd64-$(VERSION).zip hydris-cli$(variant_infix)-windows-amd64-$(VERSION).exe && rm hydris-cli$(variant_infix)-windows-amd64-$(VERSION).exe
 
 cli_mac:
-	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o bin/hydris-cli-macos-arm64-$(VERSION) .
-	tar -cJf bin/hydris-cli-macos-arm64-$(VERSION).tar.xz -C bin hydris-cli-macos-arm64-$(VERSION)
-	rm bin/hydris-cli-macos-arm64-$(VERSION)
+	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build $(if $(TAGS),-tags "$(TAGS)") -ldflags="$(LDFLAGS)" -o bin/hydris-cli$(variant_infix)-macos-arm64-$(VERSION) .
+	tar -cJf bin/hydris-cli$(variant_infix)-macos-arm64-$(VERSION).tar.xz -C bin hydris-cli$(variant_infix)-macos-arm64-$(VERSION)
+	rm bin/hydris-cli$(variant_infix)-macos-arm64-$(VERSION)
 
 desktop: desktop_windows desktop_mac
 
@@ -52,11 +86,11 @@ desktop_native:
 	cd desktop && go build -ldflags="$(LDFLAGS)" -o ../bin/hydris-desktop-$$(go env GOOS)-$$(go env GOARCH)-$(VERSION) .
 
 # Compile the native macOS HAL dylib (run once on a Mac).
-# Provides BLE (CoreBluetooth), serial (IOKit/POSIX) access.
+# Provides BLE (CoreBluetooth), serial (IOKit/POSIX) and joystick (GameController) access.
 hal_dylib:
-	clang -dynamiclib -framework Foundation -framework IOKit -framework CoreBluetooth \
+	clang -dynamiclib -framework Foundation -framework IOKit -framework CoreBluetooth -framework GameController \
 		-arch arm64 -O2 -fobjc-arc \
-		hal/macos/hal_serial.m hal/macos/hal_ble.m \
+		hal/macos/hal_serial.m hal/macos/hal_ble.m hal/macos/hal_joystick.m \
 		-o hal/macos/libhydris_hal.dylib
 
 # Compile the native macOS WKWebView helper (run once on a Mac).
@@ -75,13 +109,13 @@ desktop_shim_chrome:
 # macOS WKWebView build — lightweight, uses system WebKit.
 desktop_mac:
 	@test -f desktop/shim/hydris-webview-webkit || (echo "run 'make desktop_shim' on a Mac first" && false)
-	cd desktop && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o ../bin/hydris-desktop-macos-arm64-$(VERSION) .
-	$(call make_app_bundle_base,bin/hydris-desktop-macos-arm64-$(VERSION),bin/Hydris.app)
+	cd desktop && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build $(if $(TAGS),-tags "$(TAGS)") -ldflags="$(LDFLAGS)" -o ../bin/hydris-desktop$(variant_infix)-macos-arm64-$(VERSION) .
+	$(call make_app_bundle_base,bin/hydris-desktop$(variant_infix)-macos-arm64-$(VERSION),bin/Hydris.app)
 	cp desktop/shim/hydris-webview-webkit bin/Hydris.app/Contents/MacOS/hydris-webview
 	@test -f hal/macos/libhydris_hal.dylib && cp hal/macos/libhydris_hal.dylib bin/Hydris.app/Contents/MacOS/libhydris_hal.dylib || echo "warning: HAL dylib not built, run 'make hal_dylib' on a Mac"
 	$(call codesign_app,bin/Hydris.app)
-	cd bin && rm -f hydris-desktop-macos-arm64-$(VERSION).zip && zip -r hydris-desktop-macos-arm64-$(VERSION).zip Hydris.app
-	rm -rf bin/Hydris.app bin/hydris-desktop-macos-arm64-$(VERSION)
+	cd bin && rm -f hydris-desktop$(variant_infix)-macos-arm64-$(VERSION).zip && zip -r hydris-desktop$(variant_infix)-macos-arm64-$(VERSION).zip Hydris.app
+	rm -rf bin/Hydris.app bin/hydris-desktop$(variant_infix)-macos-arm64-$(VERSION)
 
 # macOS CEF/Chromium build — full Chromium browser engine.
 desktop_mac_chrome:
@@ -123,21 +157,21 @@ endef
 
 desktop_windows:
 	x86_64-w64-mingw32-windres desktop/hydris.rc -O coff -o desktop/hydris_windows.syso
-	cd desktop && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS) -H windowsgui" -o ../bin/hydris-desktop-windows-amd64-$(VERSION).exe .
-	cd bin && zip hydris-desktop-windows-amd64-$(VERSION).zip hydris-desktop-windows-amd64-$(VERSION).exe && rm hydris-desktop-windows-amd64-$(VERSION).exe
+	cd desktop && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(if $(TAGS),-tags "$(TAGS)") -ldflags="$(LDFLAGS) -H windowsgui" -o ../bin/hydris-desktop$(variant_infix)-windows-amd64-$(VERSION).exe .
+	cd bin && zip hydris-desktop$(variant_infix)-windows-amd64-$(VERSION).zip hydris-desktop$(variant_infix)-windows-amd64-$(VERSION).exe && rm hydris-desktop$(variant_infix)-windows-amd64-$(VERSION).exe
 
 android: android_aar
 	cp android/aar/build/outputs/aar/aar-release.aar view/packages/hydris-engine/android/libs/hydris.aar
 	cd view/packages/hydris-engine/android/libs && unzip -o hydris.aar classes.jar 'jni/*' -d . && unzip -o hydris.aar libs/classes.jar -d . && mv libs/classes.jar go-classes.jar && rmdir libs 2>/dev/null || true
 	cp hal/android/build/intermediates/compile_library_classes_jar/release/bundleLibCompileToJarRelease/classes.jar view/packages/hydris-engine/android/libs/hal-classes.jar
-	cd view && bun i
-	cd view && bun run build:android
+	bun i
+	bun run build:android
 	mkdir -p bin
-	cp view/apps/foss/android/app/build/outputs/apk/release/app-release.apk bin/hydris-android-arm64-$(VERSION).apk
-	@echo adb install -r bin/hydris-android-arm64-$(VERSION).apk
+	cp view/apps/foss/android/app/build/outputs/apk/release/app-release.apk bin/hydris-android$(variant_infix)-arm64-$(VERSION).apk
+	@echo adb install -r bin/hydris-android$(variant_infix)-arm64-$(VERSION).apk
 
 android_go:
-	cd android && go mod tidy && go install golang.org/x/mobile/cmd/gomobile && gomobile init && gomobile bind -target=android/arm64 -androidapi 24 -ldflags "-checklinkname=0 $(LDFLAGS)" -o hydris-go.aar
+	cd android && go mod tidy && go install golang.org/x/mobile/cmd/gomobile && gomobile init && gomobile bind -target=android/arm64 -androidapi 24 $(if $(TAGS),-tags "$(TAGS)") -ldflags "-checklinkname=0 $(LDFLAGS)" -o hydris-go.aar
 
 android_aar: android_go
 	cp android/hydris-go.aar android/aar/libs/hydris-go.aar

@@ -2,7 +2,10 @@ package goclient
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/projectqai/hydris/pkg/tracing"
 	proto "github.com/projectqai/proto/go"
 
 	"google.golang.org/grpc"
@@ -26,12 +30,49 @@ type ConnectOption func(*connectOpts)
 
 type connectOpts struct {
 	clientCert *tls.Certificate
+	serverFPs  []string
 }
 
 // WithClientCert presents cert as the mTLS client certificate. It applies only
 // to TLS (https) connections; plaintext connections ignore it.
 func WithClientCert(cert tls.Certificate) ConnectOption {
 	return func(o *connectOpts) { o.clientCert = &cert }
+}
+
+// WithServerFingerprint pins the connection to the server's TLS leaf
+// certificate and forbids plaintext transports. fpHex holds one or more hex
+// SHA-256 fingerprints (colons ignored), separated by commas or whitespace —
+// several pins allow a staged certificate rotation; the server must present
+// one of them.
+func WithServerFingerprint(fpHex string) ConnectOption {
+	fps := parseFingerprints(fpHex)
+	return func(o *connectOpts) { o.serverFPs = fps }
+}
+
+func parseFingerprints(s string) []string {
+	var fps []string
+	for _, tok := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' }) {
+		fps = append(fps, strings.ToLower(strings.ReplaceAll(tok, ":", "")))
+	}
+	return fps
+}
+
+// verifyServerFingerprint returns a VerifyPeerCertificate callback enforcing
+// the pin; it runs even with InsecureSkipVerify set.
+func verifyServerFingerprint(fps []string) func([][]byte, [][]*x509.Certificate) error {
+	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return fmt.Errorf("server presented no certificate")
+		}
+		sum := sha256.Sum256(rawCerts[0])
+		got := hex.EncodeToString(sum[:])
+		for _, fp := range fps {
+			if got == fp {
+				return nil
+			}
+		}
+		return fmt.Errorf("server certificate fingerprint mismatch: got %s, pinned %s", got, strings.Join(fps, ","))
+	}
 }
 
 // Connection wraps a gRPC connection with optional tunnel (WireGuard, SSH, etc.)
@@ -107,11 +148,18 @@ func ConnectURL(ctx context.Context, server, wgConfigPath string, options ...Con
 
 	var lastErr error
 	for _, cand := range connectCandidates(remoteAddr, o.clientCert != nil) {
+		// A pinned connection is TLS-only: never fall back to plaintext.
+		if len(o.serverFPs) > 0 && !strings.HasPrefix(cand.url, "https://") {
+			if lastErr == nil {
+				lastErr = fmt.Errorf("fingerprint pinning requires a TLS (https) transport")
+			}
+			continue
+		}
 		var cert *tls.Certificate
 		if cand.useCert {
 			cert = o.clientCert
 		}
-		target, opts, perr := parseServerURL(cand.url, cert)
+		target, opts, perr := parseServerURL(cand.url, cert, o.serverFPs)
 		if perr != nil {
 			lastErr = perr
 			continue
@@ -175,49 +223,54 @@ func probeConn(ctx context.Context, conn *grpc.ClientConn) error {
 	return err
 }
 
+// SplitServerURL separates an optional http(s):// scheme from a server address.
+// scheme is "http", "https", or "" for a bare host:port, returned unchanged.
+func SplitServerURL(server string) (scheme, hostPort string) {
+	u, err := url.Parse(server)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", server
+	}
+	port := u.Port()
+	if port == "" {
+		if u.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	return u.Scheme, u.Hostname() + ":" + port
+}
+
 // parseServerURL parses a server URL and returns the gRPC target and dial
 // options. Supported formats:
 //
 //	host:port        (plaintext gRPC)
 //	http://host[:port]  (plaintext, default port 80)
 //	https://host[:port] (TLS, default port 443; self-signed, optional mTLS cert)
-func parseServerURL(serverURL string, cert *tls.Certificate) (target string, opts []grpc.DialOption, err error) {
-	u, parseErr := url.Parse(serverURL)
-	// If there's no scheme, url.Parse may put everything in Path or Opaque.
-	// Detect the "host:port" case (no scheme).
-	if parseErr != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		// Plain host:port — keep existing behavior
+func parseServerURL(serverURL string, cert *tls.Certificate, serverFPs []string) (target string, opts []grpc.DialOption, err error) {
+	// Callers inside a span get it propagated to the server (W3C traceparent).
+	opts = append(opts, tracing.DialOptions()...)
+
+	scheme, target := SplitServerURL(serverURL)
+	if scheme != "https" {
+		// http:// and bare host:port are plaintext.
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		return serverURL, opts, nil
+		return target, opts, nil
 	}
 
-	host := u.Hostname()
-	port := u.Port()
-
-	switch u.Scheme {
-	case "https":
-		if port == "" {
-			port = "443"
-		}
-		// The node serves a self-signed certificate. Present a client cert when
-		// one was supplied for this attempt, so the server can identify us via mTLS.
-		tlsCfg := &tls.Config{
-			InsecureSkipVerify: true,
-			NextProtos:         []string{"h2"},
-		}
-		if cert != nil {
-			tlsCfg.Certificates = []tls.Certificate{*cert}
-		}
-		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
-	case "http":
-		if port == "" {
-			port = "80"
-		}
-		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// The node serves a self-signed certificate. Present a client cert when
+	// one was supplied for this attempt, so the server can identify us via mTLS.
+	tlsCfg := &tls.Config{
+		InsecureSkipVerify: true,
+		NextProtos:         []string{"h2"},
 	}
-
-	target = host + ":" + port
-
+	if len(serverFPs) > 0 {
+		tlsCfg.VerifyPeerCertificate = verifyServerFingerprint(serverFPs)
+	}
+	if cert != nil {
+		tlsCfg.Certificates = []tls.Certificate{*cert}
+	}
+	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	return target, opts, nil
 }
 
@@ -228,7 +281,10 @@ func Connect(serverURL string, options ...ConnectOption) (*Connection, error) {
 	for _, opt := range options {
 		opt(&o)
 	}
-	target, opts, err := parseServerURL(serverURL, o.clientCert)
+	if len(o.serverFPs) > 0 && !strings.HasPrefix(serverURL, "https://") {
+		return nil, fmt.Errorf("fingerprint pinning requires an https:// server URL")
+	}
+	target, opts, err := parseServerURL(serverURL, o.clientCert, o.serverFPs)
 	if err != nil {
 		return nil, err
 	}

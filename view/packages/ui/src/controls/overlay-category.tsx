@@ -3,22 +3,24 @@ import { Text, View } from "react-native";
 
 import { OverlayToggle, type ThemeColor } from "./overlay-toggle";
 
-type BaseOption = {
-  id: string;
+export type OverlayCategoryOption<Id extends string = string> = {
+  id: Id;
   label: string;
-};
+} & ({ color: ThemeColor; icon?: never } | { icon: LucideIcon; color?: never });
 
-export type OverlayCategoryOption = BaseOption &
-  ({ color: ThemeColor; icon?: never } | { icon: LucideIcon; color?: never });
-
-export type OverlayCategoryProps = {
+export type OverlayCategoryProps<Id extends string = string> = {
   title: string;
-  options: OverlayCategoryOption[];
-  activeStates: Record<string, boolean>;
-  onToggle: (id: string) => void;
+  options: readonly OverlayCategoryOption<Id>[];
+  activeStates: Record<Id, boolean>;
+  onToggle: (id: Id) => void;
 };
 
-export function OverlayCategory({ title, options, activeStates, onToggle }: OverlayCategoryProps) {
+export function OverlayCategory<Id extends string>({
+  title,
+  options,
+  activeStates,
+  onToggle,
+}: OverlayCategoryProps<Id>) {
   return (
     <View className="gap-1.5">
       <Text

@@ -1,0 +1,224 @@
+syntax = "proto3";
+
+package world;
+
+option go_package = "github.com/projectqai/proto/go";
+
+message ClassificationTaxonomy {
+  ClassificationConfidence confidence = 1;
+
+  oneof kind {
+    PersonTaxonomy person = 10;
+    AnimalTaxonomy animal = 11;
+    InfrastructureTaxonomy infrastructure = 12;
+    VehicleTaxonomy vehicle = 13;
+    EquipmentTaxonomy equipment = 14;
+    EmitterTaxonomy emitter = 15;
+    OtherTaxonomy other = 16;
+  }
+}
+
+message OtherTaxonomy {}
+
+message ClassificationConfidence {
+  float confidence = 1;
+  bool pending = 2;
+
+  // confidence in percent (0 - 100)
+  optional uint32 confidence_percent = 3;
+}
+
+/// ------------------ PERSON
+
+message PersonTaxonomy {}
+
+/// --------------- ANIMAL
+
+message AnimalTaxonomy {
+  oneof kind {
+    AnimalTaxonomyAir air = 1;
+    AnimalTaxonomyLand land = 2;
+  }
+}
+
+message AnimalTaxonomyBird {}
+message AnimalTaxonomyAir {
+  optional AnimalTaxonomyBird bird = 1;
+}
+
+message AnimalTaxonomyHorse {}
+message AnimalTaxonomyLand {
+  optional AnimalTaxonomyHorse horse = 1;
+}
+
+/// -------------- INFRASTRUCTURE
+
+message InfrastructureTaxonomy {
+  optional InfrastructureTaxonomyTower tower = 1;
+  optional InfrastructureTaxonomyBridge bridge = 2;
+  optional InfrastructureTaxonomyRoad road = 3;
+  optional InfrastructureTaxonomyDam dam = 4;
+}
+
+message InfrastructureTaxonomyTower {}
+message InfrastructureTaxonomyBridge {}
+message InfrastructureTaxonomyRoad {}
+message InfrastructureTaxonomyDam {}
+
+/// --------------- VEHICLE
+
+message VehicleTaxonomy {
+  optional VehicleTaxonomyUnmanned unmanned = 1;
+  oneof domain {
+    VehicleTaxonomyLand land = 10;
+    VehicleTaxonomyAir air = 11;
+    VehicleTaxonomySea sea = 12;
+    VehicleTaxonomySubsurface subsurface = 13;
+  }
+}
+
+message VehicleTaxonomyUnmanned {}
+
+/// --------------- VEHICLE LAND
+
+message VehicleTaxonomyLand {
+  oneof kind {
+    VehicleTaxonomyTracked tracked = 1;
+    VehicleTaxonomyTwoWheeled two_wheeled = 2;
+    VehicleTaxonomyMultiWheeled multi_wheeled = 3;
+  }
+}
+
+message VehicleTaxonomyTracked {}
+message VehicleTaxonomyTwoWheeled {}
+
+message VehicleTaxonomyMultiWheeled {
+  oneof weight {
+    VehicleTaxonomyMultiWheeledLight light = 1;
+    VehicleTaxonomyMultiWheeledMedium medium = 2;
+    VehicleTaxonomyMultiWheeledHeavy heavy = 3;
+  }
+}
+
+message VehicleTaxonomyMultiWheeledLight {}
+message VehicleTaxonomyMultiWheeledMedium {}
+message VehicleTaxonomyMultiWheeledHeavy {}
+
+/// --------------- VEHICLE AIR
+
+message VehicleTaxonomyAir {
+  oneof kind {
+    VehicleTaxonomyAirFixedWing fixed_wing = 1;
+    VehicleTaxonomyAirLighterThanAir lighter_than_air = 2;
+    VehicleTaxonomyAirRotary rotary = 3;
+  }
+}
+
+message VehicleTaxonomyAirRotary {}
+message VehicleTaxonomyAirFixedWing {}
+message VehicleTaxonomyAirLighterThanAir {}
+
+/// --------------- VEHICLE SEA
+
+message VehicleTaxonomySea {}
+
+/// --------------- VEHICLE SUBSURFACE
+
+message VehicleTaxonomySubsurface {}
+
+/// --------------- EQUIPMENT
+
+message EquipmentTaxonomy {
+  optional EquipmentTaxonomySensor sensor = 1;
+}
+
+message EquipmentTaxonomySensor {
+  optional EquipmentTaxonomySensorEmplaced emplaced = 1;
+  oneof kind {
+    EquipmentTaxonomySensorRadar radar = 10;
+    EquipmentTaxonomySensorEW ew = 11;
+    EquipmentTaxonomySensorCBRN cbrn = 12;
+    EquipmentTaxonomySensorAcoustic acoustic = 13;
+    EquipmentTaxonomySensorElectroOptical electro_optical = 14;
+    EquipmentTaxonomySensorSeismic seismic = 15;
+  }
+}
+
+message EquipmentTaxonomySensorRadar {}
+message EquipmentTaxonomySensorEW {}
+message EquipmentTaxonomySensorCBRN {}
+message EquipmentTaxonomySensorAcoustic {}
+message EquipmentTaxonomySensorElectroOptical {}
+message EquipmentTaxonomySensorEmplaced {}
+message EquipmentTaxonomySensorSeismic {}
+
+/// --------------- EMITTER
+
+message EmitterTaxonomy {}
+
+/// --------------- TASKING
+
+message TaskingTaxonomy {
+  oneof kind {
+    TaskingTaxonomyObserve observe = 10;
+    TaskingTaxonomyMovement movement = 11;
+    TaskingTaxonomyEffect effect = 12;
+    TaskingTaxonomyCommission commission = 13;
+    TaskingTaxonomyMaintenance maintenance = 14;
+    TaskingTaxonomyControl control = 15;
+  }
+}
+
+message TaskingTaxonomyMaintenance {
+  oneof kind {
+    // optional target: an artifact with ArtifactComponent.software
+    TaskingTaxonomyUpdate update = 1;
+  }
+}
+
+// changes the state of the assignee itself
+message TaskingTaxonomyControl {
+  oneof kind {
+    TaskingTaxonomyModeChange mode_change = 1;
+  }
+}
+
+// switches the assignee between options, see TaskableTarget.mode
+message TaskingTaxonomyModeChange {}
+
+message TaskingTaxonomyCommission {
+  oneof kind {
+    TaskingTaxonomyCommissionPosition position = 1;
+    TaskingTaxonomyCommissionCalibrate calibrate = 2;
+  }
+}
+
+message TaskingTaxonomyObserve {
+  oneof kind {
+    TaskingTaxonomyLookAt look_at = 1;
+    TaskingTaxonomyScan scan = 2;
+    TaskingTaxonomyTrack track = 3;
+  }
+}
+
+message TaskingTaxonomyMovement {
+  oneof kind {
+    TaskingTaxonomyMoveTo move_to = 1;
+    TaskingTaxonomyPatrol patrol = 2;
+    TaskingTaxonomyFollow follow = 3;
+  }
+}
+
+message TaskingTaxonomyEffect {}
+
+message TaskingTaxonomyLookAt {}
+message TaskingTaxonomyScan {}
+message TaskingTaxonomyTrack {}
+message TaskingTaxonomyMoveTo {}
+message TaskingTaxonomyPatrol {}
+message TaskingTaxonomyFollow {}
+
+message TaskingTaxonomyCommissionPosition {}
+message TaskingTaxonomyCommissionCalibrate {}
+
+message TaskingTaxonomyUpdate {}

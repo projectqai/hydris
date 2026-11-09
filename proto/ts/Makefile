@@ -1,0 +1,2 @@
+generate:
+	bun run generate

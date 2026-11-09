@@ -2,14 +2,15 @@ import { LinearGradient } from "expo-linear-gradient";
 import type { LucideIcon } from "lucide-react-native";
 import type { ReactNode } from "react";
 import { useState } from "react";
-import type { AccessibilityState } from "react-native";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 
 import type { ThemeColors } from "../lib/theme";
 import { useThemeColors } from "../lib/theme";
 import { cn } from "../lib/utils";
 
-type Variant = "default" | "active" | "success" | "destructive";
+export type ControlButtonVariant = "default" | "active" | "success" | "destructive" | "error";
+
+type Variant = ControlButtonVariant;
 type Size = "sm" | "md" | "lg";
 
 const RADIUS = 8;
@@ -20,6 +21,7 @@ const VARIANT_CLASSES: Record<Variant, string> = {
   active: "bg-control-hover border-control-border-hover",
   success: "bg-active-green border-active-green",
   destructive: "bg-destructive border-destructive",
+  error: "bg-control border-destructive group-hover:bg-control-hover",
 };
 
 // When hoverVariant is used, JS drives the variant swap — strip CSS hover classes
@@ -28,34 +30,37 @@ const VARIANT_CLASSES_NO_HOVER: Record<Variant, string> = {
   active: "bg-control-hover border-control-border-hover",
   success: "bg-active-green border-active-green",
   destructive: "bg-destructive border-destructive",
+  error: "bg-control border-destructive",
 };
 
 const DISABLED_CLASSES = "bg-control border-control-border";
 
-function getShadowStyle(t: ThemeColors, variant: Variant, disabled: boolean) {
+// A drop shadow and a light inset that fades down from the top edge. Other controls use them too.
+// Filled variants glow in their own color instead of casting a shadow.
+export function controlButtonShadow(t: ThemeColors, variant: Variant, disabled: boolean) {
   if (disabled) return undefined;
-  if (variant === "success") {
-    return {
-      shadowColor: t.activeGreen,
-      shadowOffset: { width: 0, height: 0 },
-      shadowOpacity: 0.4,
-      shadowRadius: 8,
-    };
+
+  if (variant === "success" || variant === "destructive") {
+    const glowColor = variant === "success" ? t.activeGreenGlow : t.destructiveRedGlow;
+
+    return { boxShadow: `0 0 8px ${glowColor}` };
   }
-  if (variant === "destructive") {
-    return {
-      shadowColor: t.destructiveRed,
-      shadowOffset: { width: 0, height: 0 },
-      shadowOpacity: 0.4,
-      shadowRadius: 8,
-    };
-  }
-  return {
-    shadowColor: t.controlShadow.color,
-    shadowOffset: { width: 0, height: t.controlShadow.offset },
-    shadowOpacity: t.controlShadow.opacity,
-    shadowRadius: t.controlShadow.radius,
-  };
+
+  return { boxShadow: t.controlBoxShadow };
+}
+
+export function ControlButtonInset({ variant }: { variant: Variant }) {
+  const t = useThemeColors();
+  const filled = variant === "success" || variant === "destructive";
+
+  return (
+    <LinearGradient
+      colors={[filled ? t.surfaceInsetSelected : t.surfaceInset, "transparent"]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 0, y: 1 }}
+      className="pointer-events-none absolute inset-x-0 top-0 h-3/5"
+    />
+  );
 }
 
 function getFilledFg(t: ThemeColors, variant: Variant): string {
@@ -77,23 +82,6 @@ function getIconColor(t: ThemeColors, variant: Variant, disabled: boolean): stri
   return t.iconDefault;
 }
 
-function getInsetColor(t: ThemeColors, variant: Variant): string {
-  return variant === "success" || variant === "destructive"
-    ? t.surfaceInsetSelected
-    : t.surfaceInset;
-}
-
-function InsetGradient({ color }: { color: string }) {
-  return (
-    <LinearGradient
-      colors={[color, "transparent"]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 0, y: 1 }}
-      className="pointer-events-none absolute inset-x-0 top-0 h-3/5"
-    />
-  );
-}
-
 export type ControlIconButtonProps = {
   icon: LucideIcon;
   iconSize?: number;
@@ -105,6 +93,9 @@ export type ControlIconButtonProps = {
   size?: Size;
   disabled?: boolean;
   accessibilityLabel: string;
+  tabIndex?: -1 | 0;
+  "aria-expanded"?: boolean;
+  "aria-pressed"?: boolean;
 };
 
 const ICON_SIZE_CLASSES: Record<Size, string> = {
@@ -124,13 +115,15 @@ export function ControlIconButton({
   size = "md",
   disabled,
   accessibilityLabel,
+  tabIndex = 0,
+  "aria-expanded": ariaExpanded,
+  "aria-pressed": ariaPressed,
 }: ControlIconButtonProps) {
   const t = useThemeColors();
   const [hovered, setHovered] = useState(false);
   const resolved = !disabled && hovered && hoverVariant ? hoverVariant : variant;
-  const shadow = getShadowStyle(t, resolved, !!disabled);
+  const shadow = controlButtonShadow(t, resolved, !!disabled);
   const resolvedColor = iconColor ?? getIconColor(t, resolved, !!disabled);
-  const insetColor = getInsetColor(t, resolved);
 
   return (
     <Pressable
@@ -138,16 +131,19 @@ export function ControlIconButton({
       onHoverIn={hoverVariant ? () => setHovered(true) : undefined}
       onHoverOut={hoverVariant ? () => setHovered(false) : undefined}
       disabled={disabled}
+      role="button"
       accessibilityLabel={accessibilityLabel}
-      accessibilityState={disabled ? { disabled: true } : undefined}
-      tabIndex={disabled ? -1 : 0}
+      aria-expanded={ariaExpanded}
+      aria-pressed={ariaPressed}
+      tabIndex={disabled ? -1 : tabIndex}
       className={cn(
         "group select-none focus:outline-none",
         disabled ? "cursor-not-allowed" : "cursor-pointer active:opacity-90",
       )}
     >
-      <View style={{ borderRadius: RADIUS, ...shadow }}>
+      <View style={{ borderRadius: RADIUS }}>
         <View
+          style={shadow}
           className={cn(
             "items-center justify-center overflow-hidden rounded-lg border",
             ICON_SIZE_CLASSES[size],
@@ -156,7 +152,7 @@ export function ControlIconButton({
               : (hoverVariant ? VARIANT_CLASSES_NO_HOVER : VARIANT_CLASSES)[resolved],
           )}
         >
-          <InsetGradient color={insetColor} />
+          <ControlButtonInset variant={resolved} />
           <Icon aria-hidden size={iconSize} strokeWidth={iconStrokeWidth} color={resolvedColor} />
         </View>
       </View>
@@ -180,7 +176,7 @@ export type ControlButtonProps = {
   labelClassName?: string;
   className?: string;
   accessibilityLabel?: string;
-  accessibilityState?: AccessibilityState;
+  "aria-expanded"?: boolean;
 };
 
 const CONTENT_SIZE_CLASSES: Record<Size, string> = {
@@ -205,15 +201,14 @@ export function ControlButton({
   labelClassName,
   className,
   accessibilityLabel,
-  accessibilityState,
+  "aria-expanded": ariaExpanded,
 }: ControlButtonProps) {
   const t = useThemeColors();
   const [hovered, setHovered] = useState(false);
   const resolved = !disabled && hovered && hoverVariant ? hoverVariant : variant;
-  const shadow = getShadowStyle(t, resolved, !!disabled);
+  const shadow = controlButtonShadow(t, resolved, !!disabled);
   const fg = getFg(t, resolved, !!disabled);
   const iconFg = getIconColor(t, resolved, !!disabled);
-  const insetColor = getInsetColor(t, resolved);
 
   return (
     <Pressable
@@ -221,8 +216,9 @@ export function ControlButton({
       onHoverIn={hoverVariant ? () => setHovered(true) : undefined}
       onHoverOut={hoverVariant ? () => setHovered(false) : undefined}
       disabled={disabled}
+      role="button"
       accessibilityLabel={accessibilityLabel}
-      accessibilityState={disabled ? { disabled: true, ...accessibilityState } : accessibilityState}
+      aria-expanded={ariaExpanded}
       tabIndex={disabled ? -1 : 0}
       className={cn(
         "group select-none focus:outline-none",
@@ -231,8 +227,9 @@ export function ControlButton({
         className,
       )}
     >
-      <View style={{ borderRadius: RADIUS, ...shadow }}>
+      <View style={{ borderRadius: RADIUS }}>
         <View
+          style={shadow}
           className={cn(
             "flex-row items-center justify-center gap-1.5 overflow-hidden rounded-lg border px-3",
             CONTENT_SIZE_CLASSES[size],
@@ -241,14 +238,13 @@ export function ControlButton({
               : (hoverVariant ? VARIANT_CLASSES_NO_HOVER : VARIANT_CLASSES)[resolved],
           )}
         >
-          <InsetGradient color={insetColor} />
-          {loading ? (
-            <ActivityIndicator size={14} color={fg} />
-          ) : label ? (
+          <ControlButtonInset variant={resolved} />
+          {label ? (
             <>
-              {Icon && (
+              {Icon && !loading && (
                 <Icon aria-hidden size={iconSize} strokeWidth={iconStrokeWidth} color={iconFg} />
               )}
+              {loading && <ActivityIndicator size={14} color={fg} />}
               <Text
                 className={cn("font-sans-medium text-13", labelClassName)}
                 style={{ color: fg }}

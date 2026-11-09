@@ -42,10 +42,6 @@ export async function ensureLocalNode() {
   return inflightRequest;
 }
 
-export function getSelfEntityId(): string | null {
-  return cachedSelfEntityId;
-}
-
 export function isSelfMessage(senderId: string, entityId: string): boolean {
   if (!cachedSelfEntityId || !cachedNodeId) return false;
   if (senderId !== cachedSelfEntityId) return false;

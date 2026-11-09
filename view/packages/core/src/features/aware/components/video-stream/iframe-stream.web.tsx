@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
 
+import { baseUrl } from "../../../../lib/api/world-client";
 import { ConnectionOverlay } from "./connection-overlay";
-import { toEmbedUrl } from "./embed-providers";
+import { canEmbedFullscreen, toEmbedUrl } from "./embed-providers";
 import type { ConnectionState, StreamComponentProps } from "./types";
 
 export function IframeStream({ url }: StreamComponentProps) {
@@ -37,7 +38,7 @@ export function IframeStream({ url }: StreamComponentProps) {
         onLoad={handleLoad}
         onError={handleError}
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-        allowFullScreen
+        allowFullScreen={canEmbedFullscreen(url, baseUrl)}
         style={{
           width: "100%",
           height: "100%",

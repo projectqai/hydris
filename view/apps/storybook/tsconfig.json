@@ -1,0 +1,19 @@
+{
+  "extends": ["expo/tsconfig.base", "@hydris/typescript-config/strict.json"],
+  "compilerOptions": {
+    "verbatimModuleSyntax": false,
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "exclude": ["node_modules", "babel.config.js", "metro.config.js", "storybook-static"],
+  "include": [
+    ".storybook/**/*.ts",
+    ".storybook/**/*.tsx",
+    ".rnstorybook/**/*.ts",
+    ".rnstorybook/**/*.tsx",
+    "*.ts",
+    "*.tsx",
+    "*.mts",
+    "nativewind-env.d.ts"
+  ]
+}

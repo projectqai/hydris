@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package world;
+
+import "geometry.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/projectqai/proto/go";
+
+/// ------- DEFINITION
+
+message TaskableTarget {
+  optional TaskableTargetPosition position = 1;
+  optional TaskableTargetWaypoints waypoints = 2;
+  optional TaskableTargetEntity entity = 3;
+  optional TaskableTargetMode mode = 4;
+}
+
+// The taskable switches its assignee between options, such as an operating
+// mode. The controller keeps active, until and next up to date; running the
+// taskable with TaskExecutionTarget.mode requests an option.
+message TaskableTargetMode {
+  // in the order a UI should show them
+  repeated TaskableTargetModeOption options = 1;
+
+  // the id of the option in effect, as the device reports it.
+  // may be one not in options, e.g. a failsafe the device entered on its own. unset: unknown
+  optional string active = 2;
+
+  // set: the device leaves active on its own at this time, e.g. a temporary
+  // option, and enters next. a requested switch that is settling reports its
+  // TaskExecutionComponent.eta instead
+  optional google.protobuf.Timestamp until = 3;
+  // with until: the id of the option entered then. unset: unknown
+  optional string next = 4;
+
+  // set: a two-state switch. the id of the option that means on, the other one is off
+  optional string on = 5;
+}
+
+message TaskableTargetModeOption {
+  // unique within the taskable
+  string id = 1;
+  optional string label = 2;
+  optional string description = 3;
+
+  // set: cannot be requested right now. the value says why, for humans, and may be empty
+  optional string disabled = 4;
+}
+
+message TaskableTargetPosition {}
+
+message TaskableTargetWaypoints {
+  // maximum number of waypoints. default unbounded.
+  optional uint32 max = 1;
+  // the waypoints form a closed loop (last connects back to first), e.g. patrol.
+  optional bool loop = 2;
+}
+
+message TaskableTargetEntity {
+  // if non-empty, only these entity IDs are accepted as targets.
+  // if empty, any entity is accepted.
+  repeated string entity = 1;
+  // maximum number of entities. default 1.
+  optional uint32 max = 2;
+}
+
+/// ------- INSTANCE
+
+message TaskExecutionTarget {
+  oneof kind {
+    PlanarPoint position = 1;
+    TaskExecutionTargetWaypoints waypoints = 2;
+    TaskExecutionTargetEntity entity = 3;
+    // TaskableTargetModeOption.id to switch to
+    string mode = 4;
+  }
+}
+
+message TaskExecutionTargetWaypoints {
+  repeated PlanarPoint waypoint = 1;
+}
+
+message TaskExecutionTargetEntity {
+  repeated string entity = 1;
+}

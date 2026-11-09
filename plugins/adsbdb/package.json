@@ -6,6 +6,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@projectqai/proto": ">=0.0.29"
+    "@projectqai/proto": "file:../../proto/ts"
   }
 }

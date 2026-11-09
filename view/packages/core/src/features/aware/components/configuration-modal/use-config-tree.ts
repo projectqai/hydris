@@ -4,7 +4,7 @@ import type { Entity } from "@projectqai/proto/world";
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { getEntityName } from "../../../../lib/api/use-track-utils";
+import { getDeviceName } from "../../../../lib/api/use-track-utils";
 import { useEntityStore } from "../../store/entity-store";
 import {
   type ConfigStateBadge,
@@ -38,7 +38,7 @@ export const PLUGINS_CATEGORY = "Plugins";
 function buildDeviceNode(entity: Entity, orphaned = false): DeviceNode {
   return {
     entityId: entity.id,
-    label: entity.configurable?.label ?? getEntityName(entity),
+    label: getDeviceName(entity),
     entity,
     icon: getEntityIcon(entity),
     children: [],

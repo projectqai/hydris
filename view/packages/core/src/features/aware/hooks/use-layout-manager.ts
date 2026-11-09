@@ -22,7 +22,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { runOnJS, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 
 import { PERSIST_DEBOUNCE_MS, STORAGE_KEY } from "../constants";
-import { COMPONENT_REGISTRY, PRESETS } from "../layouts";
+import { COMPONENT_REGISTRY } from "../layouts";
+import { PRESETS } from "../presets";
 import { useMissionKitStore } from "../store/mission-kit-store";
 import { layoutApplyMissionKitRef, layoutResetRef, layoutSnapshotRef } from "./layout-snapshot";
 

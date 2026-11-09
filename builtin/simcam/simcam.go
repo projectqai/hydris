@@ -1,9 +1,14 @@
-// Package simcam implements a camera simulator. It publishes one or more
-// PTZ-capable Camera entities whose video streams are rendered in-process
-// from the simulated gimbal pose. The frames are deliberately busy with
-// orientation cues — color-coded sky by azimuth, a horizon line tracking
-// tilt, a rolling compass strip, and a HUD showing pan/tilt/zoom — so the
-// user can immediately see where each camera is pointing.
+// Package simcam implements a camera simulator. It publishes PTZ-capable
+// Camera entities whose video is rendered in-process, on the CPU, from the
+// simulated gimbal pose: a sky gradient, satellite imagery projected onto
+// the ground with per-row level of detail and haze, extruded GeoShapes as
+// lit 3D walls and roofs, entities as depth-tested sprites or affiliation
+// symbols, and a HUD with compass tape, pose readout and live clock.
+//
+// The renderer is built for low-end devices without a GPU and favours
+// latency over fidelity: frames are rendered only while someone is
+// watching, as soon as something changes (capped at max_fps), in parallel
+// horizontal bands, and without allocating in steady state.
 //
 // Streams are served over MJPEG via the shared engine HTTP server under
 // /plugin/simcam/cam/<id>. The MediaTransformer rewrites the published URL
@@ -127,33 +132,51 @@ func cameraSchema() *structpb.Struct {
 				"maximum":     20000,
 				"ui:order":    2,
 			},
+			"altitude": map[string]any{
+				"type":        "number",
+				"title":       "Altitude",
+				"description": "Mounting height in meters above ground, used when the camera position has no altitude",
+				"default":     defaultAltitude,
+				"minimum":     0,
+				"maximum":     1000,
+				"ui:order":    8,
+			},
+			"max_fps": map[string]any{
+				"type":        "integer",
+				"title":       "Max Frame Rate",
+				"description": "Upper bound on rendered frames per second; lower it on slow devices",
+				"default":     defaultMaxFPS,
+				"minimum":     1,
+				"maximum":     maxFPSLimit,
+				"ui:order":    3,
+			},
 			"render_behind_wall": map[string]any{
 				"type":        "boolean",
 				"title":       "Render Behind Walls",
 				"description": "Show entities that are behind walls (disables wall occlusion)",
 				"default":     false,
-				"ui:order":    3,
+				"ui:order":    4,
 			},
 			"instant_slew": map[string]any{
 				"type":        "boolean",
 				"title":       "Instant Slew",
 				"description": "Snap to target position immediately instead of simulating slew rate",
 				"default":     false,
-				"ui:order":    4,
+				"ui:order":    5,
 			},
 			"enable_detections": map[string]any{
 				"type":        "boolean",
 				"title":       "Simulated Detections",
 				"description": "Emit detection entities with bounding boxes for objects visible in camera streams",
 				"default":     false,
-				"ui:order":    5,
+				"ui:order":    6,
 			},
 			"enable_direct_drive": map[string]any{
 				"type":        "boolean",
 				"title":       "Direct Drive",
 				"description": "Accept manual joystick control for pan and tilt",
 				"default":     false,
-				"ui:order":    6,
+				"ui:order":    7,
 			},
 		},
 	})

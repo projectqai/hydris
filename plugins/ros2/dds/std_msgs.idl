@@ -1,0 +1,23 @@
+// The two stock ROS 2 types hydris messages travel in, as their DDS types:
+// rmw names a type pkg::msg::dds_::Name_ on the wire.
+module std_msgs { module msg { module dds_ {
+  struct String_ {
+    string data;
+  };
+
+  struct MultiArrayDimension_ {
+    string label;
+    uint32 size;
+    uint32 stride;
+  };
+
+  struct MultiArrayLayout_ {
+    sequence<MultiArrayDimension_> dim;
+    uint32 data_offset;
+  };
+
+  struct UInt8MultiArray_ {
+    MultiArrayLayout_ layout;
+    sequence<uint8> data;
+  };
+}; }; };

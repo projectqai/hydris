@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/projectqai/hydris/pkg/tracing"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -161,6 +162,14 @@ func BuiltinDialer() grpc.DialOption {
 	})
 }
 
+// IsTrustedHeader reports whether name carries caller identity the engine
+// trusts on the bufconn (X-Builtin-*, X-Federation-*). Matches by family, not a
+// fixed list, so headers added later are covered. Strip these from any
+// untrusted-origin request (e.g. plugin JS) before stamping the real identity.
+func IsTrustedHeader(name string) bool {
+	return strings.HasPrefix(name, "X-Builtin-") || strings.HasPrefix(name, "X-Federation-")
+}
+
 // builtinCreds injects the builtin name as per-RPC metadata so the engine
 // can identify which builtin is making each call. A builtin may also declare
 // the actor identity its calls should be attributed to; the engine trusts it
@@ -205,12 +214,14 @@ func BuiltinClientConnForNode(name, actor, node string) (*grpc.ClientConn, error
 }
 
 func newBuiltinConn(creds builtinCreds) (*grpc.ClientConn, error) {
-	return grpc.NewClient(
-		"passthrough:///bufconn",
+	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		BuiltinDialer(),
 		grpc.WithPerRPCCredentials(creds),
-	)
+	}
+	// Propagate the builtin's trace context to the engine over the bufconn.
+	opts = append(opts, tracing.DialOptions()...)
+	return grpc.NewClient("passthrough:///bufconn", opts...)
 }
 
 type Builtin struct {

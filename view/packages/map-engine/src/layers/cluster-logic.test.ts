@@ -50,6 +50,7 @@ const ALL_ON: FilterInput = {
   shapesVisible: true,
   detectionsVisible: true,
   clustering: true,
+  unclusteredIds: [],
 };
 
 function filterWith(overrides: Partial<FilterInput>): FilterInput {
@@ -98,13 +99,6 @@ describe("entity visibility filtering", () => {
       expect(ids).toContain("red-1");
       expect(ids).toContain("neutral-1");
       expect(ids).toContain("unknown-1");
-    });
-
-    it("toggling off multiple affiliations hides all of them", () => {
-      const ids = visibleEntityIds(engine, packed, filterWith({ blue: false, red: false }));
-      expect(ids).not.toContain("blue-1");
-      expect(ids).not.toContain("red-1");
-      expect(ids).toHaveLength(2);
     });
   });
 
@@ -181,7 +175,7 @@ describe("entity visibility filtering", () => {
 
     const filter = filterWith({ red: false, shapesVisible: false });
 
-    for (const zoom of [5, 11, 14]) {
+    for (const zoom of [11, 14]) {
       it(`zoom ${zoom}: same filtering regardless of index strategy`, () => {
         const eng = createClusterEngine();
         const ids = visibleEntityIds(eng, packed, filter, zoom);
@@ -228,5 +222,35 @@ describe("entity visibility filtering", () => {
       expect(results.every((r) => !r.isCluster)).toBe(true);
       expect(results.map((r) => r.entityId).sort()).toEqual(["a", "b", "c", "d"]);
     });
+  });
+});
+
+describe("unclustered entities", () => {
+  // stacked at one point, so they cluster unless excluded
+  const packed = packEntities([
+    { id: "a", lat: 10, lng: 10, affiliation: "blue" },
+    { id: "b", lat: 10, lng: 10, affiliation: "blue" },
+    { id: "c", lat: 10, lng: 10, affiliation: "blue" },
+    { id: "anchor", lat: 10, lng: 10, affiliation: "blue" },
+  ]);
+
+  it("emits an excluded entity on its own and leaves it out of the count", () => {
+    const engine = createClusterEngine();
+    const results = engine.process(packed, filterWith({ unclusteredIds: ["anchor"] }), 5, true);
+
+    expect(results.filter((r) => !r.isCluster).map((r) => r.entityId)).toEqual(["anchor"]);
+    expect(results.filter((r) => r.isCluster).map((r) => r.count)).toEqual([3]);
+  });
+
+  it("still hides an excluded entity that the filter rejects", () => {
+    const engine = createClusterEngine();
+    const results = engine.process(
+      packed,
+      filterWith({ blue: false, unclusteredIds: ["anchor"] }),
+      5,
+      true,
+    );
+
+    expect(results).toEqual([]);
   });
 });

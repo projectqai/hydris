@@ -44,6 +44,15 @@ type GATTService struct {
 	CharacteristicUUIDs []string
 }
 
+// MDNSPeer describes a DNS-SD service instance discovered via mDNS.
+type MDNSPeer struct {
+	Instance string            // service instance name (unique per node)
+	Hostname string            // advertised host name
+	Addrs    []string          // IP addresses, most recently announced first
+	Port     int               // service port from the SRV record
+	Txt      map[string]string // TXT record key/value pairs
+}
+
 // CameraDevice describes a discovered camera.
 type CameraDevice struct {
 	ID     string
@@ -59,4 +68,25 @@ type SensorReading struct {
 	Kind  int32
 	Unit  int32
 	Value float64
+}
+
+// JoystickDevice describes a connected joystick or gamepad.
+type JoystickDevice struct {
+	// ID stays the same when the device is unplugged and plugged back in,
+	// as far as the platform can tell devices apart.
+	ID        string
+	Name      string
+	VendorID  uint32
+	ProductID uint32
+	Axes      int
+	Buttons   int
+}
+
+// JoystickState is what a joystick reports right now. Axes run from -1 to 1,
+// with up and left negative. Backends report common gamepads in the same layout:
+// axes 0/1 left stick, 2 left trigger, 3/4 right stick, 5 right trigger, 6/7 dpad;
+// buttons 0-3 A B X Y, 4/5 shoulders, 6 back, 7 start.
+type JoystickState struct {
+	Axes    []float32
+	Buttons []bool
 }

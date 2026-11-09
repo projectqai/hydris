@@ -1,0 +1,115 @@
+syntax = "proto3";
+
+package world;
+
+option go_package = "github.com/projectqai/proto/go";
+
+// ---------------------------------------------
+// Planar geometry: 2.5D on the projected flat surface in WGS84
+
+// a 2.5D point on the projected flat surface in WGS84
+message PlanarPoint {
+  double longitude = 1;
+  double latitude = 2;
+
+  // height above ellipsoid (WGS84) in meters
+  optional double altitude = 3;
+
+  // id of an entity this point tracks
+  optional string entity = 4;
+}
+
+// a path with zero area on the projected flat surface
+// a ring is considered to be closed when the first and last points are identical
+message PlanarRing {
+  repeated PlanarPoint points = 1;
+}
+
+/// An area enclosed by a ring, with optional holes.
+/// All rings must be closed (first point = last point)
+message PlanarPolygon {
+  PlanarRing outer = 1;
+  repeated PlanarRing holes = 2;
+}
+
+// 2.5D geometry in WGS 84
+message PlanarCircle {
+  PlanarPoint center = 1;
+  double radius_m = 2;
+  optional double inner_radius_m = 3; // omit for solid circle
+}
+
+message PlanarGeometryCollection {
+  repeated PlanarGeometry geometries = 1;
+}
+
+enum LineStyle {
+  LineStyleSolid = 0;
+  LineStyleDashed = 1;
+  LineStyleDotted = 2;
+}
+
+message PlanarGeometry {
+  oneof plane {
+    PlanarPoint point = 1;
+    PlanarRing line = 2;
+    PlanarPolygon polygon = 3;
+    PlanarCircle circle = 4;
+    PlanarGeometryCollection collection = 5;
+  }
+  optional LineStyle line_style = 10;
+}
+
+// ---------------------------------------------
+// ENU geometry: offsets in meters from entity origin
+// east = +x, north = +y, up = +z
+
+message LocalPoint {
+  double east_m = 1;
+  double north_m = 2;
+  optional double up_m = 3;
+}
+
+message LocalRing {
+  repeated LocalPoint points = 1;
+}
+
+message LocalPolygon {
+  LocalRing outer = 1;
+  repeated LocalRing holes = 2;
+}
+
+message LocalCircle {
+  LocalPoint center = 1;
+  double radius_m = 2;
+  optional double inner_radius_m = 3;
+}
+
+message LocalGeometryCollection {
+  repeated LocalGeometry geometries = 1;
+}
+
+message LocalGeometry {
+  oneof shape {
+    LocalPoint point = 1;
+    LocalRing line = 2;
+    LocalPolygon polygon = 3;
+    LocalCircle circle = 4;
+    LocalGeometryCollection collection = 5;
+  }
+  optional LineStyle line_style = 10;
+}
+
+// ---------------------------------------------
+
+message FillStyle {
+  optional string color = 1;
+  optional float opacity = 2;
+  optional string texture = 3;
+  optional double texture_scale_m = 4;
+}
+
+message GeometryExtrusion {
+  optional FillStyle fill = 11;
+  optional double height_m = 12;
+}

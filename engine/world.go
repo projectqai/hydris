@@ -30,13 +30,18 @@ import (
 	"github.com/projectqai/hydris/pkg/metrics"
 	"github.com/projectqai/hydris/pkg/missionpkg"
 	"github.com/projectqai/hydris/pkg/muxlistener"
+	"github.com/projectqai/hydris/pkg/plugin"
 	"github.com/projectqai/hydris/pkg/timesync"
+	"github.com/projectqai/hydris/pkg/tracing"
 	"github.com/projectqai/hydris/pkg/version"
 	"github.com/projectqai/hydris/view"
 	pb "github.com/projectqai/proto/go"
 	"github.com/projectqai/proto/go/_goconnect"
 	"github.com/rs/cors"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -46,6 +51,13 @@ type entityState struct {
 	entity     *pb.Entity
 	lifetimes  map[int32]meta.Component // proto field number → meta
 	hardExpire bool                     // set by ExpireEntity; GC removes unconditionally
+}
+
+// version returns the trace of the entity's current version, derived from
+// its id and Lifetime.fresh (see tracing.Derive). Nothing is stored for
+// this: anyone who sees the entity derives the same.
+func (es *entityState) version() trace.SpanContext {
+	return tracing.Version(es.entity)
 }
 
 func (es *entityState) isInfinite(protoNum int32) bool {
@@ -60,8 +72,87 @@ func (es *entityState) isInfinite(protoNum int32) bool {
 // protoNumToFieldIdx maps proto field numbers to Go struct field indices for Entity.
 var protoNumToFieldIdx map[int32]int
 
+// manualFrameProtoNum is the proto field number of Entity.TargetManualControl.
+const manualFrameProtoNum int32 = int32(pb.EntityComponent_EntityComponentTargetManualControl)
+
 // lifetimeProtoNum is the proto field number of Entity.Lifetime.
 const lifetimeProtoNum int32 = int32(pb.EntityComponent_EntityComponentLifetime)
+
+// entityWrite is the span of one entity change through a Push: merge,
+// transformers and notification. Ended once the push completes.
+type entityWrite struct {
+	ctx  context.Context
+	span trace.Span
+}
+
+// startChange opens the span of one entity change once the merge has fixed
+// the version it produced: fresh is what the write stamped on the components
+// it touched (the sender's fresh, or now), which is also what
+// last-write-wins compares. The trace is derived from the entity id and that
+// fresh (tracing.Derive), so it is the same trace any other system computes
+// for this version. The span is named after the entity.
+//
+// If the sender named the version (set fresh on the wire) it owns the root
+// span of the trace and the engine's span is its child; otherwise the engine
+// stamped the version and its span is the root, carrying the derived ids.
+// The previous version is linked as "replaces", derived the same way, so an
+// entity's history can be walked in the collector; the RPC the change
+// arrived on is linked as "carrier", which is how a write made inside another
+// version's trace (a consumer enriching what it received) points back to it.
+//
+// ok is false when the write re-stamped the entity's current version (a
+// keepalive extending until): by definition not a change, so not a trace.
+// Caller holds s.l.
+func (s *WorldServer) startChange(ctx context.Context, wire, stored *pb.Entity, fresh, before *timestamppb.Timestamp, external bool, started time.Time, prov meta.Component) (entityWrite, bool) {
+	version := tracing.Derive(stored.GetId(), fresh)
+	if !version.IsValid() || (before.IsValid() && before.AsTime().Equal(fresh.AsTime())) {
+		return entityWrite{}, false
+	}
+	// The sampler decides on kind and builtin, so those are known at start;
+	// everything else is only computed when the span is actually recorded.
+	attrs := []attribute.KeyValue{
+		tracing.AttrEntityID.String(stored.Id),
+		tracing.AttrChangeKind.String(tracing.ChangeKind(wire)),
+	}
+	if prov.Builtin != "" {
+		attrs = append(attrs, tracing.AttrBuiltin.String(prov.Builtin))
+	}
+	opts := []trace.SpanStartOption{trace.WithTimestamp(started), trace.WithAttributes(attrs...)}
+	if before.IsValid() {
+		opts = append(opts, trace.WithLinks(tracing.Link(tracing.Derive(stored.Id, before), "replaces")))
+	}
+	ectx, span := tracing.StartChange(ctx, version, external, stored.Id, opts...)
+	if span.IsRecording() {
+		attrs = []attribute.KeyValue{
+			attribute.String("hydris.entity.fresh", fresh.AsTime().UTC().Format(time.RFC3339Nano)),
+			attribute.Bool("hydris.entity.new", !before.IsValid()),
+			attribute.Bool("hydris.entity.external", external),
+			attribute.StringSlice("hydris.entity.components", componentNames(wire)),
+			attribute.Int64("hydris.merge_us", time.Since(started).Microseconds()),
+		}
+		if prov.Actor != "" {
+			attrs = append(attrs, tracing.AttrActor.String(prov.Actor))
+		}
+		if prov.OriginNode != "" {
+			attrs = append(attrs, tracing.AttrNode.String(prov.OriginNode))
+		}
+		span.SetAttributes(attrs...)
+	}
+	return entityWrite{ctx: ectx, span: span}, true
+}
+
+// componentNames lists the populated component fields of an entity, for span
+// attributes.
+func componentNames(e *pb.Entity) []string {
+	var names []string
+	e.ProtoReflect().Range(func(fd protoreflect.FieldDescriptor, _ protoreflect.Value) bool {
+		if n := int32(fd.Number()); n != lifetimeProtoNum && fd.Number() != 1 {
+			names = append(names, string(fd.Name()))
+		}
+		return true
+	})
+	return names
+}
 
 func init() {
 	t := reflect.TypeOf(pb.Entity{})
@@ -82,6 +173,8 @@ type WorldServer struct {
 	l sync.RWMutex
 
 	bus *Bus
+
+	manual manualHolders
 
 	// head maps entity IDs to their state (entity + per-component lifetimes).
 	head map[string]*entityState
@@ -123,6 +216,7 @@ func NewWorldServer() *WorldServer {
 		chatTransformer:  transform.NewChatTransformer(),
 		startTime:        time.Now(),
 		transformers: []transform.Transformer{
+			transform.NewFixedPointTransformer(),
 			transform.NewImageBboxTransformer(),
 			transform.NewPolarNormalizeTransformer(),
 			transform.NewPoseTransformer(),
@@ -182,7 +276,7 @@ func (s *WorldServer) SetStreamEpoch(entityID string, streamIndex int, epoch tim
 		e.Camera.Streams[streamIndex].Epoch = timestamppb.New(epoch)
 	}
 	if es, ok := s.head[entityID]; ok {
-		s.bus.Dirty(entityID, es.entity, pb.EntityChange_EntityChangeUpdated)
+		s.bus.Dirty(context.Background(), entityID, es.entity, pb.EntityChange_EntityChangeUpdated)
 	}
 }
 
@@ -256,6 +350,13 @@ func (s *WorldServer) entityInternal(es *entityState) *structpb.Struct {
 		}
 		if !cm.WrittenAt.IsZero() {
 			c["written_at"] = cm.WrittenAt.Format(time.RFC3339Nano)
+		}
+		if !cm.Fresh.IsZero() {
+			// The trace of this component version, derived like everyone
+			// else derives it.
+			v := tracing.Derive(es.entity.GetId(), timestamppb.New(cm.Fresh))
+			c["trace_id"] = v.TraceID().String()
+			c["span_id"] = v.SpanID().String()
 		}
 		c["infinite"] = es.isInfinite(protoNum)
 		components[strconv.FormatInt(int64(protoNum), 10)] = c
@@ -352,6 +453,14 @@ func (s *WorldServer) TimeSync(ctx context.Context, req *connect.Request[pb.Time
 }
 
 func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityChangeRequest]) (*connect.Response[pb.EntityChangeResponse], error) {
+	// Before the lock: control frames must not wait behind store writes.
+	if err := s.stampManualFrames(ctx, req.Msg); err != nil {
+		return nil, err
+	}
+	if len(req.Msg.Changes) == 0 && len(req.Msg.Replacements) == 0 {
+		return connect.NewResponse(&pb.EntityChangeResponse{Accepted: true}), nil
+	}
+
 	s.l.Lock()
 	defer s.l.Unlock()
 
@@ -397,6 +506,9 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 	}
 
 	configChanged := false
+	// Set when a change touches an entity that is an anchor *before* the write,
+	// so re-parenting one out of authn.service also invalidates the pool.
+	anchorTouched := false
 	var changedIDs []string
 
 	var peerOrigin string
@@ -423,7 +535,26 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 
 	prov := meta.Component{Builtin: builtinName, Actor: actor, OriginNode: originNode}
 
+	// One trace per entity change, derived from the version it produces
+	// (startChange), covering merge, transformers and notification; watchers
+	// and expiry continue it later by deriving the same ids.
+	writes := make(map[string]entityWrite, len(req.Msg.Changes)+len(req.Msg.Replacements))
+	defer func() {
+		for _, w := range writes {
+			w.span.End()
+		}
+	}()
+
 	for _, e := range req.Msg.Changes {
+		anchorTouched = anchorTouched || isTrustAnchorLocked(s.head[e.Id])
+		// What the write names, before the engine touches it: a sender that
+		// set fresh owns the root of the change's trace.
+		external := e.GetLifetime().GetFresh().IsValid()
+		var before *timestamppb.Timestamp
+		if es := s.head[e.Id]; es != nil {
+			before = es.entity.GetLifetime().GetFresh()
+		}
+		started := time.Now()
 
 		// Enforce lease: reject if entity is leased by a different controller.
 		if e.Lease != nil {
@@ -436,19 +567,22 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 		}
 
 		if es, ok := s.head[e.Id]; ok && es.hardExpire {
-			s.expireEntity(e.Id, es)
+			s.expireEntity(ctx, e.Id, es)
+			before = nil
 		}
 
+		var writeFresh *timestamppb.Timestamp
 		if es, ok := s.head[e.Id]; ok {
-			merged, accepted := s.mergeEntityComponents(e.Id, es, e, prov)
+			merged, accepted, stamped := s.mergeEntityComponents(e.Id, es, e, prov)
 			if !accepted {
 				continue
 			}
+			writeFresh = timestamppb.New(stamped)
 			s.head[e.Id].entity = merged
 			s.headView[e.Id] = merged
 		} else {
-			hadNoLifetime := e.Lifetime == nil
-			if hadNoLifetime {
+			hadNoLifetime := lifetimeEmpty(e.Lifetime)
+			if e.Lifetime == nil {
 				e.Lifetime = &pb.Lifetime{}
 			}
 			if !e.Lifetime.From.IsValid() {
@@ -457,12 +591,19 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 			if e.Lifetime.Fresh == nil || !e.Lifetime.Fresh.IsValid() {
 				e.Lifetime.Fresh = e.Lifetime.From
 			}
+			writeFresh = e.Lifetime.Fresh
 			s.initEntityFrom(e, prov, hadNoLifetime)
 		}
 
 		// Stamp controller node after merge so we never clobber an
 		// existing Controller.Id with a synthetic empty Controller.
 		stored := s.head[e.Id].entity
+		if w, ok := s.startChange(ctx, e, stored, writeFresh, before, external, started, prov); ok {
+			if prev, dup := writes[e.Id]; dup {
+				prev.span.End()
+			}
+			writes[e.Id] = w
+		}
 		if s.nodeID != "" {
 			if stored.Controller == nil {
 				stored.Controller = &pb.Controller{}
@@ -491,10 +632,17 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 
 	// Process replacements (full entity swap, no merge)
 	for _, e := range req.Msg.Replacements {
+		anchorTouched = anchorTouched || isTrustAnchorLocked(s.head[e.Id])
 		if !isFederation && e.Controller != nil && e.Controller.Node != nil && s.nodeID != "" && *e.Controller.Node != s.nodeID {
 			return nil, connect.NewError(connect.CodePermissionDenied,
 				fmt.Errorf("entity %s: only federation may set Controller.Node to a foreign value", e.Id))
 		}
+		external := e.GetLifetime().GetFresh().IsValid()
+		var before *timestamppb.Timestamp
+		if es := s.head[e.Id]; es != nil {
+			before = es.entity.GetLifetime().GetFresh()
+		}
+		started := time.Now()
 		if e.Lifetime == nil {
 			e.Lifetime = &pb.Lifetime{}
 		}
@@ -526,6 +674,12 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 		}
 
 		s.initEntityFrom(e, prov)
+		if w, ok := s.startChange(ctx, e, s.head[e.Id].entity, e.Lifetime.Fresh, before, external, started, prov); ok {
+			if prev, dup := writes[e.Id]; dup {
+				prev.span.End()
+			}
+			writes[e.Id] = w
+		}
 		changedIDs = append(changedIDs, e.Id)
 		if e.Config != nil {
 			configChanged = true
@@ -540,7 +694,11 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 		if s.isRemoteEntity(id) {
 			continue
 		}
-		upserted, removed, genBy := transform.RunTransformers(s.transformers, s.headView, s.bus, id, s.head[id].lifetimes)
+		ectx := ctx
+		if w, ok := writes[id]; ok {
+			ectx = w.ctx
+		}
+		upserted, removed, genBy := transform.RunTransformers(ectx, s.transformers, s.headView, s.bus, id, s.head[id].lifetimes)
 		s.syncTransformerResults(upserted, removed)
 		s.markGeneratedComponents(id, genBy[id])
 		// Transformers also write components in place on other entities
@@ -551,7 +709,16 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 		}
 	}
 	for _, id := range changedIDs {
-		s.bus.Dirty(id, s.head[id].entity, pb.EntityChange_EntityChangeUpdated)
+		ectx := ctx
+		if w, ok := writes[id]; ok {
+			ectx = w.ctx
+		}
+		_, notify := tracing.Tracer().Start(ectx, "notify")
+		if notify.IsRecording() {
+			notify.SetAttributes(attribute.Int("hydris.consumers", s.bus.ConsumerCount()))
+		}
+		s.bus.Dirty(ectx, id, s.head[id].entity, pb.EntityChange_EntityChangeUpdated)
+		notify.End()
 	}
 
 	if configChanged {
@@ -559,7 +726,7 @@ func (s *WorldServer) Push(ctx context.Context, req *connect.Request[pb.EntityCh
 	}
 
 	for _, id := range changedIDs {
-		if id == authzPolicyEntity || id == authnPolicyEntity {
+		if id == authzPolicyEntity || id == authnPolicyEntity || anchorTouched || s.isAuthnSubtreeLocked(id) {
 			go s.policyEval.Rebuild()
 			break
 		}
@@ -580,8 +747,21 @@ func (s *WorldServer) ExpireEntity(ctx context.Context, req *connect.Request[pb.
 	if !exists {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("entity with id %s not found", req.Msg.Id))
 	}
+	s.expireLocked(ctx, es)
+	return connect.NewResponse(&pb.ExpireEntityResponse{}), nil
+}
 
+// expireLocked marks es for unconditional removal. Caller holds s.l.
+func (s *WorldServer) expireLocked(ctx context.Context, es *entityState) {
+	id := es.entity.Id
 	now := timestamppb.Now()
+	wasAnchor := s.isAuthnSubtreeLocked(id)
+
+	// Marks the entity; the removal is the GC's "entity.expire" span in the
+	// same trace. Started with StartSpan so the RPC is linked as carrier.
+	ectx, span := tracing.StartSpan(ctx, es.version(), "entity.expire.request",
+		trace.WithAttributes(tracing.AttrEntityID.String(id)))
+	defer span.End()
 
 	// Mark for unconditional removal by the GC. Subsequent pushes
 	// cannot revive an entity once hard-expired.
@@ -593,13 +773,12 @@ func (s *WorldServer) ExpireEntity(ctx context.Context, req *connect.Request[pb.
 	}
 	es.entity.Lifetime.Until = now
 
-	s.bus.Dirty(es.entity.Id, es.entity, pb.EntityChange_EntityChangeUpdated)
+	s.bus.Dirty(ectx, es.entity.Id, es.entity, pb.EntityChange_EntityChangeUpdated)
 
-	if es.entity.GetPolicy() != nil {
+	// Expiring an anchor must drop it from the pool now, not at the next GC.
+	if es.entity.GetPolicy() != nil || wasAnchor {
 		go s.policyEval.Rebuild()
 	}
-
-	return connect.NewResponse(&pb.ExpireEntityResponse{}), nil
 }
 
 func (s *WorldServer) HardReset(ctx context.Context, req *connect.Request[pb.HardResetRequest]) (*connect.Response[pb.HardResetResponse], error) {
@@ -613,7 +792,7 @@ func (s *WorldServer) HardReset(ctx context.Context, req *connect.Request[pb.Har
 		for _, t := range s.transformers {
 			t.Resolve(s.headView, id, nil)
 		}
-		s.bus.Dirty(id, snapshot, pb.EntityChange_EntityChangeExpired)
+		s.bus.Dirty(ctx, id, snapshot, pb.EntityChange_EntityChangeExpired)
 	}
 	if s.worldFile != "" {
 		if err := os.WriteFile(s.worldFile, nil, 0o644); err != nil {
@@ -742,14 +921,15 @@ func (s *WorldServer) LoadMission(ctx context.Context, req *connect.Request[pb.L
 func NewAPIMux(engine *WorldServer, promHandler http.Handler, bridges *media.BridgeManager, ring *LogRing) *http.ServeMux {
 	mux := http.NewServeMux()
 
+	// Tracing wraps policy so authorization is inside the RPC span.
 	worldPath, worldHandler := _goconnect.NewWorldServiceHandler(engine,
-		connect.WithInterceptors(engine.policyEval.Interceptor()),
+		connect.WithInterceptors(tracing.ConnectInterceptor(), engine.policyEval.Interceptor()),
 	)
 	mux.Handle(worldPath, worldHandler)
 
 	if artifacts.Server != nil {
 		artPath, artHandler := _goconnect.NewArtifactServiceHandler(artifacts.Server,
-			connect.WithInterceptors(engine.policyEval.Interceptor()),
+			connect.WithInterceptors(tracing.ConnectInterceptor(), engine.policyEval.Interceptor()),
 		)
 		mux.Handle(artPath, artHandler)
 
@@ -758,6 +938,7 @@ func NewAPIMux(engine *WorldServer, promHandler http.Handler, bridges *media.Bri
 		if local := artifacts.Server.Local(); local != nil {
 			ts = tileserver.NewServer(local)
 			mux.Handle("GET /tiles/{entityID}/{z}/{x}/{y}", ts.Handler())
+			mux.Handle("GET /glyphs/{fontstack}/{range}", ts.GlyphsHandler())
 		}
 
 		// Access is enforced by the global policy Middleware (which wraps the
@@ -839,6 +1020,13 @@ type EngineConfig struct {
 // If worldFile is provided, it loads entities from that file on startup
 // and periodically flushes the current state back to the file.
 func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
+	_, addr, err := StartEngineServer(ctx, cfg)
+	return addr, err
+}
+
+// StartEngineServer is StartEngine but also returns the world server, for
+// hosts (android) that need to drive it after startup.
+func StartEngineServer(ctx context.Context, cfg EngineConfig) (*WorldServer, string, error) {
 	engine := NewWorldServer()
 
 	// Default to a platform-appropriate config directory when no world file is specified.
@@ -864,7 +1052,7 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 
 		// Load existing state from file
 		if err := engine.LoadFromFile(worldFile); err != nil {
-			return "", fmt.Errorf("failed to load world file: %w", err)
+			return nil, "", fmt.Errorf("failed to load world file: %w", err)
 		}
 
 		// Start periodic flushing (every 10 seconds)
@@ -881,6 +1069,16 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 
 	// Initialize stable node identity (after loading world state)
 	engine.InitNodeIdentity()
+
+	// Distributed tracing: propagation is always on; export only when an OTLP
+	// endpoint is configured through the OTEL_* environment.
+	if err := tracing.Init(ctx, tracing.Options{
+		ServiceName: "hydris",
+		Version:     version.Version,
+		NodeID:      engine.nodeID,
+	}); err != nil {
+		slog.Warn("tracing disabled", "error", err)
+	}
 
 	if cfg.DisableSecurity {
 		slog.Warn("~~~~~~~~~~~~~ DANGER ~~~~~~~~~~~")
@@ -899,15 +1097,15 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	// Initialize Prometheus exporter and OpenTelemetry metrics
 	promHandler, err := metrics.InitPrometheus()
 	if err != nil {
-		return "", fmt.Errorf("failed to initialize prometheus: %w", err)
+		return nil, "", fmt.Errorf("failed to initialize prometheus: %w", err)
 	}
 
 	if err := metrics.Init(); err != nil {
-		return "", fmt.Errorf("failed to initialize metrics: %w", err)
+		return nil, "", fmt.Errorf("failed to initialize metrics: %w", err)
 	}
 
 	if err := metrics.RegisterCollector(NewEntityMetricsCollector(engine)); err != nil {
-		return "", fmt.Errorf("failed to register entity metrics collector: %w", err)
+		return nil, "", fmt.Errorf("failed to register entity metrics collector: %w", err)
 	}
 
 	// Start metrics updater
@@ -925,9 +1123,9 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	// API/WebRTC UDP listener, aborting startup with an opaque "address already
 	// in use" only after most subsystems have come up. Fail fast with context.
 	if p, err := strconv.Atoi(port); err != nil {
-		return "", fmt.Errorf("invalid PORT %q: %w", port, err)
+		return nil, "", fmt.Errorf("invalid PORT %q: %w", port, err)
 	} else if p%2 == 0 {
-		return "", fmt.Errorf("PORT must be odd: %d is even, so the RTSP RTP listener would bind UDP :%d and collide with the API/WebRTC listener on the same port (use an odd port, e.g. %d)", p, p, p+1)
+		return nil, "", fmt.Errorf("PORT must be odd: %d is even, so the RTSP RTP listener would bind UDP :%d and collide with the API/WebRTC listener on the same port (use an odd port, e.g. %d)", p, p, p+1)
 	}
 
 	if os.Getenv("HYDRIS_SERVER") == "" {
@@ -959,15 +1157,23 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 		udpListener = nil
 	}
 
+	// Plugins are unpacked next to the world state, not in the system temp
+	// dir: native plugins execute from there. Android sets its own.
+	if plugin.TempDir == "" {
+		if err := plugin.SetWorkDir(filepath.Join(filepath.Dir(worldFile), "plugins")); err != nil {
+			return nil, "", fmt.Errorf("plugin work dir: %w", err)
+		}
+	}
+
 	// Set up artifact storage.
 	artDir := filepath.Join(filepath.Dir(worldFile), "artifacts")
 	artLocal, err := artifacts.NewLocalStore(artDir)
 	if err != nil {
-		return "", fmt.Errorf("failed to create artifact store: %w", err)
+		return nil, "", fmt.Errorf("failed to create artifact store: %w", err)
 	}
 	grpcConn, err := builtin.BuiltinClientConn("engine")
 	if err != nil {
-		return "", fmt.Errorf("failed to create builtin client: %w", err)
+		return nil, "", fmt.Errorf("failed to create builtin client: %w", err)
 	}
 	worldClient := pb.NewWorldServiceClient(grpcConn)
 	artifacts.Server = artifacts.NewArtifactServer(artLocal, worldClient)
@@ -981,6 +1187,8 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 		slog.Warn("node TLS identity unavailable; serving without TLS", "error", err)
 	} else {
 		NodeTLSCert = cert
+		// The node entity predates the TLS identity; record it now.
+		engine.StampNodeTLSFingerprint()
 		// SECURITY: RequestClientCert skips chain checks but crypto/tls still
 		// verifies CertificateVerify when a cert is presented, proving private-key
 		// possession. verifyMTLS's `self` admin check relies on this. A handshake
@@ -998,7 +1206,7 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 
 	webServer, err := view.NewWebServer()
 	if err != nil {
-		return "", fmt.Errorf("failed to create web server: %w", err)
+		return nil, "", fmt.Errorf("failed to create web server: %w", err)
 	}
 	mux.Handle("/", webServer)
 
@@ -1022,7 +1230,7 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 	// Create listener first to fail fast if port is in use
 	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		return "", fmt.Errorf("failed to listen on port %s: %w", port, err)
+		return nil, "", fmt.Errorf("failed to listen on port %s: %w", port, err)
 	}
 
 	// Protocol-multiplex: TLS, RTSP, HTTP, and ICE TCP share the same port.
@@ -1042,7 +1250,7 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 		engine.policyEval.AllowMedia,
 	)
 	if err := rtspServer.Start(muxLn.RTSP()); err != nil {
-		return "", fmt.Errorf("failed to start RTSP server: %v", err)
+		return nil, "", fmt.Errorf("failed to start RTSP server: %v", err)
 	}
 
 	localIPs := getAllLocalIPs()
@@ -1103,9 +1311,10 @@ func StartEngine(ctx context.Context, cfg EngineConfig) (string, error) {
 		_ = muxLn.Close()
 		_ = httpServer.Shutdown(context.Background())
 		_ = builtinServer.Shutdown(context.Background())
+		_ = tracing.Shutdown(context.Background())
 	}()
 
-	return "localhost:" + port, nil
+	return engine, "localhost:" + port, nil
 }
 
 // setEntity stores an entity in head and updates the headView.
@@ -1136,7 +1345,7 @@ func (s *WorldServer) setEntityMetricsLocked(id string, metrics []*pb.Metric) {
 	updated.Metric = &pb.MetricComponent{Metrics: metrics}
 	es.entity = updated
 	s.headView[id] = updated
-	s.bus.Dirty(id, updated, pb.EntityChange_EntityChangeUpdated)
+	s.bus.Dirty(context.Background(), id, updated, pb.EntityChange_EntityChangeUpdated)
 }
 
 // deleteEntity removes an entity from head and headView.
@@ -1145,10 +1354,10 @@ func (s *WorldServer) deleteEntity(id string) {
 	delete(s.headView, id)
 }
 
-func (s *WorldServer) expireEntity(id string, es *entityState) {
+func (s *WorldServer) expireEntity(ctx context.Context, id string, es *entityState) {
 	deleteArtifactBlob(es.entity)
 	s.deleteEntity(id)
-	s.bus.Dirty(id, es.entity, pb.EntityChange_EntityChangeExpired)
+	s.bus.Dirty(ctx, id, es.entity, pb.EntityChange_EntityChangeExpired)
 }
 
 func (s *WorldServer) isRemoteEntity(id string) bool {
@@ -1200,6 +1409,14 @@ func (s *WorldServer) markGeneratedComponents(id string, genBy map[int32]string)
 		}
 		es.lifetimes[protoNum] = meta.Component{Generated: true, NoLifetime: true, WrittenAt: time.Now(), Transformer: genBy[protoNum]}
 	}
+}
+
+// lifetimeEmpty reports whether a Lifetime carries no lifetime at all: nil,
+// or a message with none of from, until and fresh set. Such a push is treated
+// exactly like one without a Lifetime, so an empty message never turns a
+// component into a lifetime-tracked (and possibly permanent) one.
+func lifetimeEmpty(l *pb.Lifetime) bool {
+	return l == nil || (!l.From.IsValid() && !l.Until.IsValid() && !l.Fresh.IsValid())
 }
 
 // lifetimeTime returns the effective timestamp for a Lifetime, preferring
@@ -1297,7 +1514,10 @@ func componentAccepted(incomingFresh, incomingUntil time.Time, existing meta.Com
 // Each non-nil pointer field in incoming is independently compared against
 // the existing component's lifetime. Returns the merged entity and whether
 // at least one component was accepted.
-func (s *WorldServer) mergeEntityComponents(entityID string, existing *entityState, incoming *pb.Entity, prov meta.Component) (*pb.Entity, bool) {
+// The returned time is the fresh stamped on every component the write
+// touched (the incoming fresh, or now when the write carried none): the
+// version this write produced, which its trace is derived from.
+func (s *WorldServer) mergeEntityComponents(entityID string, existing *entityState, incoming *pb.Entity, prov meta.Component) (*pb.Entity, bool, time.Time) {
 	merged := proto.Clone(existing.entity).(*pb.Entity)
 
 	now := time.Now()
@@ -1335,7 +1555,7 @@ func (s *WorldServer) mergeEntityComponents(entityID string, existing *entitySta
 			existing.lifetimes = make(map[int32]meta.Component)
 		}
 		cm := prov
-		cm.Fresh, cm.Until, cm.NoLifetime, cm.WrittenAt = inFresh, inUntil, incoming.Lifetime == nil, now
+		cm.Fresh, cm.Until, cm.NoLifetime, cm.WrittenAt = inFresh, inUntil, lifetimeEmpty(incoming.Lifetime), now
 		existing.lifetimes[protoNum] = cm
 		anyAccepted = true
 	}
@@ -1374,5 +1594,5 @@ func (s *WorldServer) mergeEntityComponents(entityID string, existing *entitySta
 		}
 	}
 
-	return merged, anyAccepted
+	return merged, anyAccepted, inFresh
 }

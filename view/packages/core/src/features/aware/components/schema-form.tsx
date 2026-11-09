@@ -2,21 +2,37 @@
 
 import type { JsonObject } from "@bufbuild/protobuf";
 import {
+  Accordion,
+  AccordionContent,
+  AccordionIndicator,
+  AccordionItem,
+  AccordionTitle,
+  AccordionTrigger,
+} from "@hydris/ui/accordion";
+import {
   ControlButton,
   ControlInput,
-  ControlSelect,
   ControlSlider,
   ControlStepper,
   ToggleSwitch,
 } from "@hydris/ui/controls";
 import { ConfirmDialog } from "@hydris/ui/dialogs/confirm-dialog";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  FieldTextContext,
+  FieldTitle,
+} from "@hydris/ui/field";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
-import { ChevronDown, Eye, EyeOff } from "lucide-react-native";
+import { RadioGroup, RadioGroupItem } from "@hydris/ui/radio-group";
+import { Eye, EyeOff } from "lucide-react-native";
 import type { ReactNode } from "react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { TextInput } from "react-native";
-import { Pressable, Text, View } from "react-native";
+import { Fragment, use, useCallback, useMemo, useRef, useState } from "react";
+import { Platform, Pressable, Text, View } from "react-native";
 
 type BaseField = {
   key: string;
@@ -25,6 +41,7 @@ type BaseField = {
   placeholder?: string;
   required?: boolean;
   readOnly?: boolean;
+  hideLabel?: boolean;
   group?: string;
   order?: number;
   patternRegex?: RegExp;
@@ -90,7 +107,7 @@ function compilePattern(pattern: string | undefined): RegExp | undefined {
   }
 }
 
-export function parseJsonSchema(schema: JsonObject): ParsedSchema {
+function parseJsonSchema(schema: JsonObject): ParsedSchema {
   const properties = schema.properties;
   if (!properties || typeof properties !== "object" || Array.isArray(properties))
     return { fields: [], groups: [] };
@@ -204,10 +221,9 @@ export function parseJsonSchema(schema: JsonObject): ParsedSchema {
   return { fields, groups };
 }
 
-function groupAndSort(
-  fields: FieldDescriptor[],
-  groups: GroupDef[],
-): { group: GroupDef | null; fields: FieldDescriptor[] }[] {
+export type SchemaSection = { group: GroupDef | null; fields: FieldDescriptor[] };
+
+function groupAndSort(fields: FieldDescriptor[], groups: GroupDef[]): SchemaSection[] {
   const ungrouped: FieldDescriptor[] = [];
   const byGroup = new Map<string, FieldDescriptor[]>();
 
@@ -228,7 +244,7 @@ function groupAndSort(
     return a.key.localeCompare(b.key);
   };
 
-  const sections: { group: GroupDef | null; fields: FieldDescriptor[] }[] = [];
+  const sections: SchemaSection[] = [];
 
   if (ungrouped.length > 0) {
     sections.push({ group: null, fields: ungrouped.sort(sortByOrder) });
@@ -255,55 +271,43 @@ function groupAndSort(
   return sections;
 }
 
-function FieldLabel({
-  label,
-  required,
-  onPress,
-}: {
-  label: string;
-  required?: boolean;
-  onPress?: () => void;
-}) {
-  const text = (
-    <Text className="font-sans-medium text-foreground text-sm">
-      {label}
-      {required && <Text className="text-red-foreground"> *</Text>}
-    </Text>
-  );
-  if (onPress) return <Pressable onPress={onPress}>{text}</Pressable>;
-  return text;
-}
+function RequiredTitle({ label, required }: { label: string; required?: boolean }) {
+  const { title } = use(FieldTextContext);
 
-function FieldHelper({ text }: { text?: string }) {
-  if (!text) return null;
-  return <Text className="text-muted-foreground font-mono text-xs">{text}</Text>;
-}
-
-function FieldError({ error }: { error?: string }) {
-  if (!error) return null;
   return (
-    <Text accessibilityRole="alert" className="text-red-foreground font-mono text-xs">
-      {error}
-    </Text>
+    <FieldTitle>
+      {label}
+      {required && (
+        <Text className={cn("font-sans-medium text-sm", title, "text-red-foreground")}>*</Text>
+      )}
+    </FieldTitle>
+  );
+}
+
+function RequiredLabel({ label, required }: { label: string; required?: boolean }) {
+  return (
+    <FieldLabel>
+      <RequiredTitle label={label} required={required} />
+    </FieldLabel>
   );
 }
 
 function FieldHeader({
   label,
+  hideLabel,
   required,
   description,
-  onPress,
 }: {
   label: string;
+  hideLabel?: boolean;
   required?: boolean;
   description?: string;
-  onPress?: () => void;
 }) {
   return (
-    <View className="gap-0.5">
-      <FieldLabel label={label} required={required} onPress={onPress} />
-      <FieldHelper text={description} />
-    </View>
+    <FieldContent>
+      {!hideLabel && <RequiredLabel label={label} required={required} />}
+      {description && <FieldDescription>{description}</FieldDescription>}
+    </FieldContent>
   );
 }
 
@@ -319,31 +323,31 @@ function BooleanFieldComponent({
   error?: string;
 }) {
   return (
-    <View className={cn("gap-1 py-3", field.readOnly && "cursor-not-allowed")}>
-      <View className="flex-row items-center justify-between">
-        <Pressable
-          onPress={field.readOnly ? undefined : () => onChange(!value)}
-          className="flex-1 gap-0.5"
-          disabled={field.readOnly}
-        >
-          <View className="flex-row items-center gap-2">
-            <Text className="font-sans-medium text-foreground text-sm">
-              {field.label}
-              {field.required && <Text className="text-red-foreground"> *</Text>}
-            </Text>
-            {field.dangerous && <Text className="text-red font-mono text-xs">DANGEROUS</Text>}
-          </View>
-          {field.description && (
-            <Text className="text-muted-foreground font-mono text-xs">{field.description}</Text>
-          )}
-        </Pressable>
-        <ToggleSwitch
-          value={value}
-          onValueChange={field.readOnly ? () => {} : onChange}
-          accessibilityLabel={field.label}
-        />
-      </View>
-      <FieldError error={error} />
+    <View
+      className={cn(
+        "gap-1 py-3",
+        field.hideLabel && "py-0",
+        field.readOnly && "cursor-not-allowed",
+      )}
+    >
+      <FieldLabel>
+        <Field orientation="horizontal">
+          <FieldContent>
+            <View className="flex-row items-center gap-2">
+              {!field.hideLabel && <RequiredTitle label={field.label} required={field.required} />}
+              {field.dangerous && <Text className="text-red font-mono text-xs">DANGEROUS</Text>}
+            </View>
+            {field.description && <FieldDescription>{field.description}</FieldDescription>}
+          </FieldContent>
+          <ToggleSwitch
+            value={value}
+            onValueChange={onChange}
+            accessibilityLabel={field.label}
+            readOnly={field.readOnly}
+          />
+        </Field>
+      </FieldLabel>
+      <FieldError>{error}</FieldError>
     </View>
   );
 }
@@ -362,22 +366,22 @@ function StringFieldComponent({
   onSubmitEditing?: () => void;
 }) {
   const t = useThemeColors();
-  const inputRef = useRef<TextInput>(null);
   const [showPassword, setShowPassword] = useState(false);
 
   const isPassword = field.widget === "password";
   const isTextarea = field.widget === "textarea";
 
   return (
-    <View className={cn("gap-1.5 py-3", field.readOnly && "cursor-not-allowed")}>
+    <Field
+      className={cn("py-3", field.hideLabel && "py-0", field.readOnly && "cursor-not-allowed")}
+    >
       <FieldHeader
         label={field.label}
+        hideLabel={field.hideLabel}
         required={field.required}
         description={field.description}
-        onPress={field.readOnly ? undefined : () => inputRef.current?.focus()}
       />
       <ControlInput
-        ref={inputRef}
         value={value}
         onChangeText={field.readOnly ? () => {} : onChange}
         editable={!field.readOnly}
@@ -404,8 +408,8 @@ function StringFieldComponent({
           ) : undefined
         }
       />
-      <FieldError error={error} />
-    </View>
+      <FieldError>{error}</FieldError>
+    </Field>
   );
 }
 
@@ -422,15 +426,16 @@ function NumberFieldComponent({
   error?: string;
   onSubmitEditing?: () => void;
 }) {
-  const inputRef = useRef<TextInput>(null);
-
   if (field.widget === "stepper") {
     const numVal =
       typeof value === "number" ? value : ((Number(value) || field.defaultValue) ?? field.min ?? 0);
     return (
-      <View className={cn("gap-1.5 py-3", field.readOnly && "cursor-not-allowed")}>
+      <Field
+        className={cn("py-3", field.hideLabel && "py-0", field.readOnly && "cursor-not-allowed")}
+      >
         <FieldHeader
           label={field.label}
+          hideLabel={field.hideLabel}
           required={field.required}
           description={field.description}
         />
@@ -444,8 +449,8 @@ function NumberFieldComponent({
           readOnly={field.readOnly}
           accessibilityLabel={field.label}
         />
-        <FieldError error={error} />
-      </View>
+        <FieldError>{error}</FieldError>
+      </Field>
     );
   }
 
@@ -453,9 +458,12 @@ function NumberFieldComponent({
     const numVal =
       typeof value === "number" ? value : ((Number(value) || field.defaultValue) ?? field.min ?? 0);
     return (
-      <View className={cn("gap-1.5 py-3", field.readOnly && "cursor-not-allowed")}>
+      <Field
+        className={cn("py-3", field.hideLabel && "py-0", field.readOnly && "cursor-not-allowed")}
+      >
         <FieldHeader
           label={field.label}
+          hideLabel={field.hideLabel}
           required={field.required}
           description={field.description}
         />
@@ -469,8 +477,8 @@ function NumberFieldComponent({
           readOnly={field.readOnly}
           accessibilityLabel={field.label}
         />
-        <FieldError error={error} />
-      </View>
+        <FieldError>{error}</FieldError>
+      </Field>
     );
   }
 
@@ -479,15 +487,16 @@ function NumberFieldComponent({
   const strValue = value === "" || value === undefined ? "" : String(value);
 
   return (
-    <View className={cn("gap-1.5 py-3", field.readOnly && "cursor-not-allowed")}>
+    <Field
+      className={cn("py-3", field.hideLabel && "py-0", field.readOnly && "cursor-not-allowed")}
+    >
       <FieldHeader
         label={field.label}
+        hideLabel={field.hideLabel}
         required={field.required}
         description={helper}
-        onPress={field.readOnly ? undefined : () => inputRef.current?.focus()}
       />
       <ControlInput
-        ref={inputRef}
         value={strValue}
         onChangeText={field.readOnly ? () => {} : onChange}
         editable={!field.readOnly}
@@ -504,8 +513,8 @@ function NumberFieldComponent({
           ) : undefined
         }
       />
-      <FieldError error={error} />
-    </View>
+      <FieldError>{error}</FieldError>
+    </Field>
   );
 }
 
@@ -536,19 +545,30 @@ function OneOfFieldComponent({
   onChange: (v: string) => void;
   error?: string;
 }) {
-  const options = field.options.map((o) => ({ value: String(o.value), label: o.label }));
-
   return (
-    <View className={cn("gap-1.5 py-3", field.readOnly && "cursor-not-allowed")}>
-      <FieldHeader label={field.label} required={field.required} description={field.description} />
-      <ControlSelect
-        value={value}
-        options={options}
-        onValueChange={field.readOnly ? () => {} : onChange}
-        accessibilityLabel={field.label}
+    <Field
+      className={cn("py-3", field.hideLabel && "py-0", field.readOnly && "cursor-not-allowed")}
+    >
+      <FieldHeader
+        label={field.label}
+        hideLabel={field.hideLabel}
+        required={field.required}
+        description={field.description}
       />
-      <FieldError error={error} />
-    </View>
+      <RadioGroup
+        value={value}
+        onValueChange={onChange}
+        disabled={field.readOnly}
+        accessibilityLabel={field.label}
+      >
+        {field.options.map((o) => (
+          <RadioGroupItem key={String(o.value)} value={String(o.value)}>
+            {o.label}
+          </RadioGroupItem>
+        ))}
+      </RadioGroup>
+      <FieldError>{error}</FieldError>
+    </Field>
   );
 }
 
@@ -563,12 +583,10 @@ function UnknownFieldComponent({
   onChange: (v: string) => void;
   error?: string;
 }) {
-  const inputRef = useRef<TextInput>(null);
   return (
-    <View className="gap-1.5 py-3">
-      <FieldLabel label={field.label} onPress={() => inputRef.current?.focus()} />
+    <Field className={cn("py-3", field.hideLabel && "py-0")}>
+      {!field.hideLabel && <RequiredLabel label={field.label} />}
       <ControlInput
-        ref={inputRef}
         value={value}
         onChangeText={onChange}
         multiline
@@ -576,75 +594,59 @@ function UnknownFieldComponent({
         accessibilityLabel={field.label}
         className="min-h-20 p-3 text-xs"
       />
-      <FieldError error={error} />
-    </View>
+      <FieldError>{error}</FieldError>
+    </Field>
   );
 }
 
-function FieldGroup({ group, children }: { group: GroupDef; children: React.ReactNode }) {
-  const t = useThemeColors();
-  const [collapsed, setCollapsed] = useState(group.collapsed ?? false);
-
-  return (
-    <View>
-      <Pressable
-        onPress={() => setCollapsed((c) => !c)}
-        className="flex-row items-center gap-1.5 py-2"
-        accessibilityRole="button"
-        accessibilityState={{ expanded: !collapsed }}
-        accessibilityLabel={`${group.title} section`}
-      >
-        <View
-          style={{
-            transform: [{ rotate: collapsed ? "-90deg" : "0deg" }],
-          }}
-        >
-          <ChevronDown size={14} strokeWidth={2} color={t.controlFg} />
-        </View>
-        <Text className="font-sans-medium text-on-surface/70 text-xs tracking-widest uppercase">
-          {group.title}
-        </Text>
-      </Pressable>
-      {!collapsed && <View className="pl-1">{children}</View>}
-    </View>
-  );
-}
-
+// A field with no stored value and no default stays out of the draft. An emptied input holds "".
 type DraftValue = Record<string, unknown>;
+
+function isUnset(v: unknown): boolean {
+  return v === undefined || v === "";
+}
 
 function buildInitialDraft(
   fields: FieldDescriptor[],
   currentValue: JsonObject | undefined,
 ): DraftValue {
   const draft: DraftValue = {};
+
   for (const field of fields) {
     const current = currentValue?.[field.key];
+
     if (current !== undefined) {
       draft[field.key] = current;
     } else if ("defaultValue" in field && field.defaultValue !== undefined) {
       draft[field.key] = field.defaultValue;
-    } else if (field.type === "boolean") {
-      draft[field.key] = false;
-    } else if (field.type === "number") {
-      draft[field.key] = "";
-    } else {
-      draft[field.key] = "";
     }
   }
+
   return draft;
 }
 
+// Unset fields stay out of the config, so the device keeps its own value.
 function draftToJsonObject(fields: FieldDescriptor[], draft: DraftValue): JsonObject {
   const result: JsonObject = {};
+
   for (const field of fields) {
     const v = draft[field.key];
-    if (field.type === "number") {
-      const n = Number(v);
-      result[field.key] = Number.isNaN(n) ? 0 : n;
-    } else if (field.type === "oneOf") {
-      // oneOf can be string or number — preserve original type
+
+    // An enum can offer "" as a real choice, so match options before the unset check.
+    // Sending the option's value keeps numeric options numeric.
+    if (field.type === "oneOf") {
       const opt = field.options.find((o) => String(o.value) === String(v));
-      result[field.key] = opt ? opt.value : (v as string);
+
+      if (opt) result[field.key] = opt.value;
+      else if (!isUnset(v)) result[field.key] = v as string;
+
+      continue;
+    }
+
+    if (isUnset(v)) continue;
+
+    if (field.type === "number") {
+      result[field.key] = Number(v);
     } else if (field.type === "unknown") {
       try {
         result[field.key] = JSON.parse(v as string);
@@ -655,7 +657,12 @@ function draftToJsonObject(fields: FieldDescriptor[], draft: DraftValue): JsonOb
       result[field.key] = v as string | boolean;
     }
   }
+
   return result;
+}
+
+function jsonFieldText(v: unknown): string {
+  return typeof v === "string" ? v : (JSON.stringify(v, null, 2) ?? "");
 }
 
 function isDirty(
@@ -668,20 +675,19 @@ function isDirty(
     const currentVal = currentValue?.[field.key];
 
     if (field.type === "number") {
-      const draftNum = Number(draftVal);
+      const draftNum = isUnset(draftVal) ? undefined : Number(draftVal);
       const currentNum = typeof currentVal === "number" ? currentVal : undefined;
-      if (Number.isNaN(draftNum) && currentNum === undefined) continue;
+
       if (draftNum !== currentNum) return true;
     } else if (field.type === "boolean") {
-      if (draftVal !== (currentVal ?? false)) return true;
+      if (draftVal !== currentVal) return true;
     } else if (field.type === "unknown") {
-      const draftStr = typeof draftVal === "string" ? draftVal : JSON.stringify(draftVal);
-      const currentStr = currentVal !== undefined ? JSON.stringify(currentVal) : "";
-      if (draftStr !== currentStr) return true;
+      if (jsonFieldText(draftVal) !== jsonFieldText(currentVal)) return true;
     } else {
       if (String(draftVal ?? "") !== String(currentVal ?? "")) return true;
     }
   }
+
   return false;
 }
 
@@ -790,7 +796,7 @@ function renderField(
       return (
         <BooleanFieldComponent
           field={effectiveField}
-          value={draft[effectiveField.key] as boolean}
+          value={draft[effectiveField.key] === true}
           onChange={(v) => updateField(effectiveField.key, v)}
           error={error}
         />
@@ -828,11 +834,7 @@ function renderField(
       return (
         <UnknownFieldComponent
           field={effectiveField}
-          value={
-            typeof draft[effectiveField.key] === "string"
-              ? (draft[effectiveField.key] as string)
-              : JSON.stringify(draft[effectiveField.key], null, 2)
-          }
+          value={jsonFieldText(draft[effectiveField.key])}
           onChange={(v) => updateField(effectiveField.key, v)}
           error={error}
         />
@@ -847,12 +849,214 @@ function getDangerousChanges(
 ): BooleanField | undefined {
   for (const field of fields) {
     if (field.type === "boolean" && field.dangerous && field.confirm) {
-      const draftVal = draft[field.key];
+      const draftVal = draft[field.key] ?? false;
       const currentVal = currentValue?.[field.key] ?? false;
+
       if (draftVal !== currentVal) return field;
     }
   }
+
   return undefined;
+}
+
+export function SchemaFieldList({
+  fields,
+  draft,
+  updateField,
+  errors,
+  onSubmitEditing,
+  disabled,
+  titled,
+}: {
+  fields: FieldDescriptor[];
+  draft: DraftValue;
+  updateField: (key: string, v: unknown) => void;
+  errors: Record<string, string>;
+  onSubmitEditing?: () => void;
+  disabled?: boolean;
+  titled?: boolean;
+}) {
+  const hideLabel = titled === true && fields.length === 1;
+
+  return fields.map((field, i) => (
+    <Fragment key={field.key}>
+      {renderField(
+        hideLabel ? { ...field, hideLabel } : field,
+        draft,
+        updateField,
+        errors,
+        onSubmitEditing,
+        disabled,
+      )}
+      {i < fields.length - 1 && <View className="bg-surface-overlay/6 h-px" />}
+    </Fragment>
+  ));
+}
+
+export function sectionTitle(fields: FieldDescriptor[], groupTitle: string): ReactNode {
+  const only = fields.length === 1 ? fields[0] : undefined;
+
+  if (!only) return groupTitle;
+
+  return (
+    <>
+      {only.label}
+      {only.required && <Text className="text-red-foreground"> *</Text>}
+    </>
+  );
+}
+
+export function SchemaSections({
+  sections,
+  draft,
+  updateField,
+  errors,
+  onSubmitEditing,
+  disabled,
+}: {
+  sections: SchemaSection[];
+  draft: DraftValue;
+  updateField: (key: string, v: unknown) => void;
+  errors: Record<string, string>;
+  onSubmitEditing?: () => void;
+  disabled?: boolean;
+}) {
+  // field and group keys share one value space, so prefix them apart
+  const items = sections.flatMap((section) =>
+    section.group
+      ? [
+          {
+            value: `group:${section.group.key}`,
+            title: sectionTitle(section.fields, section.group.title),
+            open: !section.group.collapsed,
+            fields: section.fields,
+          },
+        ]
+      : section.fields.map((field) => ({
+          value: `field:${field.key}`,
+          title: sectionTitle([field], field.label),
+          open: true,
+          fields: [field],
+        })),
+  );
+
+  return (
+    <Accordion
+      type="multiple"
+      defaultValue={items.filter((item) => item.open).map((item) => item.value)}
+    >
+      {items.map((item) => (
+        <AccordionItem key={item.value} value={item.value}>
+          <AccordionTrigger>
+            <AccordionIndicator />
+            <AccordionTitle>{item.title}</AccordionTitle>
+          </AccordionTrigger>
+          <AccordionContent>
+            <SchemaFieldList
+              fields={item.fields}
+              draft={draft}
+              updateField={updateField}
+              errors={errors}
+              onSubmitEditing={onSubmitEditing}
+              disabled={disabled}
+              titled
+            />
+          </AccordionContent>
+        </AccordionItem>
+      ))}
+    </Accordion>
+  );
+}
+
+export function hasSchemaFields(schema: JsonObject | undefined): boolean {
+  return !!schema && parseJsonSchema(schema).fields.length > 0;
+}
+
+export function useSchemaDraft(schema: JsonObject, value: JsonObject | undefined) {
+  const parsed = useMemo(() => parseJsonSchema(schema), [schema]);
+  const sections = useMemo(() => groupAndSort(parsed.fields, parsed.groups), [parsed]);
+  const [edits, setEdits] = useState<DraftValue>({});
+  const [submitted, setSubmitted] = useState(false);
+
+  const draft = useMemo(
+    () => ({ ...buildInitialDraft(parsed.fields, value), ...edits }),
+    [parsed.fields, value, edits],
+  );
+
+  const updateField = useCallback((key: string, v: unknown) => {
+    setEdits((prev) => ({ ...prev, [key]: v }));
+  }, []);
+
+  const clearEdits = useCallback(() => {
+    setEdits({});
+    setSubmitted(false);
+  }, []);
+
+  const errors = validateDraft(parsed.fields, draft);
+
+  const visibleErrors = useMemo(() => {
+    if (submitted) return errors;
+    const visible: Record<string, string> = {};
+    for (const [key, error] of Object.entries(errors)) {
+      // A stored value that is out of range disables Save before the operator
+      // touches anything, so show that error immediately. An empty field waits
+      // until touched, or an unconfigured device opens covered in "required".
+      const stored = value?.[key];
+
+      if (key in edits || (stored !== undefined && stored !== "")) {
+        visible[key] = error;
+      }
+    }
+    return visible;
+  }, [submitted, edits, errors, value]);
+
+  return {
+    parsed,
+    sections,
+    draft,
+    updateField,
+    errors,
+    visibleErrors,
+    setSubmitted,
+    clearEdits,
+  };
+}
+
+export function useDangerousConfirm(
+  fields: FieldDescriptor[],
+  draft: DraftValue,
+  value: JsonObject | undefined,
+  onSubmit: (value: JsonObject) => Promise<boolean>,
+) {
+  const [dangerousConfirm, setDangerousConfirm] = useState<{ message: string } | null>(null);
+
+  const submit = async () => {
+    const dangerousField = getDangerousChanges(fields, draft, value);
+
+    if (dangerousField) {
+      setDangerousConfirm({ message: dangerousField.confirm! });
+      return;
+    }
+
+    await onSubmit(draftToJsonObject(fields, draft));
+  };
+
+  const dialog = (
+    <ConfirmDialog
+      visible={dangerousConfirm !== null}
+      title="Confirm"
+      message={dangerousConfirm?.message}
+      confirmLabel="Continue"
+      destructive
+      onCancel={() => setDangerousConfirm(null)}
+      onConfirm={() => {
+        setDangerousConfirm(null);
+        void onSubmit(draftToJsonObject(fields, draft));
+      }}
+    />
+  );
+
+  return { submit, dialog };
 }
 
 export function SchemaForm({
@@ -863,78 +1067,60 @@ export function SchemaForm({
   isPending,
   isConfigured,
   extraActions,
+  submitStatus,
   disabled,
 }: {
   schema: JsonObject;
   value: JsonObject | undefined;
-  onSubmit: (value: JsonObject) => Promise<void>;
+  onSubmit: (value: JsonObject) => Promise<boolean>;
   onRemove?: () => void;
   isPending: boolean;
   isConfigured: boolean;
   extraActions?: ReactNode;
+  submitStatus?: ReactNode;
   disabled?: boolean;
 }) {
   const submitRef = useRef<() => void>(() => {});
-  const parsed = useMemo(() => parseJsonSchema(schema), [schema]);
-  const sections = useMemo(() => groupAndSort(parsed.fields, parsed.groups), [parsed]);
-  const [draft, setDraft] = useState<DraftValue>(() => buildInitialDraft(parsed.fields, value));
-  const [touched, setTouched] = useState<Set<string>>(() => new Set());
-  const [submitted, setSubmitted] = useState(false);
+
+  const { parsed, sections, draft, updateField, errors, visibleErrors, setSubmitted, clearEdits } =
+    useSchemaDraft(schema, value);
+
   const [removeOpen, setRemoveOpen] = useState(false);
-  const [dangerousConfirm, setDangerousConfirm] = useState<{ message: string } | null>(null);
+  const [sending, setSending] = useState(false);
 
-  // Sync draft from server value, but only when the user hasn't touched the form.
-  // This prevents live entity stream updates from clobbering in-progress edits.
-  // After a successful submit, the parent resets `value` and `touched` clears via
-  // the dirty/submit cycle, allowing the next server value to flow in.
-  const prevValueJson = useRef(JSON.stringify(value));
-  useEffect(() => {
-    const json = JSON.stringify(value);
-    if (prevValueJson.current === json) return;
-    prevValueJson.current = json;
-    if (touched.size > 0) return;
-    setDraft(buildInitialDraft(parsed.fields, value));
-    setSubmitted(false);
-  }, [value, parsed.fields, touched.size]);
+  const save = async (config: JsonObject) => {
+    setSending(true);
+    const accepted = await onSubmit(config);
+    setSending(false);
 
-  const updateField = useCallback((key: string, v: unknown) => {
-    setDraft((prev) => ({ ...prev, [key]: v }));
-    setTouched((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
-  }, []);
+    if (accepted) clearEdits();
+
+    return accepted;
+  };
+
+  const { submit, dialog: dangerousDialog } = useDangerousConfirm(
+    parsed.fields,
+    draft,
+    value,
+    save,
+  );
 
   const dirty = isDirty(parsed.fields, draft, value);
-  const errors = validateDraft(parsed.fields, draft);
   const hasErrors = Object.keys(errors).length > 0;
-  const enabled = (dirty || !isConfigured) && !hasErrors && !disabled;
-
-  const visibleErrors = useMemo(() => {
-    if (submitted) return errors;
-    const visible: Record<string, string> = {};
-    for (const key of touched) {
-      if (errors[key]) visible[key] = errors[key];
-    }
-    return visible;
-  }, [submitted, touched, errors]);
+  const enabled = (dirty || !isConfigured) && !hasErrors && !disabled && !sending && !isPending;
 
   const submitLabel = isConfigured ? "Save configuration" : "Apply configuration";
 
-  const handleSubmit = useCallback(async () => {
+  const submitOnEnter = Platform.OS === "web";
+  const submitFromField = submitOnEnter ? () => submitRef.current() : undefined;
+
+  const handleSubmit = async () => {
     setSubmitted(true);
+
     if (!enabled) return;
 
-    const dangerousField = getDangerousChanges(parsed.fields, draft, value);
-    if (dangerousField) {
-      setDangerousConfirm({ message: dangerousField.confirm! });
-      return;
-    }
-
-    await onSubmit(draftToJsonObject(parsed.fields, draft));
-  }, [enabled, parsed.fields, draft, value, onSubmit]);
-
-  const confirmDangerous = useCallback(() => {
-    setDangerousConfirm(null);
-    void onSubmit(draftToJsonObject(parsed.fields, draft));
-  }, [parsed.fields, draft, onSubmit]);
+    await submit();
+  };
 
   submitRef.current = handleSubmit;
 
@@ -942,35 +1128,18 @@ export function SchemaForm({
 
   return (
     <View className="px-4 py-2">
-      <View className="gap-5">
-        {sections.map((section) => {
-          const content = section.fields.map((field, i) => (
-            <Fragment key={field.key}>
-              {renderField(
-                field,
-                draft,
-                updateField,
-                visibleErrors,
-                () => submitRef.current(),
-                disabled,
-              )}
-              {i < section.fields.length - 1 && <View className="bg-surface-overlay/6 h-px" />}
-            </Fragment>
-          ));
-
-          if (!section.group) {
-            return <View key="__ungrouped">{content}</View>;
-          }
-
-          return (
-            <FieldGroup key={section.group.key} group={section.group}>
-              {content}
-            </FieldGroup>
-          );
-        })}
-      </View>
+      <SchemaSections
+        sections={sections}
+        draft={draft}
+        updateField={updateField}
+        errors={visibleErrors}
+        onSubmitEditing={submitFromField}
+        disabled={disabled || sending}
+      />
 
       {extraActions}
+
+      {submitStatus}
 
       <ControlButton
         onPress={handleSubmit}
@@ -1012,15 +1181,7 @@ export function SchemaForm({
           />
         </>
       )}
-      <ConfirmDialog
-        visible={dangerousConfirm !== null}
-        title="Confirm"
-        message={dangerousConfirm?.message}
-        confirmLabel="Continue"
-        destructive
-        onCancel={() => setDangerousConfirm(null)}
-        onConfirm={confirmDangerous}
-      />
+      {dangerousDialog}
     </View>
   );
 }

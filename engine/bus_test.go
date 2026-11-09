@@ -11,6 +11,7 @@ import (
 
 	"github.com/projectqai/hydris/engine/meta"
 	pb "github.com/projectqai/proto/go"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -40,15 +41,15 @@ func assertContextErr(t *testing.T, err error) {
 func TestConsumer_DirtyAndPop(t *testing.T) {
 	c := NewConsumer(nil, nil, nil)
 
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("e2", pb.Priority_PriorityImmediate, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("e2", pb.Priority_PriorityImmediate, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	// Should pop High first
 	id, change, priority, ok := c.popNext()
 	if !ok || id != "e2" || priority != pb.Priority_PriorityImmediate {
 		t.Errorf("expected e2/High, got %s/%v", id, priority)
 	}
-	if change != pb.EntityChange_EntityChangeUpdated {
+	if change.change != pb.EntityChange_EntityChangeUpdated {
 		t.Errorf("expected Updated, got %v", change)
 	}
 
@@ -68,9 +69,9 @@ func TestConsumer_DirtyAndPop(t *testing.T) {
 func TestConsumer_PriorityOrder(t *testing.T) {
 	c := NewConsumer(nil, nil, nil)
 
-	c.markDirty("low", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("high", pb.Priority_PriorityImmediate, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("burst", pb.Priority_PriorityFlash, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("low", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("high", pb.Priority_PriorityImmediate, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("burst", pb.Priority_PriorityFlash, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	// Should come out Burst, High, Low
 	expected := []string{"burst", "high", "low"}
@@ -88,8 +89,8 @@ func TestConsumer_MinPriorityFilter(t *testing.T) {
 	}
 	c := NewConsumer(nil, limiter, nil)
 
-	c.markDirty("low", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("high", pb.Priority_PriorityImmediate, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("low", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("high", pb.Priority_PriorityImmediate, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	// Low should be filtered out
 	id, _, _, ok := c.popNext()
@@ -107,9 +108,9 @@ func TestConsumer_Coalescing(t *testing.T) {
 	c := NewConsumer(nil, nil, nil)
 
 	// Multiple updates to same entity
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	// Should only pop once
 	_, _, _, ok := c.popNext()
@@ -127,8 +128,8 @@ func TestConsumer_PriorityChange(t *testing.T) {
 	c := NewConsumer(nil, nil, nil)
 
 	// Entity starts low, then becomes high priority
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("e1", pb.Priority_PriorityImmediate, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("e1", pb.Priority_PriorityImmediate, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	// Should only be in high, not low
 	id, _, priority, ok := c.popNext()
@@ -146,7 +147,7 @@ func TestConsumer_Signal(t *testing.T) {
 	c := NewConsumer(nil, nil, nil)
 
 	// Signal channel should be non-blocking
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	select {
 	case <-c.signal:
@@ -156,7 +157,7 @@ func TestConsumer_Signal(t *testing.T) {
 	}
 
 	// Second markDirty shouldn't block even if signal not consumed
-	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 }
 
 func TestBus_Dirty(t *testing.T) {
@@ -169,7 +170,7 @@ func TestBus_Dirty(t *testing.T) {
 	bus.Register(c2)
 
 	entity := &pb.Entity{Id: "e1", Priority: ptr(pb.Priority_PriorityImmediate)}
-	bus.Dirty("e1", entity, pb.EntityChange_EntityChangeUpdated)
+	bus.Dirty(context.Background(), "e1", entity, pb.EntityChange_EntityChangeUpdated)
 
 	// Both consumers should have the entity dirty
 	id1, _, _, ok1 := c1.popNext()
@@ -208,8 +209,8 @@ func TestSenderLoop_Basic(t *testing.T) {
 	world := testWorld(entities)
 	c := NewConsumer(world, nil, nil)
 
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -248,7 +249,7 @@ func TestSenderLoop_Expiry(t *testing.T) {
 	world := testWorld(map[string]*pb.Entity{"e1": expired})
 	c := NewConsumer(world, nil, nil)
 
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -283,7 +284,7 @@ func TestSenderLoop_EntityGone(t *testing.T) {
 	world := testWorld(map[string]*pb.Entity{}) // empty - entity is gone
 	c := NewConsumer(world, nil, nil)
 
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -321,8 +322,8 @@ func TestSenderLoop_BurstBypassesRateLimit(t *testing.T) {
 	world := testWorld(entities)
 	c := NewConsumer(world, limiter, nil)
 
-	c.markDirty("burst", pb.Priority_PriorityFlash, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("low", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("burst", pb.Priority_PriorityFlash, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("low", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -362,8 +363,8 @@ func TestSenderLoop_Filter(t *testing.T) {
 	world := testWorld(entities)
 	c := NewConsumer(world, nil, filter)
 
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -406,7 +407,7 @@ func TestSenderLoop_SlowConsumerCoalesces(t *testing.T) {
 
 	// Producer sends 100 updates to same entity rapidly
 	for i := 0; i < 100; i++ {
-		c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+		c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
@@ -443,9 +444,9 @@ func TestSenderLoop_SlowConsumerMultipleEntities(t *testing.T) {
 	c := NewConsumer(world, limiter, nil)
 
 	// Mark all dirty
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("e3", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("e3", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -481,7 +482,7 @@ func TestBus_DirtyNeverBlocks(t *testing.T) {
 	// Rapidly mark dirty many times - should never block
 	start := time.Now()
 	for i := 0; i < 10000; i++ {
-		bus.Dirty("e1", entity, pb.EntityChange_EntityChangeUpdated)
+		bus.Dirty(context.Background(), "e1", entity, pb.EntityChange_EntityChangeUpdated)
 	}
 	elapsed := time.Since(start)
 
@@ -528,7 +529,7 @@ func TestBus_ProducerFasterThanConsumer(t *testing.T) {
 		world.l.Lock()
 		world.setEntity(id, entity, nil)
 		world.l.Unlock()
-		bus.Dirty(id, entity, pb.EntityChange_EntityChangeUpdated)
+		bus.Dirty(context.Background(), id, entity, pb.EntityChange_EntityChangeUpdated)
 	}
 
 	<-ctx.Done()
@@ -562,11 +563,11 @@ func TestConsumer_BurstPriorityUnderLoad(t *testing.T) {
 		world.l.Lock()
 		world.setEntity(id, &pb.Entity{Id: id, Priority: ptr(pb.Priority_PriorityRoutine)}, nil)
 		world.l.Unlock()
-		c.markDirty(id, pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+		c.markDirty(id, pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 	}
 
 	// Add burst priority
-	c.markDirty("burst", pb.Priority_PriorityFlash, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("burst", pb.Priority_PriorityFlash, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -602,7 +603,7 @@ func TestBus_DirtyNilEntity(t *testing.T) {
 	bus.Register(c)
 
 	// Dirty with nil entity should use default priority
-	bus.Dirty("e1", nil, pb.EntityChange_EntityChangeExpired)
+	bus.Dirty(context.Background(), "e1", nil, pb.EntityChange_EntityChangeExpired)
 
 	id, change, priority, ok := c.popNext()
 	if !ok {
@@ -614,7 +615,7 @@ func TestBus_DirtyNilEntity(t *testing.T) {
 	if priority != pb.Priority_PriorityRoutine {
 		t.Errorf("expected PriorityLow for nil entity, got %v", priority)
 	}
-	if change != pb.EntityChange_EntityChangeExpired {
+	if change.change != pb.EntityChange_EntityChangeExpired {
 		t.Errorf("expected Expired, got %v", change)
 	}
 }
@@ -623,7 +624,7 @@ func TestConsumer_PriorityReserved0(t *testing.T) {
 	c := NewConsumer(nil, nil, nil)
 
 	// PriorityReserved0 is 0, should be treated as valid (though unusual)
-	c.markDirty("e1", pb.Priority_PriorityUnspecified, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityUnspecified, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	// MinPriority defaults to PriorityLow (1), so Reserved0 (0) should be filtered
 	_, _, _, ok := c.popNext()
@@ -638,7 +639,7 @@ func TestConsumer_MinPriorityAllowsReserved0(t *testing.T) {
 	}
 	c := NewConsumer(nil, limiter, nil)
 
-	c.markDirty("e1", pb.Priority_PriorityUnspecified, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityUnspecified, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	id, _, _, ok := c.popNext()
 	if !ok || id != "e1" {
@@ -649,7 +650,7 @@ func TestConsumer_MinPriorityAllowsReserved0(t *testing.T) {
 func TestSenderLoop_ContextAlreadyCancelled(t *testing.T) {
 	world := testWorld(map[string]*pb.Entity{"e1": {Id: "e1"}})
 	c := NewConsumer(world, nil, nil)
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -680,8 +681,8 @@ func TestSenderLoop_ContextCancelledDuringRateLimit(t *testing.T) {
 	world := testWorld(entities)
 	c := NewConsumer(world, limiter, nil)
 
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -718,7 +719,7 @@ func TestBus_ConcurrentDirty(t *testing.T) {
 			id := "e" + string(rune('a'+i%26))
 			entity := &pb.Entity{Id: id, Priority: ptr(pb.Priority_PriorityRoutine)}
 			for j := 0; j < 100; j++ {
-				bus.Dirty(id, entity, pb.EntityChange_EntityChangeUpdated)
+				bus.Dirty(context.Background(), id, entity, pb.EntityChange_EntityChangeUpdated)
 			}
 		}(i)
 	}
@@ -753,8 +754,8 @@ func TestSenderLoop_AllEntitiesFiltered(t *testing.T) {
 	world := testWorld(entities)
 	c := NewConsumer(world, nil, filter)
 
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
-	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
+	c.markDirty("e2", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -780,7 +781,7 @@ func TestSenderLoop_EntityReMarkedDuringLoop(t *testing.T) {
 	c := NewConsumer(world, nil, nil)
 
 	version := 0
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -801,7 +802,7 @@ func TestSenderLoop_EntityReMarkedDuringLoop(t *testing.T) {
 				world.l.Lock()
 				world.setEntity("e1", &pb.Entity{Id: "e1", Label: ptr("v1")}, nil)
 				world.l.Unlock()
-				c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+				c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 			}
 			return nil
 		})
@@ -832,7 +833,7 @@ func TestBus_UnregisterDuringSenderLoop(t *testing.T) {
 	c := NewConsumer(world, nil, nil)
 	bus.Register(c)
 
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -1099,7 +1100,7 @@ func TestPartialComponentExpiry_ReappearAfterPush(t *testing.T) {
 func TestSenderLoop_SendError(t *testing.T) {
 	world := testWorld(map[string]*pb.Entity{"e1": {Id: "e1"}})
 	c := NewConsumer(world, nil, nil)
-	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil)
+	c.markDirty("e1", pb.Priority_PriorityRoutine, pb.EntityChange_EntityChangeUpdated, nil, trace.SpanContext{})
 
 	ctx := context.Background()
 

@@ -89,12 +89,7 @@ func (s *ArtifactServer) DownloadArtifact(
 		return err
 	}
 
-	// Stream blob data if available locally.
-	store := s.getStore()
-	rc, err := store.Get(ctx, art.Id) //nolint:staticcheck // SA1019: Artifact.Id migration pending
-	if err != nil && store != s.local {
-		rc, err = s.local.Get(ctx, art.Id) //nolint:staticcheck // SA1019: Artifact.Id migration pending
-	}
+	rc, err := s.OpenBlob(ctx, art.Id) //nolint:staticcheck // SA1019: Artifact.Id migration pending
 	if err != nil {
 		if len(art.Location) > 0 {
 			return nil
@@ -210,6 +205,17 @@ func (w *hashSizeWriter) Write(p []byte) (int, error) {
 func (s *ArtifactServer) DeleteBlob(artID string) error {
 	store := s.getStore()
 	return store.Delete(context.Background(), artID)
+}
+
+// OpenBlob reads a blob from the active store, falling back to local storage
+// for blobs written before an active-store switch.
+func (s *ArtifactServer) OpenBlob(ctx context.Context, artID string) (io.ReadCloser, error) {
+	store := s.getStore()
+	rc, err := store.Get(ctx, artID)
+	if err != nil && store != s.local {
+		rc, err = s.local.Get(ctx, artID)
+	}
+	return rc, err
 }
 
 // resolveEntity finds the entity by ID or SHA256 lookup.

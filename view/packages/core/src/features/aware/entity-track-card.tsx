@@ -1,8 +1,9 @@
+import { geodesicDistance } from "@hydris/map-engine/utils/geodesy";
 import { Badge } from "@hydris/ui/badge";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
+import { MiddleTruncateText } from "@hydris/ui/middle-truncate-text";
 import type { Entity } from "@projectqai/proto/world";
-import { DeviceState } from "@projectqai/proto/world";
 import {
   Circle,
   CircleAlert,
@@ -26,9 +27,12 @@ import {
   formatAltitude,
   formatTime,
   getEntityName,
+  getLastSeen,
   getStatusBadgeVariant,
   getTrackStatus,
 } from "../../lib/api/use-track-utils";
+import type { TileVariant } from "../mission/provider-state";
+import { useOwnState } from "../mission/use-mission-state";
 import { selectSelfGeo, useEntityStore } from "./store/entity-store";
 import {
   deriveAssetReadiness,
@@ -36,13 +40,11 @@ import {
   type ReadinessGate,
   worstBlocker,
 } from "./utils/asset-readiness";
-import { formatDeviceState } from "./utils/format-entity";
 import {
   calculateCourseFromVelocity,
   calculateGroundSpeed,
   calculateHeadingFromOrientation,
   formatDistance,
-  haversineDistance,
 } from "./utils/format-kinematics";
 import { READINESS_VISUAL } from "./utils/readiness-display";
 
@@ -70,6 +72,8 @@ function CardRoot({ isSelected, onPress, children }: CardRootProps) {
       // @ts-ignore react-native-web CSS property
       style={{ boxShadow: t.cardShadow }}
       onPress={onPress}
+      role="button"
+      aria-pressed={isSelected ?? false}
     >
       {children}
     </Pressable>
@@ -78,15 +82,24 @@ function CardRoot({ isSelected, onPress, children }: CardRootProps) {
 
 type CardHeaderProps = {
   title: string;
+  tailLength?: number;
   right?: ReactNode;
 };
 
-function CardHeader({ title, right }: CardHeaderProps) {
+function CardHeader({ title, tailLength, right }: CardHeaderProps) {
+  const titleClassName = "font-sans-semibold text-foreground text-13";
+
   return (
     <View className="mb-1.5 flex-row items-center justify-between gap-2">
-      <Text className="font-sans-semibold text-foreground text-13 flex-1" numberOfLines={1}>
-        {title}
-      </Text>
+      {tailLength === undefined ? (
+        <Text className={cn(titleClassName, "flex-1")} numberOfLines={1}>
+          {title}
+        </Text>
+      ) : (
+        <View className="min-w-0 flex-1">
+          <MiddleTruncateText text={title} tailLength={tailLength} className={titleClassName} />
+        </View>
+      )}
       {right}
     </View>
   );
@@ -125,29 +138,30 @@ function SourceItem({ icon: Icon, value }: { icon: typeof Radio; value: string }
   );
 }
 
-const DEVICE_STATE_VISUAL: Record<
-  DeviceState,
+const STATE_VISUAL: Record<
+  TileVariant,
   { icon: typeof Circle; colorKey: "iconMuted" | "pendingForeground" | "redForeground" }
 > = {
-  [DeviceState.DeviceStateActive]: { icon: CircleCheck, colorKey: "iconMuted" },
-  [DeviceState.DeviceStatePending]: { icon: Circle, colorKey: "pendingForeground" },
-  [DeviceState.DeviceStateDegraded]: { icon: CircleAlert, colorKey: "pendingForeground" },
-  [DeviceState.DeviceStateFailed]: { icon: CircleX, colorKey: "redForeground" },
+  success: { icon: CircleCheck, colorKey: "iconMuted" },
+  default: { icon: Circle, colorKey: "iconMuted" },
+  pending: { icon: CircleAlert, colorKey: "pendingForeground" },
+  alert: { icon: CircleX, colorKey: "redForeground" },
 };
 
-function StatusItem({ state }: { state: DeviceState }) {
+function StatusItem({ entity }: { entity: Entity }) {
   const t = useThemeColors();
-  const { icon: Icon, colorKey } = DEVICE_STATE_VISUAL[state];
+  const state = useOwnState(entity);
+  const { icon: Icon, colorKey } = STATE_VISUAL[state.variant];
   const color = t[colorKey];
-  const isActive = state === DeviceState.DeviceStateActive;
+  const isCalm = colorKey === "iconMuted";
   return (
     <View className="flex-row items-center gap-1">
       <Icon size={11} color={color} strokeWidth={1.5} />
       <Text
-        className={cn("font-sans-medium text-11", isActive && "text-foreground/80")}
-        style={isActive ? undefined : { color }}
+        className={cn("font-sans-medium text-11", isCalm && "text-foreground/80")}
+        style={isCalm ? undefined : { color }}
       >
-        {formatDeviceState(state).label}
+        {state.label}
       </Text>
     </View>
   );
@@ -184,7 +198,7 @@ type EntityCardProps = {
 export function EntityCard({ entity, isSelected, onPress }: EntityCardProps) {
   const name = getEntityName(entity);
   const status = getTrackStatus(entity);
-  const time = formatTime(entity.lifetime?.from || entity.detection?.lastMeasured);
+  const time = formatTime(getLastSeen(entity));
   const altitude = formatAltitude(entity.geo?.altitude);
   const course = calculateCourseFromVelocity(entity.kinematics?.velocityEnu);
   const heading = calculateHeadingFromOrientation(entity.orientation);
@@ -192,7 +206,7 @@ export function EntityCard({ entity, isSelected, onPress }: EntityCardProps) {
   const source = entity.controller?.id;
   const blocker = worstBlocker(deriveAssetReadiness(entity));
   const selfGeo = useEntityStore(selectSelfGeo);
-  const distance = selfGeo && entity.geo ? haversineDistance(selfGeo, entity.geo) : undefined;
+  const distance = selfGeo && entity.geo ? geodesicDistance(selfGeo, entity.geo) : undefined;
 
   return (
     <CardRoot isSelected={isSelected} onPress={onPress}>
@@ -208,7 +222,7 @@ export function EntityCard({ entity, isSelected, onPress }: EntityCardProps) {
         {blocker && blocker.key !== "device" ? (
           <ReadinessBlockerItem entity={entity} gate={blocker} />
         ) : (
-          entity.device && <StatusItem state={entity.device.state} />
+          entity.device && <StatusItem entity={entity} />
         )}
         {heading !== undefined && <DataItem icon={Navigation} value={`${heading.toFixed(0)}°`} />}
         {course !== undefined && <DataItem icon={Compass} value={`${course.toFixed(0)}°`} />}

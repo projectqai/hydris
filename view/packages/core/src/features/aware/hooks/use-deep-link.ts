@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { toast } from "../../../lib/sonner";
 import { type AwareUrlParams, decodeViewState, useUrlParams } from "../../../lib/use-url-params";
-import { COMPONENT_REGISTRY, PRESETS } from "../layouts";
+import { COMPONENT_REGISTRY } from "../layouts";
+import { PRESETS } from "../presets";
 import { useEntityStore } from "../store/entity-store";
 import { useLeftPanelStore } from "../store/left-panel-store";
 import { mapEngineActions } from "../store/map-engine-store";

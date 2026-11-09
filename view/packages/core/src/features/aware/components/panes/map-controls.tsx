@@ -1,13 +1,16 @@
 "use no memo";
 
-import type { BaseLayer } from "@hydris/map-engine/types";
+import type { ActiveTool } from "@hydris/map-engine/adapters/maplibre";
+import type { BaseLayer, DrawingKind } from "@hydris/map-engine/types";
 import type { OverlayCategoryOption } from "@hydris/ui/controls";
 import { ControlIconButton, ControlSlider, OverlayCategory } from "@hydris/ui/controls";
+import { ExpandingIconGroup } from "@hydris/ui/controls/expanding-icon-group";
 import { useKeyboardShortcut } from "@hydris/ui/keyboard";
 import { GRADIENT_PROPS, useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import type { Entity } from "@projectqai/proto/world";
 import { LinearGradient } from "expo-linear-gradient";
+import type { LucideIcon } from "lucide-react-native";
 import {
   ExternalLink,
   Eye,
@@ -16,11 +19,12 @@ import {
   Layers,
   Link2,
   Map,
-  PersonStanding,
   Radar,
   Radius,
   Route,
+  RulerDimensionLine,
   Satellite,
+  Shapes,
   ZoomIn,
   ZoomOut,
 } from "lucide-react-native";
@@ -40,16 +44,21 @@ import {
   getShareableLocationUrl,
   useUrlParams,
 } from "../../../../lib/use-url-params";
-import { layoutSnapshotRef } from "../../hooks/layout-snapshot";
+import { FEATURE_SHAPE_DRAWING } from "../../constants";
 import type { MapViewRef } from "../../map-view";
+import { useBullseyeStore } from "../../store/bullseye-store";
+import { useEditStore } from "../../store/edit-store";
 import { useEntityStore } from "../../store/entity-store";
-import { useLeftPanelStore } from "../../store/left-panel-store";
 import { mapEngineActions } from "../../store/map-engine-store";
 import { useMapStore } from "../../store/map-store";
-import { DEFAULT_OVERLAYS, useOverlayStore } from "../../store/overlay-store";
-import { useRangeRingStore } from "../../store/range-ring-store";
+import { useOverlayStore } from "../../store/overlay-store";
+import { selectPathKind, usePathStore } from "../../store/path-store";
+import { saveEdit } from "../../store/save-edit";
+import { savePath } from "../../store/save-path";
 import { useSelectionStore } from "../../store/selection-store";
-import { useTabStore } from "../../store/tab-store";
+import { TOOL } from "../../utils/map-paths";
+import { shareViewUrlDeps } from "../../utils/share-view-url-deps";
+import { TOOL_ICON } from "../tool-icons";
 
 // Portals menus to document.body so they escape pane overflow clipping.
 // Lazy-initialized to avoid Metro resolving react-dom for native bundles.
@@ -61,15 +70,21 @@ function getPortalTo() {
   return portalTo;
 }
 
-type NetworkType = "datalinks";
-type SensorStatus = "online" | "degraded";
-type TrackType = "red" | "neutral" | "unknown" | "blue" | "unclassified";
-type VisualizationType = "coverage" | "shapes" | "detections" | "trackHistory" | "clustering";
-
 const ICON_SIZE = 16;
 
 function isOfflineMap(e: Entity): boolean {
   return e.mapLayer?.source.case === "tiles" && e.mapLayer.source.value.url.startsWith("/tiles/");
+}
+
+function isTextInputFocused(): boolean {
+  if (process.env.EXPO_OS !== "web") return false;
+  const element = document.activeElement;
+  if (!element) return false;
+  return (
+    element.tagName === "INPUT" ||
+    element.tagName === "TEXTAREA" ||
+    (element as HTMLElement).isContentEditable
+  );
 }
 
 type LayerOption = {
@@ -90,30 +105,30 @@ const LAYER_ICONS: Record<BaseLayer, typeof Layers> = {
   street: Map,
 };
 
-const TRACK_OPTIONS: OverlayCategoryOption[] = [
+const TRACK_OPTIONS = [
   { id: "red", label: "Red", color: "red" },
   { id: "neutral", label: "Neutral", color: "green" },
   { id: "unknown", label: "Unknown", color: "yellow" },
   { id: "blue", label: "Blue", color: "blue" },
   { id: "unclassified", label: "Unclassified", color: "gray" },
-];
+] as const satisfies readonly OverlayCategoryOption[];
 
-const SENSOR_OPTIONS: OverlayCategoryOption[] = [
+const SENSOR_OPTIONS = [
   { id: "online", label: "Online", color: "green" },
   { id: "degraded", label: "Degraded", color: "yellow" },
-];
+] as const satisfies readonly OverlayCategoryOption[];
 
-const NETWORK_OPTIONS: OverlayCategoryOption[] = [
+const NETWORK_OPTIONS = [
   { id: "datalinks", label: "Datalinks", color: "blue" },
-];
+] as const satisfies readonly OverlayCategoryOption[];
 
-const VISUALIZATION_OPTIONS: OverlayCategoryOption[] = [
+const VISUALIZATION_OPTIONS = [
   { id: "coverage", label: "Coverage Area", icon: Radius },
   { id: "shapes", label: "Geoshapes", icon: Hexagon },
   { id: "detections", label: "Detections", icon: Radar },
   { id: "trackHistory", label: "Track Lines", icon: Route },
   { id: "clustering", label: "Clustering", icon: Group },
-];
+] as const satisfies readonly OverlayCategoryOption[];
 
 type ViewState = { lat: number; lng: number; zoom: number };
 
@@ -144,7 +159,7 @@ function ControlMenu({
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const [ready, setReady] = useState(false);
   const menuRef = useRef<View>(null);
-  const anchorRectRef = useRef<DOMRect | null>(null);
+  const anchorRectRef = useRef<Pick<DOMRect, "left" | "top" | "right" | "bottom"> | null>(null);
 
   // Phase 1: rough position from anchor (gets menu into the DOM for measurement)
   useLayoutEffect(() => {
@@ -163,7 +178,7 @@ function ControlMenu({
       }
     } else {
       anchorRef.current?.measureInWindow((x, y, w, h) => {
-        anchorRectRef.current = { left: x, top: y, right: x + w, bottom: y + h } as DOMRect;
+        anchorRectRef.current = { left: x, top: y, right: x + w, bottom: y + h };
         setPos({ top: y, left: x - MENU_GAP });
         setReady(false);
       });
@@ -295,30 +310,94 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
     expandedLayer?.mapLayer != null
       ? (layerOpacity[expandedLayer.id] ?? (expandedLayer.mapLayer.opacity || 1))
       : 1;
-  const rangeRingPlacing = useRangeRingStore((s) => s.isPlacing);
-  const rangeRingCenter = useRangeRingStore((s) => s.center);
-  const toggleRangeRing = useRangeRingStore((s) => s.togglePlacing);
-  const rangeRingActive = rangeRingPlacing || rangeRingCenter != null;
+  const bullseyePlacing = useBullseyeStore((s) => s.isPlacing);
+  const bullseyeCenter = useBullseyeStore((s) => s.center);
+  const toggleBullseye = useBullseyeStore((s) => s.togglePlacing);
+  const bullseyeActive = bullseyePlacing || bullseyeCenter != null;
+  const pathKind = usePathStore(selectPathKind);
+  const rangeActive = pathKind === "range";
   const [showLayerMenu, setShowLayerMenu] = useState(false);
   const [showOverlayMenu, setShowOverlayMenu] = useState(false);
   const [showShareMenu, setShowShareMenu] = useState(false);
+  const [showRangeTools, setShowRangeTools] = useState(false);
+  const [showDrawTools, setShowDrawTools] = useState(false);
+  const drawingKind = pathKind === "range" ? null : pathKind;
   const layerBtnRef = useRef<View>(null);
   const overlayBtnRef = useRef<View>(null);
   const shareBtnRef = useRef<View>(null);
 
-  const anyMenuOpen = showLayerMenu || showOverlayMenu || showShareMenu;
+  const anyMenuOpen =
+    showLayerMenu || showOverlayMenu || showShareMenu || showRangeTools || showDrawTools;
 
   const closeAllMenus = () => {
     setShowLayerMenu(false);
     setShowOverlayMenu(false);
     setShowShareMenu(false);
+    setShowRangeTools(false);
+    setShowDrawTools(false);
+  };
+
+  const toggleDrawing = (kind: DrawingKind) => {
+    closeAllMenus();
+    useEditStore.getState().cancel();
+    const state = usePathStore.getState();
+    if (selectPathKind(state) === "range") void savePath(state.toggleActive());
+    useBullseyeStore.getState().clear();
+    const current = usePathStore.getState();
+    if (selectPathKind(current) === kind) current.cancel();
+    else current.start(kind);
+  };
+
+  const drawingOption = (id: DrawingKind, icon: LucideIcon, label: string) => ({
+    id,
+    icon,
+    label,
+    active: drawingKind === id,
+    iconColor: drawingKind === id ? t.activeGreen : undefined,
+    arm: () => toggleDrawing(id),
+  });
+
+  const toolOption = (
+    id: Exclude<ActiveTool, "none">,
+    icon: LucideIcon,
+    label: string,
+    active: boolean,
+  ) => ({
+    id,
+    icon,
+    label,
+    active,
+    iconColor: active ? t.activeGreen : undefined,
+    arm: () => toggleTool(id),
+  });
+
+  const toggleTool = (tool: Exclude<ActiveTool, "none">) => {
+    closeAllMenus();
+    useEditStore.getState().cancel();
+    const path = usePathStore.getState();
+    if (selectPathKind(path) !== "range") path.cancel();
+    if (tool === "range") {
+      useBullseyeStore.getState().clear();
+      void savePath(usePathStore.getState().toggleActive());
+    } else {
+      if (rangeActive) void savePath(usePathStore.getState().toggleActive());
+      toggleBullseye();
+    }
   };
 
   useKeyboardShortcut(
     "Escape",
     () => {
-      if (rangeRingActive) {
-        useRangeRingStore.getState().clear();
+      if (useEditStore.getState().entityId) {
+        useEditStore.getState().cancel();
+        return true;
+      }
+      if (drawingKind) {
+        usePathStore.getState().cancel();
+        return true;
+      }
+      if (bullseyeActive) {
+        useBullseyeStore.getState().clear();
         return true;
       }
       if (anyMenuOpen) {
@@ -326,6 +405,40 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
         return true;
       }
       return false;
+    },
+    { priority: 100 },
+  );
+
+  // Enter is whatever the mode bar's primary button is: end the edit, finish
+  // the shape, finish the measurement.
+  useKeyboardShortcut(
+    "Enter",
+    () => {
+      if (isTextInputFocused()) return false;
+      const edit = useEditStore.getState();
+      if (edit.entityId) {
+        void saveEdit(edit.end());
+        return true;
+      }
+      const path = usePathStore.getState();
+      if (!path.drawingId) return false;
+      void savePath(path.finish());
+      return true;
+    },
+    { priority: 150 },
+  );
+
+  useKeyboardShortcut(
+    "Backspace",
+    () => {
+      if (isTextInputFocused()) return false;
+      if (useEditStore.getState().entityId) {
+        useEditStore.getState().undo();
+        return true;
+      }
+      if (!pathKind) return false;
+      usePathStore.getState().undo();
+      return true;
     },
     { priority: 200 },
   );
@@ -357,13 +470,6 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
       onPress: () => handleOfflineSelect(e.id),
     })),
   ];
-
-  const toggleOverlay = <K extends "tracks" | "sensors" | "network" | "visualization">(
-    category: K,
-    item: string,
-  ) => {
-    toggleOverlayStore(category, item as never);
-  };
 
   const handleZoomIn = () => {
     if (mapRef?.current) {
@@ -404,27 +510,12 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
   };
 
   const handleCopyLinkWithLayout = () => {
-    const fullUrl = buildShareViewUrl({
-      getSelectedEntityId: () => useSelectionStore.getState().selectedEntityId,
-      getMapView: () => viewRef?.current ?? mapEngineActions.getView(),
-      getTab: () => paramsRef.current.tab,
-      getLayoutSnapshot: () => layoutSnapshotRef.current,
-      getOverlayState: () => {
-        const overlays = useOverlayStore.getState();
-        return {
-          tracks: overlays.tracks,
-          sensors: overlays.sensors,
-          network: overlays.network,
-          visualization: overlays.visualization,
-        };
-      },
-      getDefaultOverlays: () => DEFAULT_OVERLAYS,
-      getHiddenLayers: () => useOverlayStore.getState().hiddenLayers,
-      getLayerOpacity: () => useOverlayStore.getState().layerOpacity,
-      getLayer: () => useMapStore.getState().layer,
-      getListMode: () => useLeftPanelStore.getState().listMode,
-      getDetailTab: () => useTabStore.getState().activeDetailTab,
-    });
+    const fullUrl = buildShareViewUrl(
+      shareViewUrlDeps({
+        getMapView: () => viewRef?.current ?? mapEngineActions.getView(),
+        getTab: () => paramsRef.current.tab,
+      }),
+    );
     if (!fullUrl) return;
 
     if (fullUrl.length > 2000) {
@@ -434,6 +525,20 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
     copyShareableLink(fullUrl);
     setShowShareMenu(false);
   };
+
+  const rangeTools = [
+    toolOption("range", TOOL_ICON.range, TOOL.range.label, rangeActive),
+    ...(FEATURE_SHAPE_DRAWING
+      ? [drawingOption("rb-circle", TOOL_ICON["rb-circle"], TOOL["rb-circle"].label)]
+      : []),
+    toolOption("bullseye", TOOL_ICON.bullseye, "Bullseye", bullseyeActive),
+  ];
+
+  const drawingTools = [
+    drawingOption("circle", TOOL_ICON.circle, TOOL.circle.label),
+    drawingOption("rectangle", TOOL_ICON.rectangle, TOOL.rectangle.label),
+    drawingOption("freeform", TOOL_ICON.freeform, TOOL.freeform.label),
+  ];
 
   return (
     <>
@@ -469,6 +574,8 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
                 <Pressable
                   key={key}
                   onPress={onPress}
+                  accessibilityRole="radio"
+                  aria-checked={isSelected}
                   className={cn(
                     "hover:bg-surface-overlay/10 active:bg-surface-overlay/15 min-w-28 rounded",
                     isSelected && "bg-surface-overlay/15 hover:bg-surface-overlay/15",
@@ -518,28 +625,28 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
                     title="Tracks"
                     options={TRACK_OPTIONS}
                     activeStates={tracks}
-                    onToggle={(id) => toggleOverlay("tracks", id as TrackType)}
+                    onToggle={(id) => toggleOverlayStore("tracks", id)}
                   />
 
                   <OverlayCategory
                     title="Sensors"
                     options={SENSOR_OPTIONS}
                     activeStates={sensors}
-                    onToggle={(id) => toggleOverlay("sensors", id as SensorStatus)}
+                    onToggle={(id) => toggleOverlayStore("sensors", id)}
                   />
 
                   <OverlayCategory
                     title="Network"
                     options={NETWORK_OPTIONS}
                     activeStates={network}
-                    onToggle={(id) => toggleOverlay("network", id as NetworkType)}
+                    onToggle={(id) => toggleOverlayStore("network", id)}
                   />
 
                   <OverlayCategory
                     title="Visualization"
                     options={VISUALIZATION_OPTIONS}
                     activeStates={visualization}
-                    onToggle={(id) => toggleOverlay("visualization", id as VisualizationType)}
+                    onToggle={(id) => toggleOverlayStore("visualization", id)}
                   />
 
                   {pluginMapLayers.length > 0 && (
@@ -641,34 +748,33 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
           </ControlMenu>
         </View>
 
-        <ControlIconButton
-          icon={PersonStanding}
-          iconSize={ICON_SIZE + 3}
-          iconColor={rangeRingActive ? t.activeGreen : undefined}
-          onPress={() => {
+        <ExpandingIconGroup
+          icon={RulerDimensionLine}
+          label="Range tools"
+          iconSize={ICON_SIZE}
+          expanded={showRangeTools}
+          onExpandedChange={(next) => {
             closeAllMenus();
-            toggleRangeRing();
+            setShowRangeTools(next);
           }}
-          variant={rangeRingActive ? "active" : "default"}
-          size="lg"
-          accessibilityLabel="Range rings"
+          onSelect={(id) => rangeTools.find((tool) => tool.id === id)?.arm()}
+          options={rangeTools}
         />
 
-        <ControlIconButton
-          icon={ZoomIn}
-          iconSize={ICON_SIZE}
-          onPress={handleZoomIn}
-          size="lg"
-          accessibilityLabel="Zoom in"
-        />
-
-        <ControlIconButton
-          icon={ZoomOut}
-          iconSize={ICON_SIZE}
-          onPress={handleZoomOut}
-          size="lg"
-          accessibilityLabel="Zoom out"
-        />
+        {FEATURE_SHAPE_DRAWING && (
+          <ExpandingIconGroup
+            icon={Shapes}
+            label="Drawing tools"
+            iconSize={ICON_SIZE}
+            expanded={showDrawTools}
+            onExpandedChange={(next) => {
+              closeAllMenus();
+              setShowDrawTools(next);
+            }}
+            onSelect={(id) => drawingTools.find((tool) => tool.id === id)?.arm()}
+            options={drawingTools}
+          />
+        )}
 
         <View ref={shareBtnRef} className="relative">
           <ControlIconButton
@@ -737,6 +843,24 @@ export function MapControls({ mapRef, viewRef }: MapControlsProps) {
             </LinearGradient>
           </ControlMenu>
         </View>
+      </View>
+
+      <View className="absolute bottom-3 left-3 z-10 gap-2" pointerEvents="box-none">
+        <ControlIconButton
+          icon={ZoomIn}
+          iconSize={ICON_SIZE}
+          onPress={handleZoomIn}
+          size="lg"
+          accessibilityLabel="Zoom in"
+        />
+
+        <ControlIconButton
+          icon={ZoomOut}
+          iconSize={ICON_SIZE}
+          onPress={handleZoomOut}
+          size="lg"
+          accessibilityLabel="Zoom out"
+        />
       </View>
     </>
   );

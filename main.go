@@ -14,6 +14,7 @@ import (
 	_ "github.com/projectqai/hydris/builtin/all"
 	"github.com/projectqai/hydris/cli"
 	"github.com/projectqai/hydris/engine"
+	"github.com/projectqai/hydris/hal"
 	"github.com/projectqai/hydris/pkg/executil"
 	"github.com/spf13/cobra"
 
@@ -28,7 +29,7 @@ func init() {
 	cli.CMD.Flags().Bool("no-defaults", false, "do not load builtin default world entities")
 	cli.CMD.Flags().StringSlice("allow-path", nil, "allow file access to additional paths (e.g. for TLS certificates)")
 	cli.CMD.Flags().StringSlice("plugin", nil, "plugins to run (local .ts/.js files or OCI image refs)")
-	cli.CMD.Flags().String("server", "", "proxy to remote server (host:port, ssh://user@host, or ssh://host)")
+	cli.CMD.Flags().String("server", "", "proxy to remote server (host:port, https://host:port, ssh://user@host, or ssh://host)")
 	cli.CMD.Flags().String("wireguard", "", "path to WireGuard config (use with --server host:port)")
 	cli.CMD.Flags().String("advertise-url", "", "externally-reachable base URL for this node, shown in the startup banner")
 	cli.CMD.Flags().Bool("disable-all-security-i-know-what-i-am-doing", false, "disable the policy engine entirely")
@@ -111,7 +112,9 @@ func runPluginSubprocess(plugin, serverAddr string) {
 }
 
 func main() {
-	if err := cli.CMD.Execute(); err != nil {
-		os.Exit(1)
-	}
+	hal.RunMain(func() {
+		if err := cli.CMD.Execute(); err != nil {
+			os.Exit(1)
+		}
+	})
 }

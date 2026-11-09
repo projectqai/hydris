@@ -1,10 +1,10 @@
 import { headerIconSize, useMeasuredScale } from "@hydris/ui/lib/widget-scale";
 import { Image } from "expo-image";
 import { RefreshCw } from "lucide-react-native";
-import { useState } from "react";
+import { use, useState } from "react";
 import { Pressable, View } from "react-native";
 
-import { ConnectionOverlay } from "./connection-overlay";
+import { ConnectionOverlay, StreamPreviewContext } from "./connection-overlay";
 import type { ConnectionState, StreamComponentProps } from "./types";
 
 function isValidImageSrc(src: string): boolean {
@@ -25,6 +25,8 @@ export function ImageStream({ url, objectFit = "cover" }: StreamComponentProps) 
   const [error, setError] = useState<string | null>(
     isValidImageSrc(url) ? null : "Invalid image source",
   );
+
+  const isPreview = use(StreamPreviewContext) !== null;
 
   const refreshIconSize = headerIconSize(scale) - 2;
 
@@ -59,7 +61,7 @@ export function ImageStream({ url, objectFit = "cover" }: StreamComponentProps) 
           }
         }}
       />
-      {connectionState === "connected" && (
+      {connectionState === "connected" && !isPreview && (
         <View className="absolute right-2 bottom-2 z-10 items-center justify-center rounded bg-black/35 p-1">
           <Pressable
             onPress={() => setKey((k) => k + 1)}

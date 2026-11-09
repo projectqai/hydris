@@ -2,10 +2,13 @@ import type { Entity } from "@projectqai/proto/world";
 import { DeviceState } from "@projectqai/proto/world";
 import { describe, expect, it } from "vitest";
 
+import type { EntityInit } from "../../storybook/entities";
+import { entity as entityMessage } from "../../storybook/entities";
 import {
   getAssetCategory,
   getBattleDimension,
   getBattleDimensionRank,
+  getDetectionLabel,
   isAsset,
   isRepositionable,
   isTrack,
@@ -67,21 +70,79 @@ const symbol = (milStd2525C: string): Partial<Entity> =>
   ({ symbol: { milStd2525C } }) as Partial<Entity>;
 
 describe("getAssetCategory", () => {
-  it("names the bucket after the taxonomy kind", () => {
-    expect(
-      getAssetCategory(entity(classified("vehicle", { domain: { case: "sea", value: {} } }))),
-    ).toBe("Vehicle");
-    expect(getAssetCategory(entity(classified("equipment")))).toBe("Equipment");
-    expect(getAssetCategory(entity(classified("person")))).toBe("Person");
-  });
-
-  it("title-cases a multi-word kind, so a new proto kind needs no client change", () => {
-    expect(getAssetCategory(entity(classified("electro_optical")))).toBe("Electro Optical");
+  it("splits a camelCase oneof case, so a new proto kind needs no client change", () => {
+    expect(getAssetCategory(entity(classified("electroOptical")))).toBe("Electro Optical");
   });
 
   it("is Unclassified when the engine sets no taxonomy", () => {
     expect(getAssetCategory(entity(symbol("SFGP------")))).toBe("Unclassified");
     expect(getAssetCategory(entity())).toBe("Unclassified");
+  });
+});
+
+type Taxonomy = NonNullable<NonNullable<EntityInit["classification"]>["taxonomy"]>;
+
+// the label walks the message with proto reflection, so the fixture must be a real message
+const detected = (...taxonomy: Taxonomy) => entityMessage("e", { classification: { taxonomy } });
+
+describe("getDetectionLabel", () => {
+  it("names every field the vehicle taxonomy sets, in proto order", () => {
+    const land = detected({
+      kind: { case: "vehicle", value: { domain: { case: "land", value: {} } } },
+    });
+    const tracked = detected({
+      kind: {
+        case: "vehicle",
+        value: { domain: { case: "land", value: { kind: { case: "tracked", value: {} } } } },
+      },
+    });
+
+    expect(getDetectionLabel(land)?.text).toBe("Vehicle · Land");
+    expect(getDetectionLabel(tracked)?.text).toBe("Vehicle · Land · Tracked");
+  });
+
+  it("keeps the last name and its separator for a middle cut", () => {
+    const fixedWing = detected({
+      kind: {
+        case: "vehicle",
+        value: {
+          unmanned: {},
+          domain: { case: "air", value: { kind: { case: "fixedWing", value: {} } } },
+        },
+      },
+    });
+
+    expect(getDetectionLabel(fixedWing)).toEqual({
+      text: "Vehicle · Unmanned · Air · Fixed Wing",
+      tailLength: "· Fixed Wing".length,
+    });
+  });
+
+  it("descends below the top kind for non-vehicle taxonomy too", () => {
+    const radar = detected({
+      kind: {
+        case: "equipment",
+        value: { sensor: { emplaced: {}, kind: { case: "radar", value: {} } } },
+      },
+    });
+
+    expect(getDetectionLabel(radar)?.text).toBe("Equipment · Sensor · Emplaced · Radar");
+    expect(getDetectionLabel(detected({ kind: { case: "person", value: {} } }))?.text).toBe(
+      "Person",
+    );
+  });
+
+  it("names the first taxonomy entry when there are several", () => {
+    const uncertain = detected(
+      { kind: { case: "animal", value: { kind: { case: "air", value: { bird: {} } } } } },
+      { kind: { case: "person", value: {} } },
+    );
+
+    expect(getDetectionLabel(uncertain)?.text).toBe("Animal · Air · Bird");
+  });
+
+  it("is null when the engine sets no taxonomy, so callers pick their own fallback", () => {
+    expect(getDetectionLabel(detected())).toBeNull();
   });
 });
 

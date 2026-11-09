@@ -1,9 +1,11 @@
 package engine
 
 import (
+	"context"
 	"sync"
 
 	pb "github.com/projectqai/proto/go"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Bus struct {
@@ -40,7 +42,17 @@ func (b *Bus) CloseAll() {
 	}
 }
 
-func (b *Bus) Dirty(entityID string, entity *pb.Entity, change pb.EntityChange) {
+// ConsumerCount is the number of registered watchers.
+func (b *Bus) ConsumerCount() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.consumers)
+}
+
+// Dirty notifies every consumer of a change. The span in ctx (if any) is the
+// write that produced it; consumers continue its trace when they send.
+func (b *Bus) Dirty(ctx context.Context, entityID string, entity *pb.Entity, change pb.EntityChange) {
+	sc := trace.SpanContextFromContext(ctx)
 	priority := pb.Priority_PriorityRoutine
 	if entity != nil && entity.Priority != nil {
 		priority = *entity.Priority
@@ -50,6 +62,6 @@ func (b *Bus) Dirty(entityID string, entity *pb.Entity, change pb.EntityChange) 
 	defer b.mu.RUnlock()
 
 	for c := range b.consumers {
-		c.markDirty(entityID, priority, change, entity)
+		c.markDirty(entityID, priority, change, entity, sc)
 	}
 }

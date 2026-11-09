@@ -6,6 +6,7 @@
     "@deck.gl/extensions": "^9.3.4",
     "@deck.gl/layers": "^9.3.4",
     "@deck.gl/mapbox": "^9.3.4",
+    "geographiclib-geodesic": "^2.2.0",
     "maplibre-gl": "^5.24.0",
     "milsymbol": "^3.0.4",
     "react-map-gl": "^8.1.1",
@@ -22,11 +23,17 @@
     "vitest": "^3.2.4"
   },
   "exports": {
-    "./types": "./src/types.ts",
-    "./constants": "./src/constants.ts",
-    "./adapters": "./src/adapters/index.ts",
     "./adapters/maplibre": "./src/adapters/maplibre/index.tsx",
+    "./constants": "./src/constants.ts",
+    "./geometry/drawing-preview": "./src/geometry/drawing-preview.ts",
+    "./geometry/rendered-paths": "./src/geometry/rendered-paths.ts",
+    "./geometry/path-geometry": "./src/geometry/path-geometry.ts",
+    "./geometry/range-rings": "./src/geometry/range-rings.ts",
+    "./geometry/rectangle": "./src/geometry/rectangle.ts",
+    "./types": "./src/types.ts",
     "./utils/geodesic-circle": "./src/utils/geodesic-circle.ts",
+    "./utils/geodesic-path": "./src/utils/geodesic-path.ts",
+    "./utils/geodesy": "./src/utils/geodesy.ts",
     "./utils/symbol-atlas": "./src/utils/symbol-atlas.ts"
   },
   "peerDependencies": {

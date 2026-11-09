@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/projectqai/hydris/builtin/artifacts"
@@ -23,7 +24,7 @@ func handleArtifactGet(engine *WorldServer) http.Handler {
 		}
 		art := resp.Msg.Entity.Artifact
 
-		rc, err := artifacts.Server.Local().Get(r.Context(), art.Id) //nolint:staticcheck // SA1019: Artifact.Id migration pending
+		rc, err := artifacts.Server.OpenBlob(r.Context(), art.Id) //nolint:staticcheck // SA1019: Artifact.Id migration pending
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -34,6 +35,17 @@ func handleArtifactGet(engine *WorldServer) http.Handler {
 			w.Header().Set("Content-Type", art.ContentType)
 		} else {
 			w.Header().Set("Content-Type", "application/octet-stream")
+		}
+		// Media players seek via Range requests and revalidate via ETag; the
+		// sha256 is the natural validator. no-cache means "revalidate", not
+		// "don't store", so an unchanged blob is served from cache with a 304.
+		w.Header().Set("Cache-Control", "no-cache")
+		if art.Sha256 != nil && *art.Sha256 != "" {
+			w.Header().Set("ETag", `"`+*art.Sha256+`"`)
+		}
+		if rs, ok := rc.(io.ReadSeeker); ok {
+			http.ServeContent(w, r, "", time.Time{}, rs)
+			return
 		}
 		if art.SizeBytes != nil {
 			w.Header().Set("Content-Length", strconv.FormatInt(*art.SizeBytes, 10))

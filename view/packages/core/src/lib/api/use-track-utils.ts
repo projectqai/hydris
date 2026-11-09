@@ -1,4 +1,10 @@
+import type { ReflectMessage } from "@bufbuild/protobuf/reflect";
+import { reflect } from "@bufbuild/protobuf/reflect";
 import type { BadgeVariant } from "@hydris/ui/badge";
+import {
+  ClassificationConfidenceSchema,
+  ClassificationTaxonomySchema,
+} from "@projectqai/proto/taxonomy";
 import type { Entity } from "@projectqai/proto/world";
 import { ClassificationIdentity } from "@projectqai/proto/world";
 import { format } from "date-fns";
@@ -14,10 +20,15 @@ export function timestampToMs(timestamp?: Timestamp): number {
   return Number(timestamp.seconds) * 1000 + Math.floor((timestamp.nanos || 0) / 1_000_000);
 }
 
-/**
- * Extract affiliation/status from entity classification identity,
- * falling back to SIDC position [1] if classification is not populated.
- */
+// the engine only advances lifetime.fresh when the producer sends it, so a producer that still
+// writes the deprecated lastMeasured leaves fresh at its first sighting
+export function getLastSeen(entity: Entity): Timestamp | undefined {
+  const fresh = entity.lifetime?.fresh;
+  const measured = entity.detection?.lastMeasured;
+
+  return timestampToMs(measured) > timestampToMs(fresh) ? measured : fresh;
+}
+
 export function getTrackStatus(entity: Entity): TrackStatus {
   switch (entity.classification?.identity) {
     case ClassificationIdentity.ClassificationIdentityFriend:
@@ -59,6 +70,23 @@ export function getEntityName(entity: Entity): string {
   return entity.label || entity.id;
 }
 
+// the configurable label names a device's class, so it only stands in for a missing own label
+export function getDeviceName(entity: Entity): string {
+  return entity.label || entity.configurable?.label || entity.id;
+}
+
+export function getConfigurableLabel(entity: Entity): string {
+  return entity.configurable?.label ?? getEntityName(entity);
+}
+
+export function getTaskableLabel(entity: Entity): string {
+  return entity.taskable?.label || getEntityName(entity);
+}
+
+export function getEntityError(entity: Entity): string | undefined {
+  return entity.configurable?.error || entity.device?.error || undefined;
+}
+
 /**
  * Tracks are entities marked with the TrackComponent
  */
@@ -92,11 +120,9 @@ function primaryTaxonomy(entity: Entity) {
   return entity.classification?.taxonomy?.find((t) => t.kind.case != null);
 }
 
-function formatKindLabel(kind: string): string {
-  return kind
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
+export function formatCaseLabel(name: string): string {
+  const spaced = name.replace(/([a-z])([A-Z])/g, "$1 $2");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 /**
@@ -106,7 +132,50 @@ function formatKindLabel(kind: string): string {
  */
 export function getAssetCategory(entity: Entity): string {
   const kind = primaryTaxonomy(entity)?.kind.case;
-  return kind ? formatKindLabel(kind) : "Unclassified";
+  return kind ? formatCaseLabel(kind) : "Unclassified";
+}
+
+export type TaxonomyEntry = { path: string[]; confidence?: number };
+
+export type TaxonomyLabel = { text: string; tailLength: number };
+
+const TAXONOMY_SEPARATOR = " · ";
+
+export function formatTaxonomyPath(path: string[]): TaxonomyLabel {
+  const last = path.at(-1) ?? "";
+
+  return {
+    text: path.join(TAXONOMY_SEPARATOR),
+    tailLength: TAXONOMY_SEPARATOR.trimStart().length + last.length,
+  };
+}
+
+function toTaxonomyPath(message: ReflectMessage): string[] {
+  return message.fields.flatMap((field) =>
+    field.fieldKind === "message" &&
+    field.message !== ClassificationConfidenceSchema &&
+    message.isSet(field)
+      ? [formatCaseLabel(field.localName), ...toTaxonomyPath(message.get(field))]
+      : [],
+  );
+}
+
+export function getTaxonomyEntries(entity: Entity): TaxonomyEntry[] {
+  return (entity.classification?.taxonomy ?? []).flatMap((taxonomy) => {
+    const path = toTaxonomyPath(reflect(ClassificationTaxonomySchema, taxonomy));
+
+    if (path.length === 0) return [];
+
+    return [{ path, confidence: taxonomy.confidence?.confidence || undefined }];
+  });
+}
+
+export function getDetectionLabel(entity: Entity): TaxonomyLabel | null {
+  const primary = primaryTaxonomy(entity);
+
+  if (!primary) return null;
+
+  return formatTaxonomyPath(toTaxonomyPath(reflect(ClassificationTaxonomySchema, primary)));
 }
 
 // SIDC battle-dimension position [2]. rank orders space, air, ground, sea, subsurface for sorting.

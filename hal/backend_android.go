@@ -4,8 +4,11 @@ package hal
 
 import (
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 // On Android, the Platform functions are wired by the android/ package
@@ -16,6 +19,7 @@ var (
 	androidMu            sync.Mutex
 	androidSerialCb      func([]SerialPort)
 	androidBLECb         func([]BLEDevice)
+	androidMDNSCb        func([]MDNSPeer)
 	androidNotifyCbs     = make(map[string]func([]byte))
 	androidDisconnectCbs = make(map[int64]func())
 )
@@ -47,6 +51,19 @@ func (androidHandler) OnBLEDevices(devicesJSON string) {
 	androidMu.Unlock()
 	if cb != nil {
 		cb(devices)
+	}
+}
+
+func (androidHandler) OnMDNSPeers(peersJSON string) {
+	var peers []MDNSPeer
+	if err := json.Unmarshal([]byte(peersJSON), &peers); err != nil {
+		return
+	}
+	androidMu.Lock()
+	cb := androidMDNSCb
+	androidMu.Unlock()
+	if cb != nil {
+		cb(peers)
 	}
 }
 
@@ -150,6 +167,35 @@ func SetBLEOps(
 	}
 }
 
+// SetMDNS is called by the android/ package to wire mDNS (NsdManager).
+func SetMDNS(
+	register func(instance, service string, port int, txtJSON string),
+	unregister func(),
+	startBrowse func(service string),
+	stopBrowse func(),
+) {
+	P.MDNSAdvertise = func(instance, service string, port int, txt map[string]string) (func(), error) {
+		txtJSON, err := json.Marshal(txt)
+		if err != nil {
+			return nil, err
+		}
+		register(instance, service, port, string(txtJSON))
+		return unregister, nil
+	}
+	P.MDNSBrowse = func(service string, cb func([]MDNSPeer)) (func(), error) {
+		androidMu.Lock()
+		androidMDNSCb = cb
+		androidMu.Unlock()
+		startBrowse(service)
+		return func() {
+			androidMu.Lock()
+			androidMDNSCb = nil
+			androidMu.Unlock()
+			stopBrowse()
+		}, nil
+	}
+}
+
 // SetSensors wires the sensor reading function.
 // The provided function returns a JSON-encoded []SensorReading snapshot.
 func SetSensors(read func() string) {
@@ -163,6 +209,78 @@ func SetSensors(read func() string) {
 			return nil
 		}
 		return readings
+	}
+}
+
+// SetJoystick wires gamepad access. list returns a JSON-encoded []JoystickDevice
+// snapshot; read returns a JSON-encoded JoystickState, empty once the device is gone.
+func SetJoystick(list func() string, read func(string) string) {
+	devices := func() []JoystickDevice {
+		var d []JoystickDevice
+		if err := json.Unmarshal([]byte(list()), &d); err != nil {
+			return nil
+		}
+		return d
+	}
+	var mu sync.Mutex
+	handles := map[int64]string{}
+	var next int64
+
+	P.JoystickWatch = func(cb func([]JoystickDevice)) (stop func()) {
+		done := make(chan struct{})
+		go func() {
+			t := time.NewTicker(2 * time.Second)
+			defer t.Stop()
+			var last []JoystickDevice
+			first := true
+			for {
+				d := devices()
+				if first || !slices.Equal(d, last) {
+					cb(d)
+					last, first = d, false
+				}
+				select {
+				case <-done:
+					return
+				case <-t.C:
+				}
+			}
+		}()
+		var once sync.Once
+		return func() { once.Do(func() { close(done) }) }
+	}
+	P.JoystickOpen = func(id string) (int64, error) {
+		if !slices.ContainsFunc(devices(), func(d JoystickDevice) bool { return d.ID == id }) {
+			return 0, fmt.Errorf("joystick %s is not connected", id)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		next++
+		handles[next] = id
+		return next, nil
+	}
+	P.JoystickRead = func(handle int64) (JoystickState, error) {
+		mu.Lock()
+		id, ok := handles[handle]
+		mu.Unlock()
+		if !ok {
+			return JoystickState{}, fmt.Errorf("joystick not open")
+		}
+		data := read(id)
+		if data == "" {
+			return JoystickState{}, fmt.Errorf("joystick gone")
+		}
+		var st JoystickState
+		if err := json.Unmarshal([]byte(data), &st); err != nil {
+			return JoystickState{}, err
+		}
+		return st, nil
+	}
+	P.JoystickClose = func(handle int64) error {
+		mu.Lock()
+		delete(handles, handle)
+		mu.Unlock()
+		return nil
 	}
 }
 

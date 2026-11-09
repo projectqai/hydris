@@ -199,11 +199,13 @@ Hydris.artifacts.registerStore("s3", {
 
     const headers: Record<string, string> = {};
     if (entityJson) {
-      // S3 user metadata is limited to 2KB per header. Base64-encode and
-      // truncate if needed — it's best-effort recovery info.
-      const encoded = btoa(entityJson);
-      if (encoded.length <= 2048) {
-        headers["x-amz-meta-hydris-entity"] = encoded;
+      // S3 user metadata is limited to 2KB per header. btoa only takes
+      // Latin1, so encode the UTF-8 bytes; skip when they would not fit.
+      const bytes = new TextEncoder().encode(entityJson);
+      if (bytes.length <= 1536) {
+        let bin = "";
+        for (const b of bytes) bin += String.fromCharCode(b);
+        headers["x-amz-meta-hydris-entity"] = btoa(bin);
       }
     }
 

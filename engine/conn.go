@@ -33,6 +33,12 @@ type federationNodeKeyType struct{}
 
 var federationNodeKey federationNodeKeyType
 
+// claimedActorsKey carries the identities a builtin declared its actor claims
+// (a plugin's hydris.actors), over the trusted bufconn.
+type claimedActorsKeyType struct{}
+
+var claimedActorsKey claimedActorsKeyType
+
 func BuiltinConnContext(ctx context.Context, _ net.Conn) context.Context {
 	return context.WithValue(ctx, builtinConnKey, true)
 }

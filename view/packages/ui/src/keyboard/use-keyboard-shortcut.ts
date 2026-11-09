@@ -4,6 +4,7 @@ import { type ShortcutHandler, useKeyboardContext } from "./keyboard-context";
 
 type UseKeyboardShortcutOptions = {
   priority?: number;
+  yieldToFocus?: boolean;
 };
 
 export function useKeyboardShortcut(
@@ -14,6 +15,7 @@ export function useKeyboardShortcut(
   const id = useId();
   const { register } = useKeyboardContext();
   const priority = options?.priority ?? 0;
+  const yieldToFocus = options?.yieldToFocus ?? false;
 
   useEffect(() => {
     return register({
@@ -21,6 +23,7 @@ export function useKeyboardShortcut(
       key,
       handler,
       priority,
+      yieldToFocus,
     });
-  }, [id, key, handler, priority, register]);
+  }, [id, key, handler, priority, yieldToFocus, register]);
 }

@@ -1,9 +1,6 @@
 import { useEntityStore } from "./entity-store";
 
-export function getVersionLabel(
-  version: string | null,
-  updateAvailable?: string | null,
-): string | null {
+function getVersionLabel(version: string | null, updateAvailable?: string | null): string | null {
   if (!version) return null;
   const v = version.startsWith("v") ? version : `v${version}`;
   const update = updateAvailable ? ` ↑ v${updateAvailable}` : "";

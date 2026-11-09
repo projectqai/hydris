@@ -1,6 +1,7 @@
 package transform
 
 import (
+	"context"
 	"testing"
 
 	"github.com/projectqai/hydris/engine/meta"
@@ -59,6 +60,7 @@ func TestTransformersPreserveNonGeneratedFields(t *testing.T) {
 	}
 
 	transformers := []Transformer{
+		NewFixedPointTransformer(),
 		NewPolarNormalizeTransformer(),
 		NewPoseTransformer(),
 		NewShapeTransformer(),
@@ -74,7 +76,7 @@ func TestTransformersPreserveNonGeneratedFields(t *testing.T) {
 	}
 
 	bus := &noopBus{}
-	RunTransformers(transformers, head, bus, "sensor", components)
+	RunTransformers(context.Background(), transformers, head, bus, "sensor", components)
 
 	e := head["sensor"]
 	if e == nil {
@@ -143,6 +145,7 @@ func TestTransformersPreserveUnrelatedFieldsOnPoseChild(t *testing.T) {
 	}
 
 	transformers := []Transformer{
+		NewFixedPointTransformer(),
 		NewPolarNormalizeTransformer(),
 		NewPoseTransformer(),
 		NewShapeTransformer(),
@@ -154,7 +157,7 @@ func TestTransformersPreserveUnrelatedFieldsOnPoseChild(t *testing.T) {
 	}
 
 	bus := &noopBus{}
-	RunTransformers(transformers, head, bus, "child", nil)
+	RunTransformers(context.Background(), transformers, head, bus, "child", nil)
 
 	e := head["child"]
 	if e == nil {
@@ -184,7 +187,7 @@ func TestTransformersPreserveUnrelatedFieldsOnPoseChild(t *testing.T) {
 
 type noopBus struct{}
 
-func (n *noopBus) Dirty(string, *pb.Entity, pb.EntityChange) {}
+func (n *noopBus) Dirty(context.Context, string, *pb.Entity, pb.EntityChange) {}
 
 func strPtr(s string) *string     { return &s }
 func floatPtr(f float64) *float64 { return &f }

@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package timeline;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/projectqai/proto/go";
+
+message GetTimelineRequest {}
+message GetTimelineResponse {
+  google.protobuf.Timestamp min = 1;
+  google.protobuf.Timestamp max = 2;
+  bool frozen = 3;
+  google.protobuf.Timestamp at = 4;
+}
+
+message MoveTimelineRequest {
+  bool freeze = 1;
+  google.protobuf.Timestamp at = 2;
+}
+
+message MoveTimelineResponse {
+  google.protobuf.Timestamp current = 1;
+}
+
+service TimelineService {
+  rpc MoveTimeline(MoveTimelineRequest) returns (MoveTimelineResponse);
+  rpc GetTimeline(GetTimelineRequest) returns (stream GetTimelineResponse);
+}

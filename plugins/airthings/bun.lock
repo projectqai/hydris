@@ -6,7 +6,7 @@
       "name": "@hydris/builtin-airthings",
       "dependencies": {
         "@projectqai/hal": "file:../../pkg/rt/ts",
-        "@projectqai/proto": "file:../../../proto/ts",
+        "@projectqai/proto": "file:../../proto/ts",
       },
     },
   },
@@ -21,7 +21,7 @@
 
     "@projectqai/hal": ["@projectqai/hal@file:../../pkg/rt/ts", {}],
 
-    "@projectqai/proto": ["@projectqai/proto@file:../../../proto/ts", { "dependencies": { "@connectrpc/connect": "^2.0.0" }, "devDependencies": { "@bufbuild/protoc-gen-es": "^2.10.1" }, "peerDependencies": { "@bufbuild/protobuf": "^2.10.1" } }],
+    "@projectqai/proto": ["@projectqai/proto@file:../../proto/ts", { "dependencies": { "@connectrpc/connect": "^2.0.0" }, "devDependencies": { "@bufbuild/protoc-gen-es": "^2.10.1" }, "peerDependencies": { "@bufbuild/protobuf": "^2.10.1" } }],
 
     "@typescript/vfs": ["@typescript/vfs@1.6.4", "", { "dependencies": { "debug": "^4.4.3" }, "peerDependencies": { "typescript": "*" } }, "sha512-PJFXFS4ZJKiJ9Qiuix6Dz/OwEIqHD7Dme1UwZhTK11vR+5dqW2ACbdndWQexBzCx+CPuMe5WBYQWCsFyGlQLlQ=="],
 

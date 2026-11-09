@@ -2,13 +2,14 @@ import type { Entity, MediaStream } from "@projectqai/proto/world";
 import type { ReactNode } from "react";
 import { createContext, useContext, useState } from "react";
 
+import { getDeviceName } from "../../lib/api/use-track-utils";
 import { resolveStreamUrl } from "./components/video-stream/resolve-stream-url";
 import type { VideoProtocol } from "./components/video-stream/types";
 
 type PIPWindow = {
   id: string;
   entityId: string;
-  entityName: string | null;
+  entityName: string;
   cameraUrl: string;
   cameraLabel: string | null;
   cameraProtocol: VideoProtocol;
@@ -40,7 +41,7 @@ export function updateLastWindowPosition(pos: { x: number; y: number }) {
   lastWindowPosition = pos;
 }
 
-export function resetLastWindowPosition() {
+function resetLastWindowPosition() {
   lastWindowPosition = null;
 }
 
@@ -79,7 +80,7 @@ export function PIPProvider({ children }: { children: ReactNode }) {
       const newWindow: PIPWindow = {
         id: generateWindowId(),
         entityId: entity.id,
-        entityName: entity.label || null,
+        entityName: getDeviceName(entity),
         cameraUrl: resolved.url,
         cameraLabel: stream.label,
         cameraProtocol: resolved.protocol,

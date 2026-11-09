@@ -1,0 +1,36 @@
+{
+  "name": "@projectqai/proto",
+  "version": "0.0.76",
+  "author": "projectq-release-bot",
+  "type": "module",
+  "exports": {
+    "./*": {
+      "types": "./dist/*_pb.d.ts",
+      "import": "./dist/*_pb.js",
+      "default": "./dist/*_pb.js"
+    },
+    "./device": {
+      "import": "./device.ts",
+      "default": "./device.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "device.ts"
+  ],
+  "license": "Apache-2.0",
+  "peerDependencies": {
+    "@bufbuild/protobuf": "^2.10.1"
+  },
+  "dependencies": {
+    "@connectrpc/connect": "^2.0.0"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "^2.10.1"
+  },
+  "scripts": {
+    "generate": "buf generate",
+    "prepublishOnly": "bun run generate",
+    "release": "bun run generate && npm version patch --workspaces=false && npm publish --access public --workspaces=false"
+  }
+}

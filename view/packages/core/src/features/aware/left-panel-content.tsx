@@ -1,11 +1,11 @@
-import { EmptyState } from "@hydris/ui/empty-state";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@hydris/ui/empty-state";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import { SegmentedControl } from "@hydris/ui/segmented-control";
 import type { Entity } from "@projectqai/proto/world";
 import { SortField } from "@projectqai/proto/world";
 import { FlashList } from "@shopify/flash-list";
-import { AlertTriangle, ArrowDownAZ, ArrowUpAZ, Check, MapPin } from "lucide-react-native";
+import { ArrowDownAZ, ArrowUpAZ, Check, MapPin } from "lucide-react-native";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, Text, View } from "react-native";
 import * as DropdownMenu from "zeego/dropdown-menu";
@@ -13,14 +13,7 @@ import * as DropdownMenu from "zeego/dropdown-menu";
 import { ENTITY_NAV_PARAMS, useUrlParams } from "../../lib/use-url-params";
 import { EntityCard } from "./entity-track-card";
 import { usePlacement } from "./placement-context";
-import {
-  hasSortValue,
-  selectAssetCount,
-  selectAssets,
-  selectTrackCount,
-  selectTracks,
-  useEntityStore,
-} from "./store/entity-store";
+import { hasSortValue, selectAssets, selectTracks, useEntityStore } from "./store/entity-store";
 import {
   DEFAULT_SORT,
   type ListMode,
@@ -31,35 +24,6 @@ import {
 import { useMapEngine } from "./store/map-engine-store";
 import { useSelectionStore } from "./store/selection-store";
 import { useStoreHydrated } from "./store/use-store-hydrated";
-
-export function CollapsedStats() {
-  const t = useThemeColors();
-  const listMode = useLeftPanelStore((s) => s.listMode);
-  const trackCount = useEntityStore(selectTrackCount);
-  const assetCount = useEntityStore(selectAssetCount);
-  const count = listMode === "tracks" ? trackCount : assetCount;
-  const alertCount = 0;
-
-  const label = listMode === "tracks" ? "Tracks" : "Assets";
-
-  return (
-    <View className="flex-row items-center gap-3">
-      <View className="flex-row items-center gap-1.5">
-        <AlertTriangle size={15} color={t.iconSubtle} strokeWidth={2} />
-        <Text className="font-sans-semibold text-foreground/80 text-xs">{alertCount} Alerts</Text>
-      </View>
-
-      <Text className="text-foreground/80 text-xl leading-none">•</Text>
-
-      <View className="flex-row items-center gap-1.5">
-        <MapPin size={15} color={t.iconSubtle} strokeWidth={2} />
-        <Text className="font-sans-semibold text-foreground/80 text-xs">
-          {count} {label}
-        </Text>
-      </View>
-    </View>
-  );
-}
 
 const TABS = [
   { id: "tracks" as const, label: "Tracks" },
@@ -236,13 +200,15 @@ export function LeftPanelContent() {
         </DropdownMenu.Root>
       </View>
       {displayedEntities.length === 0 ? (
-        <EmptyState
-          icon={MapPin}
-          title={listMode === "tracks" ? "No tracks detected" : "No assets available"}
-          subtitle={
-            listMode === "tracks" ? "Waiting for tracked objects" : "No static assets on map"
-          }
-        />
+        <Empty>
+          <EmptyMedia icon={MapPin} />
+          <EmptyTitle>
+            {listMode === "tracks" ? "No tracks detected" : "No assets available"}
+          </EmptyTitle>
+          <EmptyDescription>
+            {listMode === "tracks" ? "Waiting for tracked objects" : "No static assets on map"}
+          </EmptyDescription>
+        </Empty>
       ) : (
         <FlashList
           ref={listRef}

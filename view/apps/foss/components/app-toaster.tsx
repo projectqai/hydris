@@ -8,6 +8,7 @@ export function AppToaster() {
     <Toaster
       position="top-center"
       offset={68}
+      enableStacking
       toastOptions={{
         style: {
           backgroundColor: t.card,
@@ -45,7 +46,7 @@ export function AppToaster() {
           alignSelf: "center" as const,
         },
         cancelButtonStyle: {
-          backgroundColor: t.muted,
+          backgroundColor: t.mutedForeground,
           borderRadius: 4,
           paddingVertical: 8,
           justifyContent: "center" as const,
@@ -53,7 +54,7 @@ export function AppToaster() {
           alignSelf: "stretch" as const,
         },
         cancelButtonTextStyle: {
-          color: t.controlFg,
+          color: t.background,
           fontSize: 13,
           fontWeight: "600" as const,
           alignSelf: "center" as const,

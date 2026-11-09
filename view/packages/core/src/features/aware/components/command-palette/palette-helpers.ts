@@ -2,11 +2,13 @@ import type { Category, PaletteMode } from "@hydris/ui/command-palette/palette-r
 import type { Entity } from "@projectqai/proto/world";
 import type { LucideIcon } from "lucide-react-native";
 import {
+  Activity,
+  Focus,
   Mountain,
   Plane,
   Radio,
-  Rss,
   Satellite,
+  ShieldHalf,
   Ship,
   Video,
   Waves,
@@ -22,61 +24,8 @@ import {
 
 export { getAssetCategory, getBattleDimension };
 
-export type TrailSegment = {
-  label: string;
-  index: number;
-};
-
-export function getTrailSegments(
-  stack: PaletteMode[],
-  activeCategory: Category,
-  rootQueryWasActive: boolean,
-): TrailSegment[] {
-  const rootLabel = rootQueryWasActive
-    ? "Search"
-    : (CATEGORIES.find((c) => c.id === activeCategory)?.label ?? activeCategory);
-
-  const segments: TrailSegment[] = [{ label: rootLabel, index: -1 }];
-
-  for (let i = 0; i < stack.length; i++) {
-    const mode = stack[i]!;
-    let label: string;
-    switch (mode.kind) {
-      case "dimension":
-        label = mode.dimensionLabel;
-        break;
-      case "entity-actions":
-        label = mode.entityLabel;
-        break;
-      case "location-search":
-        label = "Go to location";
-        break;
-      case "config":
-        label = "Configuration";
-        break;
-      case "asset-readiness":
-        label = "Asset readiness";
-        break;
-      case "command-group":
-        label = mode.groupLabel;
-        break;
-      case "mission-health":
-        label = "Mission health";
-        break;
-      case "diagnostic-export":
-        label = "Report a bug";
-        break;
-      case "mission-export":
-        label = "Export mission pack";
-        break;
-      default:
-        label = "Root";
-        break;
-    }
-    segments.push({ label, index: i });
-  }
-
-  return segments;
+export function addDeviceMode(serviceId: string): PaletteMode {
+  return { kind: "config", entityId: serviceId, adding: true };
 }
 
 export function classifyEntity(entity: Entity): Category | null {
@@ -88,10 +37,11 @@ export function classifyEntity(entity: Entity): Category | null {
 }
 
 export const CATEGORIES: { id: Category; label: string; icon: LucideIcon }[] = [
+  { id: "mission", label: "Mission", icon: ShieldHalf },
   { id: "commands", label: "Commands", icon: Zap },
   { id: "assets", label: "Assets", icon: Radio },
   { id: "cameras", label: "Cameras", icon: Video },
-  { id: "tracks", label: "Tracks", icon: Rss },
+  { id: "tracks", label: "Tracks", icon: Focus },
 ];
 
 export const CATEGORY_LABEL: Record<string, string> = {};
@@ -115,6 +65,8 @@ export const DIMENSION_ICON: Record<string, LucideIcon> = {
   Space: Satellite,
 };
 
+export const SOURCE_ICON: LucideIcon = Activity;
+
 export type DimensionGroup = {
   dimension: string;
   label: string;
@@ -122,29 +74,10 @@ export type DimensionGroup = {
   battleDimension?: string;
 };
 
-export function groupByDimension(
-  entities: Map<string, Entity>,
-  category: Category,
-): DimensionGroup[] {
-  const counts = new Map<string, number>();
-
-  for (const entity of entities.values()) {
-    if (classifyEntity(entity) !== category) continue;
-    const dim = getBattleDimension(entity);
-    counts.set(dim, (counts.get(dim) ?? 0) + 1);
-  }
-
-  const result: DimensionGroup[] = [];
-  for (const [dimension, count] of counts) {
-    result.push({ dimension, label: dimension, count });
-  }
-  result.sort((a, b) => a.label.localeCompare(b.label));
-  return result;
-}
-
-export function groupByAssetCategory(entities: Map<string, Entity>): DimensionGroup[] {
+export function groupByAssetCategory(entities: Entity[]): DimensionGroup[] {
   const counts = new Map<string, { count: number; battleDimension: string | undefined }>();
-  for (const entity of entities.values()) {
+
+  for (const entity of entities) {
     if (classifyEntity(entity) !== "assets") continue;
     const cat = getAssetCategory(entity);
     const dim = getBattleDimension(entity);

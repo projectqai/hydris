@@ -1,7 +1,7 @@
 "use no memo";
 
 import { ActionButton } from "@hydris/ui/action-button";
-import { EmptyState } from "@hydris/ui/empty-state";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@hydris/ui/empty-state";
 import {
   ComponentRegistryContext,
   LayoutEditingContext,
@@ -32,13 +32,14 @@ import Animated, {
 } from "react-native-reanimated";
 
 import { getEntityName } from "../../../../lib/api/use-track-utils";
+import { baseUrl } from "../../../../lib/api/world-client";
 import { SensorPane } from "../../../sensors/components/sensor-pane";
 import { COLLAPSE_FADE_START, SIZE_COLLAPSE_FADE, SIZE_COLLAPSED, Z } from "../../constants";
 import { COMPONENT_LABELS, COMPONENT_REGISTRY } from "../../layouts";
 import { PaneEntityProvider, usePaneEntity } from "../../pane-entity-context";
 import { useEntityStore } from "../../store/entity-store";
 import { CameraPanOverlay } from "../video-stream/camera-pan-overlay";
-import { toEmbedUrl } from "../video-stream/embed-providers";
+import { canEmbedFullscreen, toEmbedUrl } from "../video-stream/embed-providers";
 import { IframeStream } from "../video-stream/iframe-stream";
 import { resolveStreamUrl } from "../video-stream/resolve-stream-url";
 import { VideoStream } from "../video-stream/video-stream";
@@ -71,11 +72,11 @@ function getPaneLabel(content: PaneContent, extLabels?: Record<string, string>):
 
 function UnknownWidget({ id }: { id: string }) {
   return (
-    <EmptyState
-      icon={AlertTriangle}
-      title="Unknown widget"
-      subtitle={`"${id}" is not a registered widget`}
-    />
+    <Empty>
+      <EmptyMedia icon={AlertTriangle} />
+      <EmptyTitle>Unknown widget</EmptyTitle>
+      <EmptyDescription>{`"${id}" is not a registered widget`}</EmptyDescription>
+    </Empty>
   );
 }
 
@@ -97,7 +98,11 @@ function CameraPane({ entityId }: { entityId?: string }) {
           </View>
         )}
         <View className="flex-1">
-          <EmptyState icon={Video} title="Camera" subtitle="Pin a camera to view its feed" />
+          <Empty>
+            <EmptyMedia icon={Video} />
+            <EmptyTitle>Camera</EmptyTitle>
+            <EmptyDescription>Pin a camera to view its feed</EmptyDescription>
+          </Empty>
         </View>
       </View>
     );
@@ -153,7 +158,7 @@ function IframePane({ url }: { url: string }) {
           src={embedUrl}
           style={{ width: "100%", height: "100%", border: "none" }}
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
+          allowFullScreen={canEmbedFullscreen(url, baseUrl)}
           title="Embedded content"
         />
       </View>

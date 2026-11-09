@@ -19,7 +19,7 @@ const METRIC_WIDGET_CONFIGS: Record<string, MetricTileConfig> = {
 export type PaneEntityMeta = {
   match: (entity: Entity) => boolean;
   icon: LucideIcon;
-  noun: string;
+  itemsLabel: string;
   title: string;
 };
 
@@ -37,19 +37,20 @@ export function paneEntityMeta(content: PaneContent): PaneEntityMeta | null {
   if (content.type === "component") {
     const cfg = METRIC_WIDGET_CONFIGS[content.componentId];
     if (!cfg) return null;
-    const noun = cfg.title.toLowerCase();
+    const itemsLabel = cfg.title.toLowerCase();
+
     return {
       match: (e) => hasMetricInCategories(e, cfg),
       icon: cfg.icon,
-      noun,
-      title: `Show ${noun} from`,
+      itemsLabel,
+      title: `Show ${itemsLabel} from`,
     };
   }
   if (content.type === "camera") {
     return {
       match: (e) => (e.camera?.streams?.length ?? 0) > 0,
       icon: Video,
-      noun: "cameras",
+      itemsLabel: "cameras",
       title: "Switch camera",
     };
   }
@@ -58,7 +59,7 @@ export function paneEntityMeta(content: PaneContent): PaneEntityMeta | null {
     return {
       match: (e) => getSensorKind(e) != null && (!shape || getReadingShape(e) === shape),
       icon: Activity,
-      noun: "sensors",
+      itemsLabel: "sensors",
       title: "Switch sensor",
     };
   }

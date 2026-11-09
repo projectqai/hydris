@@ -14,7 +14,7 @@ function hasFiles(e: DragEvent): boolean {
   return e.dataTransfer?.types.includes("Files") ?? false;
 }
 
-export function DropZone() {
+export function DropZone({ onImported }: { onImported: () => void }) {
   const [active, setActive] = useState(false);
   const counter = useRef(0);
   const t = useThemeColors();
@@ -46,7 +46,7 @@ export function DropZone() {
       if (file.name.toLowerCase().endsWith(".mbtiles")) {
         void uploadMbtiles({ kind: "web", file });
       } else {
-        void importPack({ kind: "web", file });
+        void importPack({ kind: "web", file }).then((imported) => imported && onImported());
       }
     };
 
@@ -60,7 +60,7 @@ export function DropZone() {
       window.removeEventListener("dragover", onOver);
       window.removeEventListener("drop", onDrop);
     };
-  }, [importPack]);
+  }, [importPack, onImported]);
 
   if (!active) return null;
 

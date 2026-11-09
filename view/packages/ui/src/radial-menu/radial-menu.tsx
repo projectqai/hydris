@@ -24,6 +24,7 @@ const INNER_RATIO = 0.42;
 const ICON_SIZE = 22;
 const SLICE_GAP_PX = 4;
 const SLICE_CORNER_R = 6;
+const CLOSE_SLICE: RadialMenuItem = { id: "__close__", label: "Close" };
 
 type VariantStyle = {
   fill: string;
@@ -270,7 +271,13 @@ function WebSliceLabel({
 }: SliceLabelProps & { hovered: number }) {
   const color = labelColor(item, variant, hovered === index, fallbackColor, disabledColor);
   return (
-    <View pointerEvents="none" className="absolute items-center justify-center" style={layout}>
+    <View
+      pointerEvents="none"
+      role="option"
+      aria-selected={hovered === index}
+      className="absolute items-center justify-center"
+      style={layout}
+    >
       <Text
         numberOfLines={2}
         ellipsizeMode="tail"
@@ -306,7 +313,7 @@ export function RadialMenu({
 
   // Pad with close so a single slice doesn't look like a UI bug.
   const slices = useMemo<readonly RadialMenuItem[]>(
-    () => (items.length === 1 ? [...items, { id: "__close__", label: "Close" }] : items),
+    () => (items.length === 1 ? [...items, CLOSE_SLICE] : items),
     [items],
   );
 
@@ -322,7 +329,8 @@ export function RadialMenu({
     (i: number) => {
       const item = slices[i];
       if (!item || item.disabled) return;
-      if (item.id === "__close__") onClose();
+
+      if (item === CLOSE_SLICE) onClose();
       else {
         onSelect(item.id);
         onClose();
@@ -437,11 +445,7 @@ export function RadialMenu({
             width: radius * 2,
             height: radius * 2,
             borderRadius: radius,
-            shadowColor: "#000",
-            shadowOffset: { width: 0, height: 6 },
-            shadowOpacity: 0.5,
-            shadowRadius: 20,
-            elevation: 12,
+            boxShadow: "0 6px 20px rgba(0,0,0,0.5)",
           }}
         >
           <GestureDetector gesture={pan}>
@@ -480,35 +484,44 @@ export function RadialMenu({
                 })}
               </Svg>
 
-              {slices.map((item, i) => {
-                const variant = palette.variants[item.variant ?? "default"];
-                const layout = labelLayout(i, count, radius, innerR, labelR, typo.lineHeight);
-                return IS_WEB ? (
-                  <WebSliceLabel
-                    key={item.id}
-                    item={item}
-                    index={i}
-                    hovered={hovered}
-                    variant={variant}
-                    layout={layout}
-                    typo={typo}
-                    fallbackColor={t.foreground}
-                    disabledColor={t.controlFgDisabled}
-                  />
-                ) : (
-                  <NativeSliceLabel
-                    key={item.id}
-                    item={item}
-                    index={i}
-                    highlight={highlight}
-                    variant={variant}
-                    layout={layout}
-                    typo={typo}
-                    fallbackColor={t.foreground}
-                    disabledColor={t.controlFgDisabled}
-                  />
-                );
-              })}
+              <View
+                pointerEvents="none"
+                // @ts-expect-error listbox is a React Native Web role
+                role="listbox"
+                aria-label={title || "Menu options"}
+                className="absolute inset-0"
+              >
+                {slices.map((item, i) => {
+                  const variant = palette.variants[item.variant ?? "default"];
+                  const layout = labelLayout(i, count, radius, innerR, labelR, typo.lineHeight);
+
+                  return IS_WEB ? (
+                    <WebSliceLabel
+                      key={item.id}
+                      item={item}
+                      index={i}
+                      hovered={hovered}
+                      variant={variant}
+                      layout={layout}
+                      typo={typo}
+                      fallbackColor={t.foreground}
+                      disabledColor={t.controlFgDisabled}
+                    />
+                  ) : (
+                    <NativeSliceLabel
+                      key={item.id}
+                      item={item}
+                      index={i}
+                      highlight={highlight}
+                      variant={variant}
+                      layout={layout}
+                      typo={typo}
+                      fallbackColor={t.foreground}
+                      disabledColor={t.controlFgDisabled}
+                    />
+                  );
+                })}
+              </View>
 
               <View
                 pointerEvents="none"

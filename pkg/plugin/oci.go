@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,7 +30,28 @@ import (
 // TempDir is the base directory for temporary plugin extractions.
 // Empty string uses the OS default. On Android this must be set to a
 // writable directory (e.g. the app's cache dir) before calling ResolveOCI.
+// Hosts set it with SetWorkDir.
 var TempDir string
+
+// SetWorkDir makes dir the base of plugin extractions, in place of the system
+// temp dir, which may be noexec. It removes temporary extractions left behind.
+func SetWorkDir(dir string) error {
+	dir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	for _, pattern := range []string{"hydris-plugin-*", "hydris-plugindev-*"} {
+		stale, _ := filepath.Glob(filepath.Join(dir, pattern))
+		for _, d := range stale {
+			_ = os.RemoveAll(d)
+		}
+	}
+	TempDir = dir
+	return nil
+}
 
 // Package mirrors the relevant fields of a plugin's package.json.
 type Package struct {
@@ -38,8 +61,24 @@ type Package struct {
 	Files   []string `json:"files,omitempty"`
 	Hydris  *struct {
 		Compat string `json:"compat,omitempty"`
+		// Actors are identities the plugin may push as, one per request (see
+		// connect() in @projectqai/proto/device), besides its own install entity.
+		// A plugin uses one to hand data it does not trust, such as radio frames,
+		// a tighter policy than its own code runs under, and ships that policy in
+		// its defaults.yaml under the same id. It can only pick from this list,
+		// never escalate.
+		Actors []string `json:"actors,omitempty"`
+		// Native maps "GOOS/GOARCH" to an executable inside the plugin. A
+		// plugin with a native entry runs as a subprocess instead of a JS
+		// bundle (see NativeBinary).
+		Native map[string]string `json:"native,omitempty"`
 	} `json:"hydris,omitempty"`
 }
+
+// DefaultsFile is the optional entity file shipped next to a plugin's
+// package.json. The plugin host loads it when the plugin starts, with the same
+// rules as builtin/defaults.yaml, and `hydris plugin build` always packs it.
+const DefaultsFile = "defaults.yaml"
 
 // ReadPackageJSON reads and parses a package.json from dir.
 func ReadPackageJSON(dir string) (*Package, error) {
@@ -57,7 +96,8 @@ func ReadPackageJSON(dir string) (*Package, error) {
 // ResolveOCI pulls an OCI image, extracts the plugin layer, checks version
 // constraints and returns the path to the bundle and its data directory.
 // The caller must call cleanup when done to remove the temp directory.
-func ResolveOCI(ref string, hydrisVersion string) (bundlePath, dataDir string, cleanup func(), err error) {
+// key names the extraction directory, see ExtractPluginTarGz.
+func ResolveOCI(ref, hydrisVersion, key string) (bundlePath, dataDir string, cleanup func(), err error) {
 	noop := func() {}
 
 	parsed, err := name.ParseReference(ref)
@@ -70,7 +110,7 @@ func ResolveOCI(ref string, hydrisVersion string) (bundlePath, dataDir string, c
 		return "", "", noop, fmt.Errorf("pull %s: %w", ref, err)
 	}
 
-	dir, err := extractPlugin(img)
+	dir, err := extractPlugin(img, key)
 	if err != nil {
 		return "", "", noop, err
 	}
@@ -85,6 +125,16 @@ func ResolveOCI(ref string, hydrisVersion string) (bundlePath, dataDir string, c
 	if err := CheckHydrisVersion(pkg, hydrisVersion); err != nil {
 		rmDir()
 		return "", "", noop, err
+	}
+
+	// A native plugin has no bundle; the caller runs NativeBinary(dir).
+	if bin, err := NativeBinary(dir); err != nil || bin != "" {
+		if err != nil {
+			rmDir()
+			return "", "", noop, err
+		}
+		slog.Info("resolved native plugin from OCI", "ref", ref, "name", pkg.Name, "version", pkg.Version)
+		return "", dir, rmDir, nil
 	}
 
 	// hydris plugin build always produces bundle.js regardless of the
@@ -197,19 +247,20 @@ func PullOCIImage(ref string) (OCIImage, error) {
 	return pullImage(parsed)
 }
 
-// ExtractPluginTarGz extracts a gzip-compressed plugin tar into a temp dir,
-// returning the directory path. The caller must remove the directory when done.
-func ExtractPluginTarGz(r io.Reader) (string, error) {
+// ExtractPluginTarGz extracts a gzip-compressed plugin tar. With a key (the
+// plugin's entity id) it uses that plugin's own directory, emptied first, so a
+// crash leaves at most one per plugin. The caller removes the directory.
+func ExtractPluginTarGz(r io.Reader, key string) (string, error) {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return "", fmt.Errorf("gzip open: %w", err)
 	}
 	defer func() { _ = gz.Close() }()
-	return extractTar(gz)
+	return extractTar(gz, key)
 }
 
-// extractPlugin extracts the plugin layer from an OCI image into a temp dir.
-func extractPlugin(img v1.Image) (string, error) {
+// extractPlugin extracts the plugin layer from an OCI image.
+func extractPlugin(img v1.Image, key string) (string, error) {
 	layers, err := img.Layers()
 	if err != nil {
 		return "", fmt.Errorf("read layers: %w", err)
@@ -223,14 +274,79 @@ func extractPlugin(img v1.Image) (string, error) {
 		return "", fmt.Errorf("uncompress layer: %w", err)
 	}
 	defer rc.Close()
-	return extractTar(rc)
+	return extractTar(rc, key)
 }
 
-func extractTar(r io.Reader) (string, error) {
-	dir, err := os.MkdirTemp(TempDir, "hydris-plugin-*")
+// pluginDir returns the empty directory for key, see ExtractPluginTarGz.
+func pluginDir(key string) (string, error) {
+	if key == "" {
+		return os.MkdirTemp(TempDir, "hydris-plugin-*")
+	}
+	base := TempDir
+	if base == "" {
+		base = filepath.Join(os.TempDir(), "hydris-plugins")
+	}
+	dir := filepath.Join(base, "run", dirName(key))
+	if err := os.RemoveAll(dir); err != nil {
+		return "", err
+	}
+	return dir, os.MkdirAll(dir, 0o700)
+}
+
+// dirName escapes an entity id into a directory name valid on every OS: bytes
+// outside [a-z0-9-] become _XX and '_' becomes "__", so two ids never share a
+// name. Long ids end in "_-" and their sha256.
+func dirName(id string) string {
+	tokens := make([]string, len(id))
+	total := 0
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch {
+		case c == '_':
+			tokens[i] = "__"
+		case i == 0 && windowsDevice(id),
+			(c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-':
+			tokens[i] = fmt.Sprintf("_%02X", c)
+		default:
+			tokens[i] = string(c)
+		}
+		total += len(tokens[i])
+	}
+	const maxName = 200 // file names may be 255 bytes; leave room
+	if total <= maxName {
+		return strings.Join(tokens, "")
+	}
+	// Whole tokens up to the room left for the marker and the hash.
+	var b strings.Builder
+	for _, tok := range tokens {
+		if b.Len()+len(tok) > maxName-2-64 {
+			break
+		}
+		b.WriteString(tok)
+	}
+	sum := sha256.Sum256([]byte(id))
+	return b.String() + "_-" + hex.EncodeToString(sum[:])
+}
+
+// windowsDevice reports a reserved Windows device name (con, nul, com1, ...).
+func windowsDevice(id string) bool {
+	switch id {
+	case "con", "prn", "aux", "nul":
+		return true
+	}
+	return len(id) == 4 && (strings.HasPrefix(id, "com") || strings.HasPrefix(id, "lpt")) &&
+		id[3] >= '0' && id[3] <= '9'
+}
+
+func extractTar(r io.Reader, key string) (string, error) {
+	dir, err := pluginDir(key)
 	if err != nil {
 		return "", err
 	}
+
+	// Native binaries of other platforms are skipped. That needs package.json
+	// before them, which is where `hydris plugin build` puts it.
+	var otherPlatforms map[string]bool
 
 	tr := tar.NewReader(r)
 	for {
@@ -242,11 +358,21 @@ func extractTar(r io.Reader) (string, error) {
 			os.RemoveAll(dir)
 			return "", fmt.Errorf("tar read: %w", err)
 		}
-		if hdr.Typeflag != tar.TypeReg || strings.Contains(hdr.Name, "..") {
+		// Paths stay as packed. Only regular files inside the plugin are extracted.
+		name := filepath.FromSlash(strings.TrimPrefix(hdr.Name, "./"))
+		if hdr.Typeflag != tar.TypeReg || !filepath.IsLocal(name) || otherPlatforms[name] {
 			continue
 		}
-		dst := filepath.Join(dir, filepath.Base(hdr.Name))
-		f, err := os.Create(dst)
+		dst := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			os.RemoveAll(dir)
+			return "", err
+		}
+		mode := os.FileMode(0o644)
+		if hdr.Mode&0o111 != 0 {
+			mode = 0o755
+		}
+		f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 		if err != nil {
 			os.RemoveAll(dir)
 			return "", err
@@ -257,8 +383,31 @@ func extractTar(r io.Reader) (string, error) {
 			return "", err
 		}
 		f.Close()
+		if name == "package.json" {
+			otherPlatforms = nativeOfOtherPlatforms(dir)
+		}
 	}
 	return dir, nil
+}
+
+// nativeOfOtherPlatforms lists the hydris.native binaries in dir's
+// package.json that this platform does not run.
+func nativeOfOtherPlatforms(dir string) map[string]bool {
+	pkg, err := ReadPackageJSON(dir)
+	if err != nil || pkg.Hydris == nil {
+		return nil
+	}
+	other := map[string]bool{}
+	for platform, rel := range pkg.Hydris.Native {
+		if platform != Platform() {
+			other[filepath.FromSlash(rel)] = true
+		}
+	}
+	// A binary shared by several platforms (a script, say) is still needed.
+	if rel, ok := pkg.Hydris.Native[Platform()]; ok {
+		delete(other, filepath.FromSlash(rel))
+	}
+	return other
 }
 
 // ErrIncompatibleVersion is wrapped into the error CheckHydrisVersion returns
@@ -273,6 +422,12 @@ func CheckHydrisVersion(pkg *Package, hydrisVersion string) error {
 		return nil
 	}
 	raw := strings.TrimPrefix(hydrisVersion, "v")
+	// Tagless builds stamp a bare git hash (e.g. "6216017"), which ParseTolerant
+	// would coerce into a fake semver instead of rejecting. Real semvers have dots.
+	if !strings.Contains(raw, ".") {
+		slog.Warn("skipping version check (bare/dev version, not a semver)", "version", hydrisVersion)
+		return nil
+	}
 	cur, err := semver.ParseTolerant(raw)
 	if err != nil {
 		slog.Warn("skipping version check (unparseable version)", "version", hydrisVersion)

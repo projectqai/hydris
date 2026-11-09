@@ -9,6 +9,7 @@ import (
 
 	"github.com/projectqai/hydris/builtin/meshtastic/meshpb"
 	"github.com/projectqai/hydris/pkg/cot"
+	"github.com/projectqai/hydris/pkg/hydrispayload"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -317,42 +318,19 @@ func nodeInfoToEntity(info *meshpb.NodeEntry, trackerID string, mu *sync.RWMutex
 }
 
 func handleHydrisPacket(payload []byte, fromNode uint32, trackerID string, logger *slog.Logger) ([]*pb.Entity, error) {
-	if len(payload) < 2 {
-		return nil, fmt.Errorf("too short: %d", len(payload))
+	entity, err := hydrispayload.Decode(payload)
+	if err != nil {
+		return nil, err
 	}
 
-	flags := payload[0]
-	body := payload[1:]
+	entity.Id = fmt.Sprintf("meshtastic.%s", entity.Id)
 
-	if flags&hydrisFlagGzip != 0 {
-		decompressed, err := zlibDecompress(body)
-		if err != nil {
-			return nil, fmt.Errorf("decompress: %w", err)
-		}
-		body = decompressed
-	}
+	logger.Info("HYDRIS entity received",
+		"from", fmt.Sprintf("!%08x", fromNode),
+		"entityID", entity.Id,
+		"controller.id", entity.Controller.GetId(),
+		"controller.node", entity.Controller.GetNode(),
+	)
 
-	msgType := flags & hydrisTypeMask
-
-	switch msgType {
-	case hydrisTypeEntity:
-		var entity pb.Entity
-		if err := proto.Unmarshal(body, &entity); err != nil {
-			return nil, fmt.Errorf("unmarshal entity: %w", err)
-		}
-
-		entity.Id = fmt.Sprintf("meshtastic.%s", entity.Id)
-
-		logger.Info("HYDRIS entity received",
-			"from", fmt.Sprintf("!%08x", fromNode),
-			"entityID", entity.Id,
-			"controller.id", entity.Controller.GetId(),
-			"controller.node", entity.Controller.GetNode(),
-		)
-
-		return []*pb.Entity{&entity}, nil
-	default:
-		logger.Debug("HYDRIS unknown message type", "type", msgType, "from", fmt.Sprintf("!%08x", fromNode))
-		return nil, nil
-	}
+	return []*pb.Entity{entity}, nil
 }

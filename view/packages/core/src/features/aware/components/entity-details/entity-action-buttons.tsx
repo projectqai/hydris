@@ -3,6 +3,7 @@ import { Eye, Settings } from "lucide-react-native";
 import { useContext } from "react";
 import { View } from "react-native";
 
+import { useEntityTaskables } from "../../hooks/use-entity-taskables";
 import { PaletteContext } from "../../palette-context";
 import { selectEntity, useEntityStore } from "../../store/entity-store";
 import { useSelectionStore } from "../../store/selection-store";
@@ -14,6 +15,7 @@ export function EntityActionButtons() {
   const selectedEntity = useEntityStore(selectEntity(selectedEntityId));
   const isFollowingEntity = useSelectionStore((s) => s.isFollowing);
   const toggleFollowEntity = useSelectionStore((s) => s.toggleFollow);
+  const taskables = useEntityTaskables(selectedEntityId);
 
   const isTrack = !!selectedEntity?.track;
   const isDevice = !!selectedEntity?.device;
@@ -47,7 +49,13 @@ export function EntityActionButtons() {
           accessibilityLabel={isFollowingEntity ? "Stop following entity" : "Follow entity"}
         />
       )}
-      <ActionsSection />
+      {selectedEntityId && (
+        <ActionsSection
+          entityId={selectedEntityId}
+          taskables={taskables}
+          className={isDevice || isTrack ? "mt-2.5" : undefined}
+        />
+      )}
     </View>
   );
 }

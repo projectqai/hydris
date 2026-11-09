@@ -18,15 +18,20 @@ export const AFFILIATION_COLORS_HEX: Record<Affiliation, string> = Object.fromEn
 
 export const ICON_SIZE = 32;
 
+// under this a range and bearing is shorter than its own markers, so only its total is worth drawing
+export const RB_MIN_EXTENT_PX = 60;
+
 export const DEFAULT_POSITION = { lat: 52.3667, lng: 13.5033, zoom: 13 } as const;
 
+// dark/street are MapLibre vector style URLs (OpenFreeMap: keyless, no usage
+// limits); satellite is a raster tile URL template.
 export const BASE_LAYER_SOURCES: Record<
   BaseLayer,
   { url: string; attribution: string; maxZoom: number }
 > = {
   dark: {
-    url: "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-    attribution: "© OpenStreetMap contributors © CARTO",
+    url: "https://tiles.openfreemap.org/styles/dark",
+    attribution: "© OpenStreetMap contributors © OpenMapTiles © OpenFreeMap",
     maxZoom: 20,
   },
   satellite: {
@@ -35,8 +40,8 @@ export const BASE_LAYER_SOURCES: Record<
     maxZoom: 19,
   },
   street: {
-    url: "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-    attribution: "© OpenStreetMap contributors © CARTO",
+    url: "https://tiles.openfreemap.org/styles/liberty",
+    attribution: "© OpenStreetMap contributors © OpenMapTiles © OpenFreeMap",
     maxZoom: 20,
   },
 };

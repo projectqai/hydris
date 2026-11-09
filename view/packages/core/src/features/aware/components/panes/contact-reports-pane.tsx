@@ -1,14 +1,19 @@
 "use no memo";
 
 import { Badge } from "@hydris/ui/badge";
-import { EmptyState } from "@hydris/ui/empty-state";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@hydris/ui/empty-state";
 import type { Entity } from "@projectqai/proto/world";
 import { FlashList } from "@shopify/flash-list";
 import { Clock, Compass, Radar, Radio } from "lucide-react-native";
 import { memo, useRef, useState } from "react";
 import { Text, View } from "react-native";
 
-import { formatTime, getEntityName } from "../../../../lib/api/use-track-utils";
+import {
+  formatTime,
+  getDetectionLabel,
+  getEntityName,
+  getLastSeen,
+} from "../../../../lib/api/use-track-utils";
 import { ENTITY_NAV_PARAMS, useUrlParams } from "../../../../lib/use-url-params";
 import { EntityCardParts } from "../../entity-track-card";
 import { selectDetections, useEntityStore } from "../../store/entity-store";
@@ -27,15 +32,17 @@ type ContactCardProps = {
 function ContactCard({ entity, isSelected, onPress }: ContactCardProps) {
   const entities = useEntityStore((s) => s.entities);
   const classification = entity.detection?.classification;
+  const detectionLabel = getDetectionLabel(entity);
   const detectorId = entity.detection?.detectorEntityId;
   const detector = detectorId ? entities.get(detectorId) : undefined;
   const detectorName = detector ? getEntityName(detector) : undefined;
   const azimuth = entity.bearing?.azimuth;
-  const time = formatTime(entity.detection?.lastMeasured ?? entity.lifetime?.from);
+  const time = formatTime(getLastSeen(entity));
+  const title = detectionLabel?.text || classification || getEntityName(entity);
 
   return (
     <Root isSelected={isSelected} onPress={onPress}>
-      <Header title={classification?.toUpperCase() || getEntityName(entity)} />
+      <Header title={title} tailLength={detectionLabel?.tailLength} />
       {detectorName && (
         <Row>
           <SourceItem icon={Radio} value={detectorName} />
@@ -92,11 +99,11 @@ function ContactReportsPaneComponent() {
         </Badge>
       </View>
       {detections.length === 0 ? (
-        <EmptyState
-          icon={Radar}
-          title="No contact reports"
-          subtitle="Waiting for sensor detections"
-        />
+        <Empty>
+          <EmptyMedia icon={Radar} />
+          <EmptyTitle>No contact reports</EmptyTitle>
+          <EmptyDescription>Waiting for sensor detections</EmptyDescription>
+        </Empty>
       ) : (
         <FlashList
           ref={listRef}

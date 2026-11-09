@@ -77,7 +77,7 @@ export function createLabelLayer({
     getAlignmentBaseline: "top",
     getPixelOffset: (d) => [d.ox, d.offsetY / 2 + 4 + d.oy],
     fontFamily: "Inter, sans-serif",
-    fontWeight: "600",
+    fontWeight: "500",
     fontSettings: { sdf: false, fontSize: 96 },
     characterSet: "auto",
     pickable: false,

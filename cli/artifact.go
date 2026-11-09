@@ -374,6 +374,30 @@ func guessContentType(path string) string {
 		return "image/png"
 	case strings.HasSuffix(lower, ".gif"):
 		return "image/gif"
+	case strings.HasSuffix(lower, ".webp"):
+		return "image/webp"
+	case strings.HasSuffix(lower, ".mp3"):
+		return "audio/mpeg"
+	case strings.HasSuffix(lower, ".wav"):
+		return "audio/wav"
+	case strings.HasSuffix(lower, ".ogg"):
+		return "audio/ogg"
+	case strings.HasSuffix(lower, ".m4a"):
+		return "audio/mp4"
+	case strings.HasSuffix(lower, ".flac"):
+		return "audio/flac"
+	case strings.HasSuffix(lower, ".aac"):
+		return "audio/aac"
+	case strings.HasSuffix(lower, ".mp4"):
+		return "video/mp4"
+	case strings.HasSuffix(lower, ".webm"):
+		return "video/webm"
+	case strings.HasSuffix(lower, ".mov"):
+		return "video/quicktime"
+	case strings.HasSuffix(lower, ".avi"):
+		return "video/x-msvideo"
+	case strings.HasSuffix(lower, ".mkv"):
+		return "video/x-matroska"
 	case strings.HasSuffix(lower, ".pdf"):
 		return "application/pdf"
 	case strings.HasSuffix(lower, ".json"):

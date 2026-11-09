@@ -2,8 +2,6 @@ export type { ControlButtonProps, ControlIconButtonProps } from "./control-butto
 export { ControlButton, ControlIconButton } from "./control-button";
 export type { ControlInputProps } from "./control-input";
 export { ControlInput } from "./control-input";
-export type { ControlSelectProps, SelectOption } from "./control-select";
-export { ControlSelect } from "./control-select";
 export type { ControlSliderProps } from "./control-slider";
 export { ControlSlider } from "./control-slider";
 export type { ControlStepperProps } from "./control-stepper";

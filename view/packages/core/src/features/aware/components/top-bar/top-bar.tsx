@@ -2,9 +2,9 @@
 
 import { ControlButton, ControlIconButton } from "@hydris/ui/controls";
 import { useThemeColors } from "@hydris/ui/lib/theme";
-import { CommandTrigger } from "@hydris/ui/top-bar/command-trigger";
 import { CustomizeHelpIcon } from "@hydris/ui/top-bar/customize-help-icon";
 import { Bell, Undo2 } from "lucide-react-native";
+import type { ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import Animated, {
   interpolate,
@@ -12,20 +12,19 @@ import Animated, {
   type SharedValue,
   useAnimatedStyle,
   useDerivedValue,
+  useSharedValue,
 } from "react-native-reanimated";
 
 import { Z } from "../../constants";
 import { ContextStrip } from "./context-strip";
 import { LayoutMenu } from "./layout-menu";
-import { PlacementBarContent } from "./placement-bar-content";
+import { MissionCommandTrigger } from "./mission-command-trigger";
 import { PresetStrip } from "./preset-strip";
 
-type PlacementMode = {
+type ActiveMode = {
   progress: SharedValue<number>;
   isActive: boolean;
-  onConfirm: () => void;
-  onAbort: () => void;
-  onTypeCoordinates: () => void;
+  content: ReactNode;
 };
 
 export function TopBar({
@@ -37,10 +36,9 @@ export function TopBar({
   onDone,
   isLayoutModified,
   onResetToPreset,
-  onOpenPalette,
   commandButtonRight,
   isScreenLocked,
-  placement,
+  mode,
 }: {
   activePresetId: string;
   onPresetSelect: (id: string) => void;
@@ -50,20 +48,22 @@ export function TopBar({
   onDone: () => void;
   isLayoutModified: boolean;
   onResetToPreset: () => void;
-  onOpenPalette: () => void;
   commandButtonRight?: boolean;
   isScreenLocked: boolean;
-  placement: PlacementMode;
+  mode: ActiveMode | null;
 }) {
   const t = useThemeColors();
 
+  const noModeProgress = useSharedValue(0);
+  const modeBarProgress = mode?.progress ?? noModeProgress;
+
   const modeProgress = useDerivedValue(() =>
-    Math.max(customizeProgress.value, placement.progress.value),
+    Math.max(customizeProgress.value, modeBarProgress.value),
   );
 
   const containerStyle = useAnimatedStyle(() => {
     const cp = customizeProgress.value;
-    const pp = placement.progress.value;
+    const pp = modeBarProgress.value;
     const bg =
       pp > cp
         ? interpolateColor(pp, [0, 1], [t.topBarBg, t.topBarPlacementBg])
@@ -85,9 +85,9 @@ export function TopBar({
     transform: [{ translateY: interpolate(customizeProgress.value, [0.5, 1], [8, 0], "clamp") }],
   }));
 
-  const placementBarStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(placement.progress.value, [0.5, 1], [0, 1], "clamp"),
-    transform: [{ translateY: interpolate(placement.progress.value, [0.5, 1], [8, 0], "clamp") }],
+  const modeBarStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(modeBarProgress.value, [0.5, 1], [0, 1], "clamp"),
+    transform: [{ translateY: interpolate(modeBarProgress.value, [0.5, 1], [8, 0], "clamp") }],
   }));
 
   return (
@@ -100,10 +100,7 @@ export function TopBar({
           zIndex: Z.TOPBAR,
           // @ts-ignore react-native-web CSS property
           userSelect: "none",
-          shadowColor: "#000",
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.35,
-          shadowRadius: 6,
+          boxShadow: "0 2px 6px rgba(0,0,0,0.35)",
         },
         containerStyle,
       ]}
@@ -115,20 +112,21 @@ export function TopBar({
             alignItems: "center",
             paddingHorizontal: 16,
             paddingVertical: 10,
-            position: isCustomizing || placement.isActive ? "absolute" : "relative",
+            minHeight: 64,
+            position: "relative",
             left: 0,
             right: 0,
           },
           operateStyle,
         ]}
-        pointerEvents={isCustomizing || placement.isActive ? "none" : "auto"}
+        pointerEvents={isCustomizing || mode?.isActive ? "none" : "auto"}
       >
         <View className="flex-1" pointerEvents={isScreenLocked ? "none" : "auto"}>
           <ContextStrip />
         </View>
-        {!commandButtonRight && <CommandTrigger onPress={onOpenPalette} />}
+        {!commandButtonRight && <MissionCommandTrigger />}
         <View className="flex-1 flex-row items-center justify-end gap-1.5">
-          {commandButtonRight && <CommandTrigger onPress={onOpenPalette} />}
+          {commandButtonRight && <MissionCommandTrigger />}
           <View
             className="flex-row items-center gap-1.5"
             pointerEvents={isScreenLocked ? "none" : "auto"}
@@ -156,7 +154,8 @@ export function TopBar({
             alignItems: "center",
             paddingHorizontal: 16,
             paddingVertical: 10,
-            position: isCustomizing ? "relative" : "absolute",
+            minHeight: 64,
+            position: "absolute",
             left: 0,
             right: 0,
           },
@@ -188,7 +187,7 @@ export function TopBar({
           )}
           <ControlButton
             onPress={onDone}
-            label="Done"
+            label="Finish"
             variant="success"
             labelClassName="font-sans-semibold text-11"
             accessibilityLabel="Exit layout editing"
@@ -196,27 +195,26 @@ export function TopBar({
         </View>
       </Animated.View>
 
-      <Animated.View
-        style={[
-          {
-            flexDirection: "row",
-            alignItems: "center",
-            paddingHorizontal: 16,
-            paddingVertical: 10,
-            position: placement.isActive ? "relative" : "absolute",
-            left: 0,
-            right: 0,
-          },
-          placementBarStyle,
-        ]}
-        pointerEvents={placement.isActive ? "auto" : "none"}
-      >
-        <PlacementBarContent
-          onConfirm={placement.onConfirm}
-          onAbort={placement.onAbort}
-          onTypeCoordinates={placement.onTypeCoordinates}
-        />
-      </Animated.View>
+      {mode && (
+        <Animated.View
+          style={[
+            {
+              flexDirection: "row",
+              alignItems: "center",
+              paddingHorizontal: 16,
+              paddingVertical: 10,
+              minHeight: 64,
+              position: "absolute",
+              left: 0,
+              right: 0,
+            },
+            modeBarStyle,
+          ]}
+          pointerEvents={mode.isActive ? "auto" : "none"}
+        >
+          {mode.content}
+        </Animated.View>
+      )}
     </Animated.View>
   );
 }

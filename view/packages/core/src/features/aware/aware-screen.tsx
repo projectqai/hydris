@@ -1,6 +1,11 @@
 "use no memo";
 
-import type { PaletteMode } from "@hydris/ui/command-palette/palette-reducer";
+import {
+  initialPaletteState,
+  type PaletteMode,
+  type PaletteState,
+  paletteStateAt,
+} from "@hydris/ui/command-palette/palette-reducer";
 import { KeyboardProvider } from "@hydris/ui/keyboard";
 import {
   ComponentRegistryContext,
@@ -21,14 +26,14 @@ import { ScreenLockContext } from "@hydris/ui/screen-lock";
 import type { Entity } from "@projectqai/proto/world";
 import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View } from "react-native";
-import Animated, { runOnJS, useSharedValue, withTiming } from "react-native-reanimated";
+import Animated, { ReduceMotion, useSharedValue, withTiming } from "react-native-reanimated";
+import { scheduleOnRN } from "react-native-worklets";
 
 import { useEntityMutation } from "../../lib/api/use-entity-mutation";
 import { getEntityName } from "../../lib/api/use-track-utils";
 import { toast } from "../../lib/sonner";
 import { buildShareViewUrl, copyShareableLink } from "../../lib/use-url-params";
 import { DropZone } from "../mission-pack/drop-zone";
-import { useMissionHealthStore } from "../mission-pack/mission-health-store";
 import { CameraPaneProvider } from "./camera-pane-context";
 import { CommandPalette } from "./components/command-palette/command-palette";
 import { CoordinateEntryModal } from "./components/coordinate-entry-modal";
@@ -36,14 +41,18 @@ import { PaneEntityPickerModal } from "./components/layout/pane-entity-picker-mo
 import { PaneShell } from "./components/layout/pane-shell";
 import { WidgetPickerModal } from "./components/layout/widget-picker-modal";
 import { FloatingChatInput } from "./components/panes/floating-chat-input";
+import { BullseyeBarContent } from "./components/top-bar/bullseye-bar-content";
+import { DrawingBarContent } from "./components/top-bar/drawing-bar-content";
+import { EditBarContent } from "./components/top-bar/edit-bar-content";
+import { PlacementBarContent } from "./components/top-bar/placement-bar-content";
+import { RangeBarContent } from "./components/top-bar/range-bar-content";
 import { TopBar } from "./components/top-bar/top-bar";
 import { useUpdateBanner } from "./components/update-banner";
 import { Z } from "./constants";
-import { layoutSnapshotRef } from "./hooks/layout-snapshot";
 import { useDeepLink } from "./hooks/use-deep-link";
 import { useEscapeHandler } from "./hooks/use-escape-handler";
 import { useLayoutManager } from "./hooks/use-layout-manager";
-import { COMPONENT_LABELS, COMPONENT_REGISTRY, PRESETS } from "./layouts";
+import { COMPONENT_LABELS, COMPONENT_REGISTRY } from "./layouts";
 import { PaletteContext, type PaletteContextValue } from "./palette-context";
 import { PIPProvider } from "./pip-context";
 import { PIPPlayer } from "./pip-player";
@@ -51,22 +60,57 @@ import {
   PlacementContext,
   type PlacementContextValue,
   type PlacementOptions,
+  placementResetRef,
 } from "./placement-context";
+import { PRESETS } from "./presets";
+import { useBullseyeStore } from "./store/bullseye-store";
 import { useChatStore } from "./store/chat-store";
+import { selectEditPending, useEditStore } from "./store/edit-store";
 import { useEntityStore } from "./store/entity-store";
-import { useLeftPanelStore } from "./store/left-panel-store";
-import { mapEngineActions } from "./store/map-engine-store";
-import { useMapStore } from "./store/map-store";
+import { mapEngineActions, useMapEngineStore } from "./store/map-engine-store";
 import { useMissionKitStore } from "./store/mission-kit-store";
-import { DEFAULT_OVERLAYS, useOverlayStore } from "./store/overlay-store";
+import {
+  selectCanFinishPath,
+  selectPathKind,
+  selectPathPointCount,
+  selectPathPointsRemaining,
+  selectPathRings,
+  usePathStore,
+} from "./store/path-store";
 import { useRadialMenuStore } from "./store/radial-menu-store";
-import { useSelectionStore } from "./store/selection-store";
+import { saveEdit } from "./store/save-edit";
+import { savePath } from "./store/save-path";
+import { standDownModes } from "./store/stand-down";
 import { useTabStore } from "./store/tab-store";
+import { TOOL } from "./utils/map-paths";
+import { shareViewUrlDeps } from "./utils/share-view-url-deps";
 
 type AwareContentProps = {
   additionalWidgets?: WidgetGroup[];
   commandButtonRight?: boolean;
 };
+
+function useModeBarTransition(active: boolean) {
+  const progress = useSharedValue(active ? 1 : 0);
+  const [mounted, setMounted] = useState(active);
+
+  useEffect(() => {
+    if (active) {
+      setMounted(true);
+      progress.value = withTiming(1, { duration: 280, reduceMotion: ReduceMotion.System });
+      return;
+    }
+    progress.value = withTiming(
+      0,
+      { duration: 220, reduceMotion: ReduceMotion.System },
+      (finished) => {
+        if (finished) scheduleOnRN(setMounted, false);
+      },
+    );
+  }, [active, progress]);
+
+  return { mounted, progress };
+}
 
 function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentProps) {
   const additionalComponentIds = useMemo(
@@ -99,11 +143,40 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
   const [isCustomizing, setIsCustomizing] = useState(false);
   const [isScreenLocked, setIsScreenLocked] = useState(false);
   const customizeProgress = useSharedValue(0);
+  const isTouchInput = useMapEngineStore((s) => s.pointerType === "touch");
+  const pathKind = usePathStore(selectPathKind);
+  const rangeActive = pathKind === "range";
+  const drawingKind = pathKind === "range" ? null : pathKind;
+  const bullseyePlacing = useBullseyeStore((s) => s.isPlacing);
+  const pathPointsLeft = usePathStore(selectPathPointsRemaining);
+  const pathCanUndo = usePathStore(selectPathPointCount) > 0;
+  const pathRings = usePathStore(selectPathRings);
+  const pathCanFinish = usePathStore(selectCanFinishPath);
+  const editingEntityId = useEditStore((s) => s.entityId);
+  const editingKind = useEditStore((s) => s.kind);
+  const editingRings = useEditStore((s) => s.rings);
+  const editCanUndo = useEditStore(selectEditPending);
 
   const [placementEntity, setPlacementEntity] = useState<Entity | null>(null);
   const placementProgress = useSharedValue(0);
   const isPlacing = placementEntity !== null;
+  const { mounted: bullseyeBarMounted, progress: bullseyeProgress } = useModeBarTransition(
+    bullseyePlacing && !isPlacing && !isCustomizing,
+  );
+  const { mounted: rangeBarMounted, progress: rangeProgress } = useModeBarTransition(
+    rangeActive && !isPlacing && !isCustomizing,
+  );
+  const { mounted: drawBarMounted, progress: drawProgress } = useModeBarTransition(
+    drawingKind !== null && !isPlacing && !isCustomizing,
+  );
+  const { mounted: editBarMounted, progress: editProgress } = useModeBarTransition(
+    editingEntityId !== null && !isPlacing && !isCustomizing,
+  );
+  const placementEntityExists = useEntityStore(
+    (state) => placementEntity === null || state.entities.has(placementEntity.id),
+  );
   const cameraBeforePlacementRef = useRef<{ lat: number; lng: number; zoom: number } | null>(null);
+  const placementConfirmRef = useRef<PlacementOptions["onConfirm"]>(undefined);
   const [coordEntry, setCoordEntry] = useState<{
     latitude: number;
     longitude: number;
@@ -112,12 +185,13 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
   const [pendingAltitude, setPendingAltitude] = useState<number | null>(null);
   const { updateEntityLocation } = useEntityMutation();
 
-  const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
+  const [paletteState, setPaletteState] = useState<PaletteState | null>(null);
   const openPalette = useCallback((mode: PaletteMode = { kind: "root" }) => {
     useRadialMenuStore.getState().close();
-    setPaletteMode(mode);
+    setPaletteState(paletteStateAt(mode));
   }, []);
-  const closePalette = useCallback(() => setPaletteMode(null), []);
+
+  const closePalette = useCallback(() => setPaletteState(null), []);
   const paletteCtx = useMemo<PaletteContextValue>(() => ({ open: openPalette }), [openPalette]);
 
   const [pickerState, setPickerState] = useState<WidgetPickerState>(null);
@@ -139,19 +213,10 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
 
   useDeepLink(mapVisible, { applyExternalLayout, openPalette });
 
-  // Open the palette to mission-health when an import lands while the palette
-  // is closed. CommandPalette has its own watcher for the already-open case.
-  const latestImportedAt = useMissionHealthStore((s) =>
-    Number(s.mission?.importedAt?.seconds ?? 0),
+  const openMissionHealth = useCallback(
+    () => openPalette({ kind: "mission-health" }),
+    [openPalette],
   );
-  const lastSeenImportRef = useRef(latestImportedAt);
-  useEffect(() => {
-    if (latestImportedAt <= lastSeenImportRef.current) return;
-    lastSeenImportRef.current = latestImportedAt;
-    if (paletteMode === null) {
-      openPalette({ kind: "mission-health" });
-    }
-  }, [latestImportedAt, paletteMode, openPalette]);
 
   const finishExitCustomize = useCallback(() => {
     setIsCustomizing(false);
@@ -160,11 +225,12 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
 
   const exitCustomize = useCallback(() => {
     customizeProgress.value = withTiming(0, { duration: 220 }, (finished) => {
-      if (finished) runOnJS(finishExitCustomize)();
+      if (finished) scheduleOnRN(finishExitCustomize);
     });
   }, [customizeProgress, finishExitCustomize]);
 
   const finishExitPlacement = useCallback(() => {
+    placementConfirmRef.current = undefined;
     setPlacementEntity(null);
     setCoordEntry(null);
     setPendingAltitude(null);
@@ -173,9 +239,20 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
   const exitPlacement = useCallback(() => {
     // eslint-disable-next-line react-compiler/react-compiler
     placementProgress.value = withTiming(0, { duration: 220 }, (finished) => {
-      if (finished) runOnJS(finishExitPlacement)();
+      if (finished) scheduleOnRN(finishExitPlacement);
     });
   }, [placementProgress, finishExitPlacement]);
+
+  useEffect(() => {
+    placementResetRef.current = exitPlacement;
+    return () => {
+      placementResetRef.current = null;
+    };
+  }, [exitPlacement]);
+
+  useEffect(() => {
+    if (!placementEntityExists) exitPlacement();
+  }, [placementEntityExists, exitPlacement]);
 
   const enterCustomize = useCallback(() => {
     if (isPlacing) exitPlacement();
@@ -191,28 +268,42 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
         return;
       }
       if (isCustomizing) exitCustomize();
+      standDownModes();
       cameraBeforePlacementRef.current = mapEngineActions.getView();
-      if (options?.recenter && entity.geo) {
-        mapEngineActions.flyTo(entity.geo.latitude, entity.geo.longitude);
-      }
+      const recenterAt =
+        options?.recenterAt ??
+        (options?.recenter && entity.geo
+          ? { lat: entity.geo.latitude, lng: entity.geo.longitude }
+          : undefined);
+      if (recenterAt) mapEngineActions.flyTo(recenterAt.lat, recenterAt.lng);
+      placementConfirmRef.current = options?.onConfirm;
       setPlacementEntity(entity);
-      setPaletteMode(null);
+      setPaletteState(null);
       placementProgress.value = withTiming(1, { duration: 280 });
-      toast.info(`Pan the map to position ${getEntityName(entity)}`);
     },
     [placementProgress, isCustomizing, exitCustomize, mapVisible],
   );
 
   const confirmPlacement = useCallback(async () => {
     if (!placementEntity) return;
+    if (!useEntityStore.getState().entities.has(placementEntity.id)) {
+      toast.error("Entity no longer available");
+      exitPlacement();
+      return;
+    }
     const view = mapEngineActions.getView();
     if (!view) return;
     try {
-      await updateEntityLocation(placementEntity, {
-        latitude: view.lat,
-        longitude: view.lng,
-        altitude: pendingAltitude ?? undefined,
-      });
+      const confirm = placementConfirmRef.current;
+      if (confirm) {
+        await confirm({ lat: view.lat, lng: view.lng, alt: pendingAltitude ?? undefined });
+      } else {
+        await updateEntityLocation(placementEntity, {
+          latitude: view.lat,
+          longitude: view.lng,
+          altitude: pendingAltitude ?? undefined,
+        });
+      }
       toast.success(`Position set for ${getEntityName(placementEntity)}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to set position");
@@ -245,8 +336,8 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
   }, [exitPlacement]);
 
   const placementCtx = useMemo<PlacementContextValue>(
-    () => ({ enterPlacement, isPlacing, canPlace: mapVisible }),
-    [enterPlacement, isPlacing, mapVisible],
+    () => ({ enterPlacement, exitPlacement, isPlacing, canPlace: mapVisible }),
+    [enterPlacement, exitPlacement, isPlacing, mapVisible],
   );
 
   useEffect(() => {
@@ -254,27 +345,12 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
   }, [isPlacing, mapVisible, exitPlacement]);
 
   const handleShareView = useCallback(() => {
-    const fullUrl = buildShareViewUrl({
-      getSelectedEntityId: () => useSelectionStore.getState().selectedEntityId,
-      getMapView: () => mapEngineActions.getView(),
-      getTab: () => useTabStore.getState().activeDetailTab,
-      getLayoutSnapshot: () => layoutSnapshotRef.current,
-      getOverlayState: () => {
-        const overlays = useOverlayStore.getState();
-        return {
-          tracks: overlays.tracks,
-          sensors: overlays.sensors,
-          network: overlays.network,
-          visualization: overlays.visualization,
-        };
-      },
-      getDefaultOverlays: () => DEFAULT_OVERLAYS,
-      getHiddenLayers: () => useOverlayStore.getState().hiddenLayers,
-      getLayerOpacity: () => useOverlayStore.getState().layerOpacity,
-      getLayer: () => useMapStore.getState().layer,
-      getListMode: () => useLeftPanelStore.getState().listMode,
-      getDetailTab: () => useTabStore.getState().activeDetailTab,
-    });
+    const fullUrl = buildShareViewUrl(
+      shareViewUrlDeps({
+        getMapView: () => mapEngineActions.getView(),
+        getTab: () => useTabStore.getState().activeDetailTab,
+      }),
+    );
     if (fullUrl) copyShareableLink(fullUrl);
   }, []);
 
@@ -309,10 +385,11 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
-        setPaletteMode((v) => {
+        setPaletteState((v) => {
           if (v) return null;
           useRadialMenuStore.getState().close();
-          return { kind: "root" };
+
+          return initialPaletteState;
         });
         return;
       }
@@ -362,6 +439,80 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
     ],
   );
 
+  const modeBar = isPlacing
+    ? {
+        progress: placementProgress,
+        isActive: isPlacing,
+        content: (
+          <PlacementBarContent
+            onConfirm={confirmPlacement}
+            onAbort={cancelPlacement}
+            onTypeCoordinates={openCoordEntry}
+          />
+        ),
+      }
+    : bullseyeBarMounted
+      ? {
+          progress: bullseyeProgress,
+          isActive: bullseyePlacing && !isCustomizing,
+          content: <BullseyeBarContent onCancel={standDownModes} />,
+        }
+      : drawBarMounted
+        ? {
+            progress: drawProgress,
+            isActive: drawingKind !== null && !isCustomizing,
+            content: (
+              <DrawingBarContent
+                isTouchInput={isTouchInput}
+                kind={drawingKind}
+                label={drawingKind ? TOOL[drawingKind].label : ""}
+                canUndo={pathCanUndo}
+                rings={pathRings}
+                onRingsChange={(rings) => usePathStore.getState().setRings(rings)}
+                onFinish={
+                  pathPointsLeft === null && pathCanFinish
+                    ? () => void savePath(usePathStore.getState().finish())
+                    : undefined
+                }
+                onUndo={() => usePathStore.getState().undo()}
+                onCancel={() => usePathStore.getState().cancel()}
+              />
+            ),
+          }
+        : editBarMounted
+          ? {
+              progress: editProgress,
+              isActive: editingEntityId !== null && !isCustomizing,
+              content: (
+                <EditBarContent
+                  isTouchInput={isTouchInput}
+                  kind={editingKind}
+                  canUndo={editCanUndo}
+                  rings={TOOL[editingKind].rings ? editingRings : undefined}
+                  onRingsChange={(rings) => useEditStore.getState().setRings(rings)}
+                  onUndo={() => useEditStore.getState().undo()}
+                  onEnd={() => void saveEdit(useEditStore.getState().end())}
+                />
+              ),
+            }
+          : rangeBarMounted
+            ? {
+                progress: rangeProgress,
+                isActive: rangeActive && !isCustomizing,
+                content: (
+                  <RangeBarContent
+                    isTouchInput={isTouchInput}
+                    label={TOOL.range.label}
+                    canUndo={pathCanUndo}
+                    onFinish={() => {
+                      void savePath(usePathStore.getState().finish());
+                    }}
+                    onUndo={() => usePathStore.getState().undo()}
+                  />
+                ),
+              }
+            : null;
+
   return (
     <ScreenLockContext.Provider value={isScreenLocked}>
       <PlacementContext.Provider value={placementCtx}>
@@ -376,16 +527,9 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
               onDone={exitCustomize}
               isLayoutModified={!!isLayoutModified}
               onResetToPreset={handleResetToPreset}
-              onOpenPalette={() => openPalette()}
               commandButtonRight={commandButtonRight}
               isScreenLocked={isScreenLocked}
-              placement={{
-                progress: placementProgress,
-                isActive: isPlacing,
-                onConfirm: confirmPlacement,
-                onAbort: cancelPlacement,
-                onTypeCoordinates: openCoordEntry,
-              }}
+              mode={modeBar}
             />
 
             <View style={{ flex: 1 }}>
@@ -447,10 +591,11 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
                 onClose={closeEntityPicker}
               />
             )}
-            {paletteMode && (
+            {paletteState && (
               <CommandPalette
                 onClose={closePalette}
-                initialMode={paletteMode}
+                onReopen={setPaletteState}
+                initialState={paletteState}
                 layoutActions={{
                   presetSelect: handlePresetSelect,
                   customize: enterCustomize,
@@ -478,7 +623,7 @@ function AwareContent({ additionalWidgets, commandButtonRight }: AwareContentPro
             )}
             <FloatingChatInput />
             <PIPPlayer minTop={70} />
-            <DropZone />
+            <DropZone onImported={openMissionHealth} />
           </View>
         </PaletteContext.Provider>
       </PlacementContext.Provider>

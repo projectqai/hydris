@@ -9,6 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -35,6 +39,11 @@ var (
 	cHalBleUnsubscribe  func(handle int64, charUUID string) int32
 	cHalBleServices     func(handle int64, buf *byte, n int32) int32
 	cHalBleOnDisconnect func(handle int64, cb uintptr)
+
+	// Joystick. Absent from a dylib built before joystick support.
+	cHalJoystickList func(buf *byte, n int32) int32
+	cHalJoystickRead func(id string, axes *float32, buttons *byte) int32
+	cHalJoystickMain func()
 
 	// Error
 	cHalGetError func(buf *byte, n int32) int32
@@ -90,6 +99,111 @@ func init() {
 		BLEServices:     darwinBLEServices,
 		BLEOnDisconnect: darwinBLEOnDisconnect,
 	}
+
+	if _, err := purego.Dlsym(dylib, "HalJoystickMainThread"); err != nil {
+		slog.Warn("HAL dylib predates joystick support, run make hal_dylib")
+		return
+	}
+	purego.RegisterLibFunc(&cHalJoystickList, dylib, "HalJoystickList")
+	purego.RegisterLibFunc(&cHalJoystickRead, dylib, "HalJoystickRead")
+	purego.RegisterLibFunc(&cHalJoystickMain, dylib, "HalJoystickMainThread")
+	P.JoystickWatch = darwinJoystickWatch
+	P.JoystickOpen = darwinJoystickOpen
+	P.JoystickRead = darwinJoystickRead
+	P.JoystickClose = darwinJoystickClose
+
+	// The main goroutine starts out on the main thread, and only stays there if
+	// it is locked during init.
+	runtime.LockOSThread()
+	P.MainThread = cHalJoystickMain
+}
+
+// Joystick
+
+const (
+	darwinJoystickAxes    = 8
+	darwinJoystickButtons = 8
+)
+
+var (
+	darwinJoystickMu      sync.Mutex
+	darwinJoystickHandles = map[int64]string{}
+	darwinJoystickNext    int64
+)
+
+func darwinJoysticks() []JoystickDevice {
+	buf := make([]byte, 16384)
+	n := cHalJoystickList(&buf[0], int32(len(buf)))
+	if n <= 0 {
+		return nil
+	}
+	var devices []JoystickDevice
+	if err := json.Unmarshal(buf[:n], &devices); err != nil {
+		slog.Warn("joystick list", "error", err)
+		return nil
+	}
+	return devices
+}
+
+func darwinJoystickWatch(cb func([]JoystickDevice)) (stop func()) {
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		var last []JoystickDevice
+		first := true
+		for {
+			devices := darwinJoysticks()
+			if first || !slices.Equal(devices, last) {
+				cb(devices)
+				last, first = devices, false
+			}
+			select {
+			case <-done:
+				return
+			case <-t.C:
+			}
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }) }
+}
+
+func darwinJoystickOpen(id string) (int64, error) {
+	if !slices.ContainsFunc(darwinJoysticks(), func(d JoystickDevice) bool { return d.ID == id }) {
+		return 0, fmt.Errorf("joystick %s is not connected", id)
+	}
+	darwinJoystickMu.Lock()
+	defer darwinJoystickMu.Unlock()
+	darwinJoystickNext++
+	darwinJoystickHandles[darwinJoystickNext] = id
+	return darwinJoystickNext, nil
+}
+
+func darwinJoystickRead(handle int64) (JoystickState, error) {
+	darwinJoystickMu.Lock()
+	id, ok := darwinJoystickHandles[handle]
+	darwinJoystickMu.Unlock()
+	if !ok {
+		return JoystickState{}, fmt.Errorf("joystick not open")
+	}
+	axes := make([]float32, darwinJoystickAxes)
+	raw := make([]byte, darwinJoystickButtons)
+	if cHalJoystickRead(id, &axes[0], &raw[0]) != 0 {
+		return JoystickState{}, fmt.Errorf("joystick gone")
+	}
+	buttons := make([]bool, len(raw))
+	for i, b := range raw {
+		buttons[i] = b != 0
+	}
+	return JoystickState{Axes: axes, Buttons: buttons}, nil
+}
+
+func darwinJoystickClose(handle int64) error {
+	darwinJoystickMu.Lock()
+	delete(darwinJoystickHandles, handle)
+	darwinJoystickMu.Unlock()
+	return nil
 }
 
 func getHalError() error {

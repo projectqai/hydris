@@ -45,6 +45,7 @@ type Detail struct {
 	Remarks      *Remarks     `xml:"remarks,omitempty"`
 	Shape        *Shape       `xml:"shape,omitempty"`
 	StrokeColor  *ColorAttr   `xml:"strokeColor,omitempty"`
+	StrokeStyle  *StrokeStyle `xml:"strokeStyle,omitempty"`
 	FillColor    *ColorAttr   `xml:"fillColor,omitempty"`
 	StrokeWeight *WeightAttr  `xml:"strokeWeight,omitempty"`
 }
@@ -87,6 +88,13 @@ type Ellipse struct {
 	Major float64 `xml:"major,attr"`
 	Minor float64 `xml:"minor,attr"`
 	Angle float64 `xml:"angle,attr"`
+}
+
+// StrokeStyle is the ATAK line style detail. Values are "solid", "dashed",
+// "dotted" or "outlined"; see StrokeFillDetailHandler in
+// AndroidTacticalAssaultKit-CIV, which only reads the "value" attribute.
+type StrokeStyle struct {
+	Value string `xml:"value,attr"`
 }
 
 type ColorAttr struct {
@@ -281,11 +289,20 @@ func EntityToCoT(entity *pb.Entity) ([]byte, error) {
 func EntityDeleteCoT(entity *pb.Entity) ([]byte, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	event := Event{
+	xmlData, err := xml.MarshalIndent(deleteEvent(entity.Id, now), "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal XML: %w", err)
+	}
+
+	return append(xmlData, '\n'), nil
+}
+
+func deleteEvent(uid, now string) Event {
+	return Event{
 		Version: "2.0",
 		Type:    "t-x-d-d",
 		How:     "h-g-i-g-o",
-		UID:     entity.Id + "-delete",
+		UID:     uid + "-delete",
 		Time:    now,
 		Start:   now,
 		Stale:   now,
@@ -295,20 +312,13 @@ func EntityDeleteCoT(entity *pb.Entity) ([]byte, error) {
 		},
 		Detail: Detail{
 			Links: []Link{{
-				UID:      entity.Id,
+				UID:      uid,
 				Type:     "none",
 				Relation: "none",
 			}},
 			ForceDelete: &ForceDelete{},
 		},
 	}
-
-	xmlData, err := xml.MarshalIndent(event, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal XML: %w", err)
-	}
-
-	return append(xmlData, '\n'), nil
 }
 
 func sidcToCoTType(sidc string) string {
@@ -544,7 +554,10 @@ func IsChatCoT(data string) bool {
 	return strings.Contains(data, "<__chat") || strings.Contains(data, `type="b-t-f"`)
 }
 
-// EntityToShapeCoT converts a Hydris entity with a GeoShapeComponent to CoT shape XML.
+// EntityToShapeCoT converts a Hydris entity with a GeoShapeComponent to CoT
+// shape XML. Geometry collections are flattened to one CoT event per leaf
+// geometry, concatenated. Shape events live in the "<entity id>.shape" UID
+// namespace so they don't collide with the entity's own marker event.
 func EntityToShapeCoT(entity *pb.Entity) ([]byte, error) {
 	if entity.Shape == nil || entity.Shape.Geometry == nil || entity.Shape.Geometry.Planar == nil {
 		return nil, nil
@@ -570,25 +583,153 @@ func EntityToShapeCoT(entity *pb.Entity) ([]byte, error) {
 		})
 	}
 
-	geom := entity.Shape.Geometry.Planar
+	var out []byte
+	for _, item := range flattenPlanar(shapeUIDBase(entity), entity.Shape.Geometry.Planar) {
+		xmlData, err := marshalPlanarCoT(item, callsign, now, staleTime, assocLinks)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, xmlData...)
+	}
 
-	switch g := geom.Plane.(type) {
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// EntityShapeDeleteCoT generates force-delete events for every shape UID an
+// entity's geometry occupies. Callers that stream CoT should send this
+// alongside EntityDeleteCoT; it returns nil for entities without a shape.
+func EntityShapeDeleteCoT(entity *pb.Entity) ([]byte, error) {
+	if entity.Shape == nil || entity.Shape.Geometry == nil {
+		return nil, nil
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	var out []byte
+	for _, item := range flattenPlanar(shapeUIDBase(entity), entity.Shape.Geometry.Planar) {
+		xmlData, err := xml.MarshalIndent(deleteEvent(item.uid, now), "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal shape delete XML: %w", err)
+		}
+		out = append(out, xmlData...)
+		out = append(out, '\n')
+	}
+
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// shapeStrokeWeight is the line width for exported shapes. ATAK defaults to 6.0
+// when the detail is absent, which is heavy for detection fans.
+const shapeStrokeWeight = 1.0
+
+// planarItem is one leaf geometry paired with the CoT UID it is emitted under.
+type planarItem struct {
+	uid  string
+	geom *pb.PlanarGeometry
+}
+
+func shapeUIDBase(entity *pb.Entity) string {
+	return entity.Id + ".shape"
+}
+
+// flattenPlanar walks geometry collections depth-first, naming each leaf by its
+// index path so UIDs stay stable across updates.
+func flattenPlanar(base string, geom *pb.PlanarGeometry) []planarItem {
+	if geom == nil {
+		return nil
+	}
+
+	if c, ok := geom.Plane.(*pb.PlanarGeometry_Collection); ok {
+		var items []planarItem
+		for i, child := range c.Collection.GetGeometries() {
+			items = append(items, flattenPlanar(fmt.Sprintf("%s.%d", base, i), child)...)
+		}
+		return items
+	}
+
+	return []planarItem{{uid: base, geom: geom}}
+}
+
+func marshalPlanarCoT(item planarItem, callsign string, now, stale time.Time, assocLinks []Link) ([]byte, error) {
+	style := strokeStyleFor(item.geom)
+
+	switch g := item.geom.Plane.(type) {
 	case *pb.PlanarGeometry_Circle:
-		return marshalCircleCoT(entity.Id, callsign, now, staleTime, g.Circle, assocLinks)
+		return marshalCircleCoT(item.uid, callsign, now, stale, g.Circle, style, assocLinks)
 
 	case *pb.PlanarGeometry_Polygon:
-		return marshalPolygonCoT(entity.Id, callsign, now, staleTime, g.Polygon.Outer, true, assocLinks)
+		return marshalPolygonCoT(item.uid, callsign, now, stale, g.Polygon.GetOuter(), true, style, assocLinks)
 
 	case *pb.PlanarGeometry_Line:
-		closed := isRingClosed(g.Line)
-		return marshalPolygonCoT(entity.Id, callsign, now, staleTime, g.Line, closed, assocLinks)
+		return marshalPolygonCoT(item.uid, callsign, now, stale, g.Line, isRingClosed(g.Line), style, assocLinks)
+
+	case *pb.PlanarGeometry_Point:
+		return marshalShapePointCoT(item.uid, callsign, now, stale, g.Point, assocLinks)
 
 	default:
 		return nil, nil
 	}
 }
 
-func marshalCircleCoT(uid, callsign string, now, stale time.Time, circle *pb.PlanarCircle, assocLinks []Link) ([]byte, error) {
+// strokeStyleFor always returns a style: ATAK only updates the line style of an
+// existing shape when the detail is present, so an entity switching back to a
+// solid line has to say so explicitly.
+func strokeStyleFor(geom *pb.PlanarGeometry) *StrokeStyle {
+	switch geom.GetLineStyle() {
+	case pb.LineStyle_LineStyleDashed:
+		return &StrokeStyle{Value: "dashed"}
+	case pb.LineStyle_LineStyleDotted:
+		return &StrokeStyle{Value: "dotted"}
+	default:
+		return &StrokeStyle{Value: "solid"}
+	}
+}
+
+func marshalShapePointCoT(uid, callsign string, now, stale time.Time, pt *pb.PlanarPoint, assocLinks []Link) ([]byte, error) {
+	if pt == nil {
+		return nil, nil
+	}
+
+	alt := 0.0
+	if pt.Altitude != nil {
+		alt = *pt.Altitude
+	}
+
+	event := Event{
+		Version: "2.0",
+		Type:    "u-d-p",
+		How:     "h-g-i-g-o",
+		UID:     uid,
+		Time:    now.Format(time.RFC3339),
+		Start:   now.Format(time.RFC3339),
+		Stale:   stale.Format(time.RFC3339),
+		Point: Point{
+			Lat: pt.Latitude,
+			Lon: pt.Longitude,
+			Hae: alt,
+			CE:  9999999.0,
+			LE:  9999999.0,
+		},
+		Detail: Detail{
+			Contact: Contact{Callsign: callsign},
+			Links:   assocLinks,
+		},
+	}
+
+	xmlData, err := xml.MarshalIndent(event, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal point CoT: %w", err)
+	}
+	return append(xmlData, '\n'), nil
+}
+
+func marshalCircleCoT(uid, callsign string, now, stale time.Time, circle *pb.PlanarCircle, style *StrokeStyle, assocLinks []Link) ([]byte, error) {
 	if circle == nil || circle.Center == nil {
 		return nil, nil
 	}
@@ -614,8 +755,10 @@ func marshalCircleCoT(uid, callsign string, now, stale time.Time, circle *pb.Pla
 			LE:  9999999.0,
 		},
 		Detail: Detail{
-			Contact: Contact{Callsign: callsign},
-			Links:   assocLinks,
+			Contact:      Contact{Callsign: callsign},
+			Links:        assocLinks,
+			StrokeStyle:  style,
+			StrokeWeight: &WeightAttr{Value: shapeStrokeWeight},
 			Shape: &Shape{
 				Ellipse: &Ellipse{
 					Major: circle.RadiusM,
@@ -633,7 +776,7 @@ func marshalCircleCoT(uid, callsign string, now, stale time.Time, circle *pb.Pla
 	return append(xmlData, '\n'), nil
 }
 
-func marshalPolygonCoT(uid, callsign string, now, stale time.Time, ring *pb.PlanarRing, closed bool, assocLinks []Link) ([]byte, error) {
+func marshalPolygonCoT(uid, callsign string, now, stale time.Time, ring *pb.PlanarRing, closed bool, style *StrokeStyle, assocLinks []Link) ([]byte, error) {
 	if ring == nil || len(ring.Points) < 2 {
 		return nil, nil
 	}
@@ -662,14 +805,9 @@ func marshalPolygonCoT(uid, callsign string, now, stale time.Time, ring *pb.Plan
 		links = append(links, links[0])
 	}
 
-	cotType := "u-d-f"
-	if closed {
-		cotType = "u-d-f"
-	}
-
 	event := Event{
 		Version: "2.0",
-		Type:    cotType,
+		Type:    "u-d-f",
 		How:     "h-g-i-g-o",
 		UID:     uid,
 		Time:    now.Format(time.RFC3339),
@@ -682,8 +820,10 @@ func marshalPolygonCoT(uid, callsign string, now, stale time.Time, ring *pb.Plan
 			LE:  9999999.0,
 		},
 		Detail: Detail{
-			Contact: Contact{Callsign: callsign},
-			Links:   append(assocLinks, links...),
+			Contact:      Contact{Callsign: callsign},
+			Links:        append(append([]Link{}, assocLinks...), links...),
+			StrokeStyle:  style,
+			StrokeWeight: &WeightAttr{Value: shapeStrokeWeight},
 		},
 	}
 

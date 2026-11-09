@@ -2,6 +2,7 @@ package tileserver
 
 import (
 	"context"
+	"embed"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -13,6 +14,9 @@ import (
 	"github.com/projectqai/hydris/builtin/artifacts"
 	pb "github.com/projectqai/proto/go"
 )
+
+//go:embed all:glyphs
+var glyphsFS embed.FS
 
 type Server struct {
 	store    *artifacts.LocalStore
@@ -135,6 +139,19 @@ func (s *Server) OnArtifactWritten(ctx context.Context, entityID, contentType st
 	}); err != nil {
 		slog.Warn("tileserver: push map layer", "entity", entityID, "error", err)
 	}
+}
+
+// GlyphsHandler serves font glyph pbfs bundled in the binary
+func (s *Server) GlyphsHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, err := glyphsFS.ReadFile("glyphs/" + r.PathValue("fontstack") + "/" + r.PathValue("range"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(data)
+	})
 }
 
 func contentTypeFor(format string) string {

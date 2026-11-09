@@ -16,7 +16,7 @@ vi.mock("../../../lib/api/world-client", () => ({
   },
 }));
 
-import { ENTITY_STREAM_FILTER, useEntityStore } from "./entity-store";
+import { useEntityStore } from "./entity-store";
 
 const Updated = EntityChange.EntityChangeUpdated;
 const Expired = EntityChange.EntityChangeExpired;
@@ -97,34 +97,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("startStream", () => {
-  it("subscribes to watchEntities with the entity filter", async () => {
-    const { iterator } = makeStream();
-    watchEntitiesMock.mockReturnValue(iterator);
-
-    useEntityStore.getState().startStream();
-    await flushMicrotasks();
-
-    expect(watchEntitiesMock).toHaveBeenCalledOnce();
-    const [request] = watchEntitiesMock.mock.calls[0] as [{ filter: unknown }];
-    expect(request.filter).toEqual(ENTITY_STREAM_FILTER);
-  });
-});
-
 describe("batching and flush", () => {
-  it("first event sets isConnected", async () => {
-    const { iterator, push } = makeStream();
-    watchEntitiesMock.mockReturnValue(iterator);
-
-    useEntityStore.getState().startStream();
-    await flushMicrotasks();
-
-    push({ entity: entity("e1"), t: Updated });
-    await flushMicrotasks();
-
-    expect(useEntityStore.getState().isConnected).toBe(true);
-  });
-
   it("events are batched and not applied until 250ms elapses", async () => {
     const { iterator, push } = makeStream();
     watchEntitiesMock.mockReturnValue(iterator);

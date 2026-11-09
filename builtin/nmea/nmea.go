@@ -35,6 +35,9 @@ type StreamState struct {
 	fragmentMu  sync.Mutex
 	lastGoodGGA time.Time
 
+	aisStaticMu sync.Mutex
+	aisStatic   map[uint32]*pb.TransponderAIS
+
 	lastVelocityEast  *float64
 	lastVelocityNorth *float64
 	lastYawRate       *float64
@@ -90,7 +93,23 @@ type AISVessel struct {
 	Type               uint8
 	PositionAccuracy   bool
 	NavigationalStatus uint8
+	RateOfTurn         *int16 // raw ITU-R M.1371 ROT field, only in class A position reports
 	LastSeen           time.Time
+}
+
+// aisRotToYawRate decodes the ITU-R M.1371 ROT field into rad/s (positive =
+// turning starboard): deg/min = (rot/4.733)², signed. -128 = not available,
+// ±127 = turning faster than 5°/30s with no turn indicator (direction only).
+func aisRotToYawRate(rot *int16) *float64 {
+	if rot == nil || *rot == -128 || *rot == 127 || *rot == -127 {
+		return nil
+	}
+	degPerMin := math.Pow(float64(*rot)/4.733, 2)
+	if *rot < 0 {
+		degPerMin = -degPerMin
+	}
+	yawRate := degPerMin * math.Pi / 180.0 / 60.0
+	return &yawRate
 }
 
 func Run(ctx context.Context, logger *slog.Logger, _ string) error {
@@ -1147,9 +1166,8 @@ func processAISVessel(ctx context.Context, logger *slog.Logger, vessel *AISVesse
 			state.lastVelocityNorth = &north
 		}
 		entity.Kinematics = selfKinematics(state)
-		mmsi := vessel.MMSI
 		entity.Transponder = &pb.TransponderComponent{
-			Ais: &pb.TransponderAIS{Mmsi: &mmsi},
+			Ais: mergeAISStatic(state, vessel.MMSI, nil),
 		}
 		return pushSelfUpdate(ctx, logger, entity, worldClient, "AIS self")
 	}
@@ -1163,6 +1181,7 @@ func processAISVessel(ctx context.Context, logger *slog.Logger, vessel *AISVesse
 	if entity == nil {
 		return false
 	}
+	entity.Transponder.Ais = mergeAISStatic(state, vessel.MMSI, entity.Transponder.Ais)
 
 	_, err := worldClient.Push(ctx, &pb.EntityChangeRequest{
 		Changes: []*pb.Entity{entity},
@@ -1182,6 +1201,7 @@ func processAISPacket(ctx context.Context, logger *slog.Logger, packet ais.Packe
 			return false
 		}
 
+		rot := msg.RateOfTurn
 		return processAISVessel(ctx, logger, &AISVessel{
 			MMSI:               mmsi,
 			Latitude:           float64(msg.Latitude),
@@ -1191,6 +1211,7 @@ func processAISPacket(ctx context.Context, logger *slog.Logger, packet ais.Packe
 			Heading:            int(msg.TrueHeading),
 			PositionAccuracy:   msg.PositionAccuracy,
 			NavigationalStatus: msg.NavigationalStatus,
+			RateOfTurn:         &rot,
 			LastSeen:           time.Now(),
 		}, worldClient, controllerName, trackerID, config, state)
 
@@ -1275,6 +1296,7 @@ func processAISPacket(ctx context.Context, logger *slog.Logger, packet ais.Packe
 		if vn != "" && vn != "@@@@@@@@@@@@@@@@@@@@" {
 			transponderAIS.VesselName = &vn
 		}
+		setAISDimension(transponderAIS, msg.Dimension)
 
 		entity := &pb.Entity{
 			Id: entityID,
@@ -1285,7 +1307,7 @@ func processAISPacket(ctx context.Context, logger *slog.Logger, packet ais.Packe
 				Tracker: &trackerID,
 			},
 			Transponder: &pb.TransponderComponent{
-				Ais: transponderAIS,
+				Ais: mergeAISStatic(state, mmsi, transponderAIS),
 			},
 			Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
 		}
@@ -1308,8 +1330,105 @@ func processAISPacket(ctx context.Context, logger *slog.Logger, packet ais.Packe
 		}
 
 		return true
+
+	case ais.StaticDataReport:
+		mmsi := msg.UserID
+		if mmsi == 0 {
+			return false
+		}
+
+		transponderAIS := &pb.TransponderAIS{
+			Mmsi: &mmsi,
+		}
+
+		entity := &pb.Entity{
+			Id: fmt.Sprintf("mmsi:%d", mmsi),
+			Controller: &pb.Controller{
+				Id: &controllerName,
+			},
+			Track: &pb.TrackComponent{
+				Tracker: &trackerID,
+			},
+			Routing: &pb.Routing{Channels: []*pb.Channel{{}}},
+		}
+
+		if msg.ReportA.Valid {
+			name := strings.TrimSpace(msg.ReportA.Name)
+			if name != "" && name != "@@@@@@@@@@@@@@@@@@@@" {
+				entity.Label = &name
+				transponderAIS.VesselName = &name
+			}
+		}
+		if msg.ReportB.Valid {
+			cs := strings.TrimSpace(msg.ReportB.CallSign)
+			if cs != "" && cs != "@@@@@@" && cs != "@@@@@@@" {
+				transponderAIS.Callsign = &cs
+			}
+			setAISDimension(transponderAIS, msg.ReportB.Dimension)
+		}
+		entity.Transponder = &pb.TransponderComponent{
+			Ais: mergeAISStatic(state, mmsi, transponderAIS),
+		}
+
+		_, err := worldClient.Push(ctx, &pb.EntityChangeRequest{
+			Changes: []*pb.Entity{entity},
+		})
+		if err != nil {
+			logger.Error("Failed to push vessel static data report", "error", err)
+			return false
+		}
+
+		return true
 	}
 	return false
+}
+
+// setAISDimension copies the ITU-R M.1371 position reference dimensions
+// (antenna to bow/stern/port/starboard). All zeros means not available.
+func setAISDimension(t *pb.TransponderAIS, d ais.FieldDimension) {
+	if d.A == 0 && d.B == 0 && d.C == 0 && d.D == 0 {
+		return
+	}
+	bow, stern, port, starboard := uint32(d.A), uint32(d.B), uint32(d.C), uint32(d.D)
+	t.DimensionToBowM = &bow
+	t.DimensionToSternM = &stern
+	t.DimensionToPortM = &port
+	t.DimensionToStarboardM = &starboard
+}
+
+// Static data (msg 5/24) and position reports arrive as separate messages, but
+// a component push replaces the whole TransponderComponent. Merge through a
+// per-stream cache so position reports don't wipe the static fields.
+func mergeAISStatic(state *StreamState, mmsi uint32, upd *pb.TransponderAIS) *pb.TransponderAIS {
+	state.aisStaticMu.Lock()
+	defer state.aisStaticMu.Unlock()
+
+	if state.aisStatic == nil {
+		state.aisStatic = make(map[uint32]*pb.TransponderAIS)
+	}
+	cached := state.aisStatic[mmsi]
+	if cached == nil {
+		cached = &pb.TransponderAIS{Mmsi: &mmsi}
+		state.aisStatic[mmsi] = cached
+	}
+	if upd != nil {
+		if upd.Imo != nil {
+			cached.Imo = upd.Imo
+		}
+		if upd.Callsign != nil {
+			cached.Callsign = upd.Callsign
+		}
+		if upd.VesselName != nil {
+			cached.VesselName = upd.VesselName
+		}
+		if upd.DimensionToBowM != nil {
+			cached.DimensionToBowM = upd.DimensionToBowM
+			cached.DimensionToSternM = upd.DimensionToSternM
+			cached.DimensionToPortM = upd.DimensionToPortM
+			cached.DimensionToStarboardM = upd.DimensionToStarboardM
+		}
+	}
+	return proto.Clone(cached).(*pb.TransponderAIS)
 }
 
 func checkGeoFilter(vessel *AISVessel, config *StreamConfig) bool {
@@ -1421,6 +1540,15 @@ func VesselToEntity(vessel *AISVessel, controllerName string, trackerID string, 
 				East:  &east,
 				North: &north,
 			},
+		}
+	}
+
+	if yawRate := aisRotToYawRate(vessel.RateOfTurn); yawRate != nil {
+		if entity.Kinematics == nil {
+			entity.Kinematics = &pb.KinematicsComponent{}
+		}
+		entity.Kinematics.AngularVelocityBody = &pb.AngularVelocity{
+			YawRate: *yawRate,
 		}
 	}
 

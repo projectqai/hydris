@@ -66,10 +66,12 @@ export function ConfirmDialog({
       animationType="fade"
       onRequestClose={onCancel}
       statusBarTranslucent
+      aria-label={title}
     >
       <View accessibilityViewIsModal style={{ flex: 1 }}>
         <Pressable
           onPress={onCancel}
+          accessibilityRole="button"
           accessibilityLabel={cancelLabel}
           style={{
             position: "absolute",

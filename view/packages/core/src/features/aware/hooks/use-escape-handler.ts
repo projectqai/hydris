@@ -3,6 +3,9 @@ import type { PaneId } from "@hydris/ui/layout/types";
 import { usePanelContext } from "@hydris/ui/panels";
 
 import { usePIPContext } from "../pip-context";
+import { useBullseyeStore } from "../store/bullseye-store";
+import { useEditStore } from "../store/edit-store";
+import { usePathStore } from "../store/path-store";
 import { useSelectionStore } from "../store/selection-store";
 
 export function useEscapeHandler({
@@ -48,6 +51,18 @@ export function useEscapeHandler({
       }
       if (isPlacing) {
         exitPlacement();
+        return true;
+      }
+      if (useEditStore.getState().entityId !== null) {
+        useEditStore.getState().cancel();
+        return true;
+      }
+      if (usePathStore.getState().drawingId !== null) {
+        usePathStore.getState().cancel();
+        return true;
+      }
+      if (useBullseyeStore.getState().isPlacing) {
+        useBullseyeStore.getState().clear();
         return true;
       }
       if (swapSourceId) {

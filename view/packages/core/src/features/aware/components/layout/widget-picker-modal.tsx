@@ -163,7 +163,7 @@ export function WidgetPickerModal({
                   if (group) handleGroupTabClick(group);
                 }}
                 accessibilityRole="tab"
-                accessibilityState={{ selected: activeTab === tab.id }}
+                aria-selected={activeTab === tab.id}
                 tabIndex={-1}
                 className={cn(
                   "rounded-full px-2.5 py-1.5",
@@ -250,6 +250,7 @@ function WidgetGrid({
           <Pressable
             key={widget.id}
             onPress={() => onSelect(widget.id)}
+            aria-current={isActive}
             tabIndex={-1}
             className={cn(
               "flex-[0_0_31%] items-center rounded-lg border py-5",

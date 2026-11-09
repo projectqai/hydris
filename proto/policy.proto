@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package world;
+
+option go_package = "github.com/projectqai/proto/go";
+
+enum PolicyAction {
+  PolicyActionInvalid = 0;
+
+  // Reject the request.
+  PolicyActionDeny = 1;
+
+  // Accept the request. Evaluation stops.
+  PolicyActionAllow = 2;
+
+  // Record the match for auditing, then continue to the next rule.
+  // Does not produce a verdict on its own.
+  PolicyActionLog = 3;
+
+  // Jump to a target entity's PolicyComponent (like nftables jump).
+  // The target is named by the rule's CEL expression
+  // If the target's chain produces a verdict, use it. If the target
+  // has no PolicyComponent or its chain produces no verdict, return to this
+  // chain and continue with the next rule.
+  PolicyActionDefer = 4;
+}
+
+message PolicyRule {
+  PolicyAction action = 1;
+
+  // CEL expression evaluated against the request context.
+  // Available variables depend on the engine (e.g. peer.address, rpc.method,
+  // rpc.write, request.entity_id, request.components).
+  // an empty rule evaluates to "true"
+  optional string cel = 2;
+
+  // Human-readable label for this rule, shown in logs and UI.
+  optional string label = 3;
+}
+
+// Access policy evaluated on incoming RPCs.
+//
+// The node entity carries the global policy. Rules are evaluated top to bottom;
+// the first rule whose CEL returns true produces the verdict (Allow or Deny).
+// Log does not verdict and continues to the next rule.
+// Defer jumps to the target entity's chain and returns if no verdict.
+//
+// If no rule produces a verdict, no verdict is returned.
+// Use an unconditional rule at the end to set a catch-all:
+//   { action: Deny }
+//
+// If no PolicyComponent exists on the node, all requests are allowed.
+// Entity-level policies are never evaluated unless the global chain
+// reaches a Defer rule.
+message PolicyComponent {
+  repeated PolicyRule rules = 1;
+}
+
+message EntitlementCop {}
+message EntitlementCopWrite {}
+message EntitlementIam {}
+message EntitlementPolicy {}
+message EntitlementTasking {}
+message EntitlementConsequential {}
+message EntitlementReset {}
+message EntitlementArtifactsRead {}
+message EntitlementSecrets {}
+message EntitlementSecretsRead {}
+
+message Entitlement {
+  oneof kind {
+    EntitlementCop cop = 1;
+    EntitlementCopWrite cop_write = 2;
+    EntitlementIam iam = 3;
+    EntitlementPolicy policy = 4;
+    EntitlementTasking tasking = 5;
+    EntitlementConsequential consequential = 6;
+    EntitlementReset reset = 7;
+    EntitlementArtifactsRead artifacts_read = 8;
+    EntitlementSecrets secrets = 9;
+    EntitlementSecretsRead secrets_read = 10;
+  }
+}
+
+// Entitlements attached to an auth identity entity (auth:user:*,
+// auth:token:*, auth:cert:*).
+// Referenced in the policy chain via "name" in actor.entitlements.
+message AuthorizationComponent {
+  repeated Entitlement entitlements = 2;
+}

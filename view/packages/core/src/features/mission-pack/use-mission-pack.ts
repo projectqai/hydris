@@ -7,7 +7,7 @@ import { downloadFromEndpoint } from "../../lib/download";
 import { toast } from "../../lib/sonner";
 import type { PickedFile } from "../../lib/use-file-picker";
 import { layoutApplyMissionKitRef, layoutSnapshotRef } from "../aware/hooks/layout-snapshot";
-import { PRESETS } from "../aware/layouts";
+import { PRESETS } from "../aware/presets";
 import { useMissionKitStore } from "../aware/store/mission-kit-store";
 import { useMissionHealthStore } from "./mission-health-store";
 import { startUploadArtifact } from "./upload-artifact";
@@ -40,11 +40,12 @@ function pickedFileName(picked: PickedFile): string {
 }
 
 export function useMissionPack() {
-  const importPack = useCallback(async (picked: PickedFile) => {
+  const importPack = useCallback(async (picked: PickedFile): Promise<boolean> => {
     const name = pickedFileName(picked).toLowerCase();
     if (!name.endsWith(".zip")) {
       toast.error("Not a mission pack (.zip expected)");
-      return;
+
+      return false;
     }
 
     const artifactId = `mission.import.${Date.now()}`;
@@ -72,12 +73,15 @@ export function useMissionPack() {
       const result = await worldClient.loadMission({ artifactId });
       if (result.error) {
         toast.error(`Load failed: ${result.error}`, { id: toastId });
-        return;
+
+        return false;
       }
       await useMissionHealthStore.getState().fetch();
       await useMissionKitStore.getState().fetch();
       layoutApplyMissionKitRef.current?.();
       toast.success("Mission loaded", { id: toastId });
+
+      return true;
     } catch (err) {
       console.error("[mission-pack] import failed", err);
       if (controller.signal.aborted) {
@@ -85,6 +89,8 @@ export function useMissionPack() {
       } else {
         toast.error(err instanceof Error ? err.message : "Import failed", { id: toastId });
       }
+
+      return false;
     }
   }, []);
 

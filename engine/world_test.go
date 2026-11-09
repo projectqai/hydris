@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,7 +42,7 @@ func TestMergeEntityComponents(t *testing.T) {
 		Lifetime: &pb.Lifetime{From: timestamppb.New(time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))},
 	}
 
-	merged, accepted := w.mergeEntityComponents("e1", w.head["e1"], src, meta.Component{Builtin: "test"})
+	merged, accepted, _ := w.mergeEntityComponents("e1", w.head["e1"], src, meta.Component{Builtin: "test"})
 	if !accepted {
 		t.Fatal("expected merge to accept components")
 	}
@@ -76,7 +77,7 @@ func TestMergeEntityComponents_EmptySrc(t *testing.T) {
 		Lifetime: &pb.Lifetime{From: timestamppb.New(time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC))},
 	}
 
-	_, accepted := w.mergeEntityComponents("e1", w.head["e1"], src, meta.Component{Builtin: "test"})
+	_, accepted, _ := w.mergeEntityComponents("e1", w.head["e1"], src, meta.Component{Builtin: "test"})
 	if accepted {
 		t.Error("merge with no components should not accept anything")
 	}
@@ -559,6 +560,27 @@ func TestRunTask(t *testing.T) {
 	}
 	if resp.Msg.ExecutionId != "" {
 		t.Errorf("expected empty execution ID, got %s", resp.Msg.ExecutionId)
+	}
+}
+
+func TestRunTask_Disabled(t *testing.T) {
+	w := testWorld(map[string]*pb.Entity{
+		"task": {Id: "task", Taskable: &pb.TaskableComponent{
+			Mode:     pb.TaskableMode_TaskableModeReconcile,
+			Disabled: proto.String("not accepted in mode Standby"),
+		}},
+	})
+	ctx := context.Background()
+
+	_, err := w.RunTask(ctx, peerRequest(&pb.RunTaskRequest{EntityId: "task"}))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("want FailedPrecondition, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "not accepted in mode Standby") {
+		t.Errorf("reason missing from %v", err)
+	}
+	if w.GetHead("task").TaskExecution != nil {
+		t.Error("disabled taskable got an execution")
 	}
 }
 

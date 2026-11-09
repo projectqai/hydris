@@ -1,93 +1,79 @@
+import { create } from "@bufbuild/protobuf";
 import type { Entity } from "@projectqai/proto/world";
-import { ConfigurableState, DeviceState, LinkStatus } from "@projectqai/proto/world";
+import { ConfigurableState, DeviceState, EntitySchema, LinkStatus } from "@projectqai/proto/world";
 import { describe, expect, it } from "vitest";
 
 import { deriveConnectorHealth } from "./connector-health";
 
-function entity(partial: Partial<Entity> = {}): Entity {
-  return { id: "e", ...partial } as Entity;
+function setUpService(
+  state: ConfigurableState,
+  deviceState: DeviceState,
+  linkStatus?: LinkStatus,
+): Entity {
+  return create(EntitySchema, {
+    id: "link.service",
+    configurable: { state },
+    config: {},
+    device: { state: deviceState },
+    link: linkStatus === undefined ? undefined : { status: linkStatus },
+  });
 }
 
-describe("deriveConnectorHealth — link (on a connector)", () => {
-  const conn = (status: LinkStatus) => entity({ device: {}, link: { status } } as Partial<Entity>);
-  it("maps Connected/Degraded/Lost to healthy/degraded/failed", () => {
-    expect(deriveConnectorHealth(conn(LinkStatus.LinkStatusConnected))).toBe("healthy");
-    expect(deriveConnectorHealth(conn(LinkStatus.LinkStatusDegraded))).toBe("degraded");
-    expect(deriveConnectorHealth(conn(LinkStatus.LinkStatusLost))).toBe("failed");
+describe("deriveConnectorHealth", () => {
+  it("shows a failed service as failed while its link is connected", () => {
+    const entity = setUpService(
+      ConfigurableState.ConfigurableStateFailed,
+      DeviceState.DeviceStateActive,
+      LinkStatus.LinkStatusConnected,
+    );
+
+    expect(deriveConnectorHealth(entity)).toBe("failed");
   });
 
-  it("ignores a link on a non-connector (plain asset)", () => {
-    expect(
-      deriveConnectorHealth(
-        entity({ link: { status: LinkStatus.LinkStatusLost } } as Partial<Entity>),
-      ),
-    ).toBeUndefined();
-  });
-});
+  it("ignores a failed device state left over from a stopped run", () => {
+    const entity = setUpService(
+      ConfigurableState.ConfigurableStateInactive,
+      DeviceState.DeviceStateFailed,
+    );
 
-describe("deriveConnectorHealth — configurable", () => {
-  const cases: [ConfigurableState, "healthy" | "degraded" | "failed" | undefined][] = [
-    [ConfigurableState.ConfigurableStateActive, "healthy"],
-    [ConfigurableState.ConfigurableStateScheduled, "healthy"],
-    [ConfigurableState.ConfigurableStateStarting, "degraded"],
-    [ConfigurableState.ConfigurableStateFailed, "failed"],
-    [ConfigurableState.ConfigurableStateConflict, "failed"],
-    [ConfigurableState.ConfigurableStateInactive, undefined],
-  ];
-  for (const [state, expected] of cases) {
-    it(`maps ${ConfigurableState[state]} to ${expected}`, () => {
-      expect(
-        deriveConnectorHealth(entity({ configurable: { state, error: "" } } as Partial<Entity>)),
-      ).toBe(expected);
+    expect(deriveConnectorHealth(entity)).toBeUndefined();
+  });
+
+  it("counts a lost link on a running service", () => {
+    const entity = setUpService(
+      ConfigurableState.ConfigurableStateActive,
+      DeviceState.DeviceStateActive,
+      LinkStatus.LinkStatusLost,
+    );
+
+    expect(deriveConnectorHealth(entity)).toBe("failed");
+  });
+
+  it("shows a running service as healthy", () => {
+    const entity = setUpService(
+      ConfigurableState.ConfigurableStateActive,
+      DeviceState.DeviceStateActive,
+      LinkStatus.LinkStatusConnected,
+    );
+
+    expect(deriveConnectorHealth(entity)).toBe("healthy");
+  });
+
+  it("leaves out a discovered device that is not set up", () => {
+    const entity = create(EntitySchema, {
+      id: "serial.device.1",
+      device: { parent: "link.service", state: DeviceState.DeviceStatePending },
     });
-  }
-});
 
-describe("deriveConnectorHealth — device", () => {
-  it("maps Active/Degraded/Pending/Failed to healthy/degraded/degraded/failed", () => {
-    expect(
-      deriveConnectorHealth(
-        entity({ device: { state: DeviceState.DeviceStateActive } } as Partial<Entity>),
-      ),
-    ).toBe("healthy");
-    expect(
-      deriveConnectorHealth(
-        entity({ device: { state: DeviceState.DeviceStateDegraded } } as Partial<Entity>),
-      ),
-    ).toBe("degraded");
-    expect(
-      deriveConnectorHealth(
-        entity({ device: { state: DeviceState.DeviceStatePending } } as Partial<Entity>),
-      ),
-    ).toBe("degraded");
-    expect(
-      deriveConnectorHealth(
-        entity({ device: { state: DeviceState.DeviceStateFailed } } as Partial<Entity>),
-      ),
-    ).toBe("failed");
+    expect(deriveConnectorHealth(entity)).toBeUndefined();
   });
-});
 
-describe("deriveConnectorHealth — priority and non-connectors", () => {
-  it("prefers link over configurable", () => {
-    const e = entity({
+  it("ignores a link on a plain asset", () => {
+    const entity = create(EntitySchema, {
+      id: "asset-1",
       link: { status: LinkStatus.LinkStatusLost },
-      configurable: { state: ConfigurableState.ConfigurableStateActive, error: "" },
-    } as Partial<Entity>);
-    expect(deriveConnectorHealth(e)).toBe("failed");
-  });
+    });
 
-  it("prefers device over configurable", () => {
-    const e = entity({
-      device: { state: DeviceState.DeviceStatePending },
-      configurable: { state: ConfigurableState.ConfigurableStateActive, error: "" },
-    } as Partial<Entity>);
-    expect(deriveConnectorHealth(e)).toBe("degraded");
-  });
-
-  it("returns undefined for a non-connector entity", () => {
-    expect(
-      deriveConnectorHealth(entity({ geo: { latitude: 1, longitude: 2 } } as Partial<Entity>)),
-    ).toBeUndefined();
+    expect(deriveConnectorHealth(entity)).toBeUndefined();
   });
 });

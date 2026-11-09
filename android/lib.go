@@ -3,38 +3,20 @@ package hydris
 import (
 	"context"
 	"log/slog"
-	"net/http"
 	"os"
 	"strings"
-	"sync"
-	"time"
-
-	"path/filepath"
 
 	"github.com/projectqai/hydris/builtin"
 	_ "github.com/projectqai/hydris/builtin/all"
-	"github.com/projectqai/hydris/builtin/artifacts"
 	"github.com/projectqai/hydris/engine"
 	"github.com/projectqai/hydris/hal"
-	"github.com/projectqai/hydris/pkg/media"
 	"github.com/projectqai/hydris/pkg/plugin"
-	"github.com/projectqai/hydris/view"
-	pb "github.com/projectqai/proto/go"
-	"github.com/rs/cors"
-)
-
-const (
-	listenAddr = ":50051"
-	serverAddr = "localhost:50051"
 )
 
 type EngineService struct {
-	server        *http.Server
-	builtinServer *http.Server
-	engine        *engine.WorldServer
-	ctx           context.Context
-	cancelFunc    context.CancelFunc
-	mu            sync.Mutex
+	engine     *engine.WorldServer
+	addr       string
+	cancelFunc context.CancelFunc
 }
 
 var globalService *EngineService
@@ -67,111 +49,34 @@ func getAndroidCacheDir() string {
 }
 
 func StartEngine() string {
-	worldFile := ""
-	if cacheDir := getAndroidCacheDir(); cacheDir != "" {
-		worldFile = cacheDir + "/world.yaml"
-		plugin.TempDir = cacheDir
-	}
-	slog.Info("StartEngine called", "worldFile", worldFile)
 	if globalService != nil {
 		slog.Warn("engine already running")
 		return "Error: engine already running"
 	}
+	cacheDir := getAndroidCacheDir()
+	if cacheDir == "" {
+		return "Error: no cache directory for world state"
+	}
+	plugin.TempDir = cacheDir
+	worldFile := cacheDir + "/world.yaml"
+	slog.Info("StartEngine called", "worldFile", worldFile)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	service := &EngineService{
-		ctx:        ctx,
-		cancelFunc: cancel,
-	}
-
-	service.engine = engine.NewWorldServer()
-
-	// Set up persistence if world file is specified
-	if worldFile != "" {
-		service.engine.SetWorldFile(worldFile)
-
-		// Load existing state from file
-		if err := service.engine.LoadFromFile(worldFile); err != nil {
-			slog.Error("failed to load world file", "error", err)
-			// Continue anyway - file might not exist yet
-		}
-
-		// Start periodic flushing (every 10 seconds)
-		service.engine.StartPeriodicFlush(10 * time.Second)
-		slog.Info("persistence enabled", "worldFile", worldFile)
-	}
-
-	// Load builtin defaults with old timestamp so they never overwrite real data
-	if err := service.engine.LoadDefaults(builtin.DefaultWorld()); err != nil {
-		slog.Error("failed to load default world", "error", err)
-	}
-
-	service.engine.InitNodeIdentity()
-
-	// Set up artifact storage.
-	artDir := filepath.Join(filepath.Dir(worldFile), "artifacts")
-	artLocal, err := artifacts.NewLocalStore(artDir)
-	if err != nil {
-		slog.Error("failed to create artifact store", "error", err)
-	} else {
-		grpcConn, err := builtin.BuiltinClientConn("android")
-		if err != nil {
-			slog.Error("failed to create builtin client for artifacts", "error", err)
-		} else {
-			worldClient := pb.NewWorldServiceClient(grpcConn)
-			artifacts.Server = artifacts.NewArtifactServer(artLocal, worldClient)
-		}
-	}
-
-	bridges := media.NewBridgeManager()
-	mux := engine.NewAPIMux(service.engine, nil, bridges, &Ring)
-
-	webServer, err := view.NewWebServer()
-	if err == nil {
-		mux.Handle("/", webServer)
-	}
-
-	corsHandler := cors.New(cors.Options{
-		AllowedOrigins: []string{"*"},
-		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"*"},
+	ws, addr, err := engine.StartEngineServer(ctx, engine.EngineConfig{
+		WorldFile: worldFile,
+		LogRing:   &Ring,
 	})
-
-	var protos http.Protocols
-	protos.SetHTTP1(true)
-	protos.SetUnencryptedHTTP2(true)
-	service.server = &http.Server{
-		Addr:      listenAddr,
-		Handler:   corsHandler.Handler(mux),
-		Protocols: &protos,
+	if err != nil {
+		cancel()
+		slog.Error("failed to start engine", "error", err)
+		return "Error: " + err.Error()
 	}
+	globalService = &EngineService{engine: ws, addr: addr, cancelFunc: cancel}
 
-	go func() {
-		slog.Info("starting engine server", "addr", listenAddr)
-		if err := service.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("engine server error", "error", err)
-		}
-	}()
-
-	// Start in-process server for builtin services (uses bufconn).
-	service.builtinServer = engine.NewBuiltinServer(mux)
-	go func() {
-		slog.Info("starting builtin server")
-		if err := service.builtinServer.Serve(builtin.GetBuiltinListener()); err != nil && err != http.ErrServerClosed {
-			slog.Error("builtin server error", "error", err)
-		}
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-	globalService = service
-
-	// Start all builtin controllers. Builtins talk to the engine over the
-	// bufconn builtin server (BuiltinClientConn); serverAddr is only used by
-	// any builtin that still dials TCP directly.
-	builtin.StartAll(ctx, serverAddr)
+	builtin.StartAll(ctx, addr)
 	slog.Info("builtins started")
 
-	return "Engine started on " + listenAddr
+	return "Engine started on " + addr
 }
 
 func StopEngine() string {
@@ -188,18 +93,7 @@ func StopEngine() string {
 		slog.Info("world state flushed")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := globalService.server.Shutdown(ctx); err != nil {
-		slog.Error("error stopping main server", "error", err)
-	}
-	if globalService.builtinServer != nil {
-		if err := globalService.builtinServer.Shutdown(ctx); err != nil {
-			slog.Error("error stopping builtin server", "error", err)
-		}
-	}
-
+	// Cancelling the engine ctx shuts down the listeners and builtins.
 	globalService.cancelFunc()
 	globalService = nil
 
@@ -214,7 +108,7 @@ func GetEngineStatus() string {
 	if globalService == nil {
 		return "stopped"
 	}
-	return "running on " + listenAddr
+	return "running on " + globalService.addr
 }
 
 // FlushWorldState manually flushes the world state to the persistence file.
@@ -253,6 +147,22 @@ type PlatformSerial interface {
 	StopDiscovery()
 }
 
+// SetDeviceName sets the device name reported as the node's hostname.
+// Call before StartEngine: os.Hostname() is "localhost" on Android.
+func SetDeviceName(name string) {
+	engine.HostnameOverride = strings.TrimSpace(name)
+}
+
+// PlatformMDNS is implemented by Kotlin for mDNS/DNS-SD via NsdManager.
+type PlatformMDNS interface {
+	// Register announces a DNS-SD service instance; txtJSON is a JSON object.
+	Register(instance string, serviceType string, port int, txtJSON string)
+	Unregister()
+	// StartBrowse discovers a service type; snapshots arrive via OnMDNSPeers.
+	StartBrowse(serviceType string)
+	StopBrowse()
+}
+
 // PlatformSensors is implemented by Kotlin for reading device sensors.
 type PlatformSensors interface {
 	// ReadSensors returns a JSON-encoded []SensorReading snapshot.
@@ -263,13 +173,14 @@ type PlatformSensors interface {
 type HalHandler interface {
 	OnSerialPorts(json string)
 	OnBLEDevices(json string)
+	OnMDNSPeers(json string)
 	OnBLENotification(handle int64, charUUID string, data []byte)
 	OnBLEDisconnect(handle int64)
 }
 
 // SetHalPlatform registers the Kotlin hardware implementations.
 // Call before StartEngine.
-func SetHalPlatform(ble PlatformBLE, serial PlatformSerial, sensors PlatformSensors) {
+func SetHalPlatform(ble PlatformBLE, serial PlatformSerial, sensors PlatformSensors, mdns PlatformMDNS) {
 	if ble != nil {
 		hal.SetBLEWatch(ble.StartScan, ble.StopScan)
 		hal.SetBLEOps(ble.Connect, ble.Disconnect, ble.ReadCharacteristic, ble.WriteCharacteristic, ble.Subscribe, ble.Unsubscribe)
@@ -281,6 +192,22 @@ func SetHalPlatform(ble PlatformBLE, serial PlatformSerial, sensors PlatformSens
 	if sensors != nil {
 		hal.SetSensors(sensors.ReadSensors)
 	}
+	if mdns != nil {
+		hal.SetMDNS(mdns.Register, mdns.Unregister, mdns.StartBrowse, mdns.StopBrowse)
+	}
+}
+
+// PlatformJoystick is implemented by Kotlin for reading gamepads.
+type PlatformJoystick interface {
+	// ListJoysticks returns a JSON-encoded []JoystickDevice snapshot.
+	ListJoysticks() string
+	// ReadJoystick returns a JSON-encoded JoystickState, empty once the device is gone.
+	ReadJoystick(id string) string
+}
+
+// SetHalJoystick wires gamepad access.
+func SetHalJoystick(joystick PlatformJoystick) {
+	hal.SetJoystick(joystick.ListJoysticks, joystick.ReadJoystick)
 }
 
 // GetHalHandler returns the Go-side handler that Kotlin calls for events.

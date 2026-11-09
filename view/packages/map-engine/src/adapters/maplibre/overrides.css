@@ -7,6 +7,11 @@
   outline: none;
 }
 
+.maplibregl-ctrl-bottom-left .maplibregl-ctrl-scale {
+  margin-left: 60px;
+  margin-bottom: 14px;
+}
+
 .maplibregl-ctrl-scale {
   background-color: rgba(0, 0, 0, 0.55);
   border-color: rgba(255, 255, 255, 0.88);

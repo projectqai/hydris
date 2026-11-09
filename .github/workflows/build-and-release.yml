@@ -6,10 +6,17 @@ on:
       - main
     tags:
       - '*'
+  pull_request:
+    branches:
+      - main
 
 env:
-  GO_VERSION: '1.26.4'
+  GO_VERSION: '1.27.3'
   PROTOC_VERSION: '28.3'
+  # Pinned, not 'latest': resolving 'latest' costs an unauthenticated
+  # api.github.com call, and GHE runners share an egress IP whose 60/hr
+  # budget dependabot exhausts. An exact semver is resolved offline.
+  BUN_VERSION: '1.4.0'
 
 
 jobs:
@@ -31,6 +38,8 @@ jobs:
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Run deep tests
         run: make deeptest
@@ -57,13 +66,13 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Cache Bun modules
         uses: actions/cache@v5
         with:
-          path: view/node_modules
-          key: ${{ runner.os }}-bun-${{ hashFiles('view/bun.lockb') }}
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 
@@ -80,6 +89,9 @@ jobs:
       - name: Install Go tools
         run: make install-tools
 
+      - name: Install buf
+        run: npm install -g @bufbuild/buf
+
       - name: Build frontend
         run: make frontend
 
@@ -90,6 +102,47 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: hydris-binaries
+          path: bin/
+          retention-days: 7
+
+  cli-headless:
+    # No frontend build: -tags noui strips the embedded UI, so this needs
+    # neither Bun nor `make frontend`, unlike every other CLI/desktop job.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install system dependencies
+        run: |
+          which make && which wget && which unzip || (sudo apt-get update && sudo apt-get install -y wget unzip build-essential)
+
+      - name: Install protoc
+        run: |
+          which protoc || (wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${{ env.PROTOC_VERSION }}/protoc-${{ env.PROTOC_VERSION }}-linux-x86_64.zip \
+            && sudo unzip -q protoc-${{ env.PROTOC_VERSION }}-linux-x86_64.zip -d /usr/local \
+            && sudo chmod +x /usr/local/bin/protoc)
+
+      - name: Install Go tools
+        run: make install-tools
+
+      - name: Build headless CLI (armv5, no UI)
+        run: make cli_headless
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: hydris-cli-headless
           path: bin/
           retention-days: 7
 
@@ -112,14 +165,17 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install system dependencies
         run: |
           which make && which x86_64-w64-mingw32-gcc || (sudo apt-get update && sudo apt-get install -y build-essential libgtk-3-dev libwebkit2gtk-4.1-dev libssl-dev mingw-w64)
 
       - name: Install rcodesign
-        run: which rcodesign || cargo install apple-codesign
+        run: which rcodesign || cargo install apple-codesign --version 0.29.0 --locked
+
+      - name: Install buf
+        run: npm install -g @bufbuild/buf
 
       - name: Build frontend
         run: make frontend
@@ -135,14 +191,28 @@ jobs:
           retention-days: 7
 
   android:
-    runs-on: ubuntu-latest
+    runs-on: build
     permissions:
       contents: read
     env:
       ANDROID_SDK_ROOT: /opt/android-sdk
       ANDROID_HOME: /opt/android-sdk
       GRADLE_OPTS: '-Dorg.gradle.jvmargs=-Xmx4g'
+      # Must match Expo's ExpoRootProject versions, or Gradle downloads a second
+      # full NDK (~4.5GB) mid-build and fills the runner disk.
+      ANDROID_API: '36'
+      ANDROID_BUILD_TOOLS: '36.0.0'
+      ANDROID_NDK_VERSION: '27.1.12297006'
     steps:
+      - name: Free disk space
+        run: |
+          df -h /
+          # /usr/local/lib/android is the preinstalled SDK+NDK (~9GB); this job
+          # uses its own at ANDROID_SDK_ROOT.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost /usr/local/share/powershell /usr/local/.ghcup
+          df -h /
+
       - name: Checkout code
         uses: actions/checkout@v6
         with:
@@ -164,15 +234,34 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Cache Bun modules
         uses: actions/cache@v5
         with:
-          path: view/node_modules
-          key: ${{ runner.os }}-bun-${{ hashFiles('view/bun.lockb') }}
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
+
+      - name: Cache Gradle
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Cache Android SDK/NDK
+        uses: actions/cache@v5
+        with:
+          path: |
+            /opt/android-sdk/ndk
+            /opt/android-sdk/platforms
+            /opt/android-sdk/build-tools
+          key: ${{ runner.os }}-android-sdk-${{ env.ANDROID_API }}-${{ env.ANDROID_BUILD_TOOLS }}-${{ env.ANDROID_NDK_VERSION }}
 
       - name: Install system dependencies
         run: |
@@ -186,6 +275,9 @@ jobs:
 
       - name: Install Go tools
         run: make install-tools
+
+      - name: Install buf
+        run: npm install -g @bufbuild/buf
 
       - name: Install Android SDK
         run: |
@@ -202,11 +294,14 @@ jobs:
 
       - name: Accept Android SDK licenses and install components
         run: |
-          if [ ! -d "$ANDROID_SDK_ROOT/ndk/26.1.10909125" ]; then
-            yes | sdkmanager --licenses || true
-            sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
+          yes | sdkmanager --licenses || true
+          sdkmanager platform-tools
+          if [ ! -d "$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION" ]; then
+            sdkmanager "platforms;android-$ANDROID_API" \
+                       "build-tools;$ANDROID_BUILD_TOOLS" \
+                       "ndk;$ANDROID_NDK_VERSION"
           fi
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION" >> $GITHUB_ENV
 
       - name: Build frontend
         run: make frontend
@@ -224,6 +319,8 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     needs: [build]
+    outputs:
+      image: ${{ steps.registry.outputs.image }}
     permissions:
       contents: read
       packages: write
@@ -250,10 +347,23 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Log in to GitHub Container Registry
+      - name: Resolve registry
+        id: registry
+        run: |
+          host="${GITHUB_SERVER_URL#https://}"
+          if [ "$host" = "github.com" ]; then
+            registry=ghcr.io
+          else
+            registry="containers.${host}"
+          fi
+          echo "image=${registry}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "host=$registry" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to container registry
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4
         with:
-          registry: ghcr.io
+          registry: ${{ steps.registry.outputs.host }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
@@ -261,7 +371,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.registry.outputs.image }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -275,14 +385,14 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
-    needs: [build, desktop, android, docker]
+    needs: [build, cli-headless, desktop, android, docker]
     permissions:
       contents: write
     steps:
@@ -304,6 +414,7 @@ jobs:
             ## Downloads
             - CLI Linux AMD64: hydris-cli-linux-amd64-${{ github.ref_name }}.tar.xz
             - CLI Linux ARM64: hydris-cli-linux-arm64-${{ github.ref_name }}.tar.xz
+            - CLI Linux ARMv5 (headless, no UI): hydris-cli-linux-armv5-${{ github.ref_name }}.tar.xz
             - CLI Windows AMD64: hydris-cli-windows-amd64-${{ github.ref_name }}.zip
             - CLI macOS ARM64: hydris-cli-macos-arm64-${{ github.ref_name }}.tar.xz
             - Desktop Windows: hydris-desktop-windows-amd64-${{ github.ref_name }}.zip
@@ -312,7 +423,7 @@ jobs:
 
             ## Docker Image
             ```
-            docker run -p 50051:50051 -ti ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            docker run -p 50051:50051 -ti ${{ needs.docker.outputs.image }}:${{ github.ref_name }}
             ```
           files: |
             bin/hydris-*

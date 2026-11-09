@@ -4,17 +4,23 @@ import { worldClient } from "../../../lib/api/world-client";
 import { useMissionHealthStore } from "../../mission-pack/mission-health-store";
 import { STORAGE_KEY } from "../constants";
 import { layoutResetRef } from "../hooks/layout-snapshot";
+import { placementResetRef } from "../placement-context";
+import { useBullseyeStore } from "./bullseye-store";
 import { useChatStore } from "./chat-store";
+import { useEditStore } from "./edit-store";
 import { useEntityStore } from "./entity-store";
 import { useMissionKitStore } from "./mission-kit-store";
-import { useRangeRingStore } from "./range-ring-store";
+import { usePathStore } from "./path-store";
 import { useSelectionStore } from "./selection-store";
 
 export async function resetWorld() {
+  placementResetRef.current?.();
   await worldClient.hardReset({});
 
   useSelectionStore.getState().clearSelection();
-  useRangeRingStore.getState().clear();
+  useBullseyeStore.getState().clear();
+  usePathStore.getState().clear();
+  useEditStore.getState().cancel();
   useMissionKitStore.getState().reset();
   useMissionHealthStore.getState().clear();
   layoutResetRef.current?.();

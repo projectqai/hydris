@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "Hydris Storybook",
+    "slug": "hydris-storybook",
+    "version": "1.0.0",
+    "orientation": "landscape",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "com.q.hydris.storybook"
+    },
+    "experiments": {
+      "reactCompiler": true
+    }
+  }
+}

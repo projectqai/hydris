@@ -13,9 +13,6 @@ type PanelProviderProps = {
 export function PanelProvider({ children }: PanelProviderProps) {
   const isFullscreen = useSharedValue(false);
   const rightPanelCollapsed = useSharedValue(false);
-  const rightPanelWidth = useSharedValue(280);
-  const leftPanelWidth = useSharedValue(280);
-  const mapControlsHeight = useSharedValue(0);
 
   const collapseAll = () => {
     runOnUI(() => {
@@ -24,37 +21,10 @@ export function PanelProvider({ children }: PanelProviderProps) {
     })();
   };
 
-  const expandAll = () => {
-    runOnUI(() => {
-      "worklet";
-      isFullscreen.value = false;
-    })();
-  };
-
-  const toggleFullscreen = () => {
-    runOnUI(() => {
-      "worklet";
-      isFullscreen.value = !isFullscreen.value;
-    })();
-  };
-
-  const setRightPanelCollapsed = (collapsed: boolean) => {
-    runOnUI(() => {
-      "worklet";
-      rightPanelCollapsed.value = collapsed;
-    })();
-  };
-
   const contextValue: PanelContextValue = {
     isFullscreen,
     rightPanelCollapsed,
-    rightPanelWidth,
-    leftPanelWidth,
-    mapControlsHeight,
     collapseAll,
-    expandAll,
-    toggleFullscreen,
-    setRightPanelCollapsed,
   };
 
   return (

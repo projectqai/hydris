@@ -13,9 +13,24 @@ package hal
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 )
+
+// RunMain runs fn as the body of the program and exits when it returns. Call it
+// from main, so that platforms which need the main thread can have it.
+func RunMain(fn func()) {
+	if P.MainThread == nil {
+		fn()
+		return
+	}
+	go func() {
+		fn()
+		os.Exit(0)
+	}()
+	P.MainThread()
+}
 
 // ReadSensors returns a snapshot of all available no-permission sensors.
 // Returns nil if the platform does not support sensor reading.
@@ -51,6 +66,22 @@ func WatchBLE(serviceUUIDs []string, cb func(devices []BLEDevice)) (stop func())
 	})
 }
 
+// AdvertiseMDNS announces a DNS-SD service instance on the local network.
+func AdvertiseMDNS(instance, service string, port int, txt map[string]string) (stop func(), err error) {
+	if P.MDNSAdvertise == nil {
+		return nil, fmt.Errorf("mDNS not supported on this platform")
+	}
+	return P.MDNSAdvertise(instance, service, port, txt)
+}
+
+// WatchMDNS starts DNS-SD discovery; the callback receives full peer snapshots.
+func WatchMDNS(service string, cb func(peers []MDNSPeer)) (stop func(), err error) {
+	if P.MDNSBrowse == nil {
+		return nil, fmt.Errorf("mDNS not supported on this platform")
+	}
+	return P.MDNSBrowse(service, cb)
+}
+
 // OpenSerial opens a serial port and returns an io.ReadWriteCloser.
 func OpenSerial(path string, baudRate int) (io.ReadWriteCloser, error) {
 	if P.SerialOpen == nil {
@@ -80,6 +111,36 @@ func ConnectBLE(address string) (BLEConnection, error) {
 	}
 	return bh, nil
 }
+
+// WatchJoysticks starts joystick discovery. The callback receives full snapshots
+// whenever the set of connected devices changes.
+func WatchJoysticks(cb func(devices []JoystickDevice)) (stop func()) {
+	if P.JoystickWatch == nil {
+		return func() {}
+	}
+	return P.JoystickWatch(cb)
+}
+
+// Joystick is an open joystick.
+type Joystick struct{ handle int64 }
+
+// OpenJoystick opens a discovered joystick by its ID.
+func OpenJoystick(id string) (*Joystick, error) {
+	if P.JoystickOpen == nil {
+		return nil, fmt.Errorf("joysticks not supported on this platform")
+	}
+	handle, err := P.JoystickOpen(id)
+	if err != nil {
+		return nil, err
+	}
+	return &Joystick{handle: handle}, nil
+}
+
+// Read returns the latest state without blocking, and an error once the device
+// is gone.
+func (j *Joystick) Read() (JoystickState, error) { return P.JoystickRead(j.handle) }
+
+func (j *Joystick) Close() error { return P.JoystickClose(j.handle) }
 
 // serialHandle wraps a platform serial handle as io.ReadWriteCloser.
 // SerialRead returns chunks; we buffer them for Go's io.Reader interface.

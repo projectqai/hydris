@@ -1,0 +1,69 @@
+diff --git a/android/gradle.properties b/android/gradle.properties
+--- a/android/gradle.properties
++++ b/android/gradle.properties
+@@ -4,7 +4,7 @@ RNVideo_targetSdkVersion=35
+ RNVideo_compileSdkVersion=35
+ RNVideo_ndkversion=27.1.12297006
+ RNVideo_buildToolsVersion=35.0.0
+-RNVideo_media3Version=1.8.0
++RNVideo_media3Version=1.9.0
+ RNVideo_useExoplayerIMA=false
+ RNVideo_useExoplayerRtsp=false
+ RNVideo_useExoplayerSmoothStreaming=true
+diff --git a/android/src/main/java/com/brentvatne/exoplayer/ReactExoplayerView.java b/android/src/main/java/com/brentvatne/exoplayer/ReactExoplayerView.java
+--- a/android/src/main/java/com/brentvatne/exoplayer/ReactExoplayerView.java
++++ b/android/src/main/java/com/brentvatne/exoplayer/ReactExoplayerView.java
+@@ -562,6 +562,7 @@
+     }
+
+     private class RNVLoadControl extends DefaultLoadControl {
++        private final DefaultAllocator allocator;
+         private final int availableHeapInBytes;
+         private final Runtime runtime;
+         public RNVLoadControl(DefaultAllocator allocator, BufferConfig config) {
+@@ -569,21 +570,35 @@
+                     config.getMinBufferMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
+                             ? config.getMinBufferMs()
+                             : DefaultLoadControl.DEFAULT_MIN_BUFFER_MS,
++                    config.getMinBufferMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
++                            ? config.getMinBufferMs()
++                            : DefaultLoadControl.DEFAULT_MIN_BUFFER_FOR_LOCAL_PLAYBACK_MS,
+                     config.getMaxBufferMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
+                             ? config.getMaxBufferMs()
+                             : DefaultLoadControl.DEFAULT_MAX_BUFFER_MS,
++                    config.getMaxBufferMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
++                            ? config.getMaxBufferMs()
++                            : DefaultLoadControl.DEFAULT_MAX_BUFFER_FOR_LOCAL_PLAYBACK_MS,
+                     config.getBufferForPlaybackMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
+                             ? config.getBufferForPlaybackMs()
+                             : DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_MS ,
++                    config.getBufferForPlaybackMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
++                            ? config.getBufferForPlaybackMs()
++                            : DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_FOR_LOCAL_PLAYBACK_MS,
+                     config.getBufferForPlaybackAfterRebufferMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
+                             ? config.getBufferForPlaybackAfterRebufferMs()
+                             : DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+-                    -1,
++                    config.getBufferForPlaybackAfterRebufferMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
++                            ? config.getBufferForPlaybackAfterRebufferMs()
++                            : DefaultLoadControl.DEFAULT_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_FOR_LOCAL_PLAYBACK_MS,
++                    DefaultLoadControl.DEFAULT_TARGET_BUFFER_BYTES,
++                    true,
+                     true,
+                     config.getBackBufferDurationMs() != BufferConfig.Companion.getBufferConfigPropUnsetInt()
+                             ? config.getBackBufferDurationMs()
+                             : DefaultLoadControl.DEFAULT_BACK_BUFFER_DURATION_MS,
+                     DefaultLoadControl.DEFAULT_RETAIN_BACK_BUFFER_FROM_KEYFRAME);
++            this.allocator = allocator;
+             runtime = Runtime.getRuntime();
+             ActivityManager activityManager = (ActivityManager) themedReactContext.getSystemService(ThemedReactContext.ACTIVITY_SERVICE);
+             double maxHeap = config.getMaxHeapAllocationPercent() != BufferConfig.Companion.getBufferConfigPropUnsetDouble()
+@@ -599,7 +614,7 @@
+             } else if (bufferingStrategy == BufferingStrategy.BufferingStrategyEnum.DependingOnMemory) {
+                 // The goal of this algorithm is to pause video loading (increasing the buffer)
+                 // when available memory on device become low.
+-                int loadedBytes = getAllocator().getTotalBytesAllocated();
++                int loadedBytes = allocator.getTotalBytesAllocated();
+                 boolean isHeapReached = availableHeapInBytes > 0 && loadedBytes >= availableHeapInBytes;
+                 if (isHeapReached) {
+                     return false;

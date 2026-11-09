@@ -3,6 +3,7 @@ package rt
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,13 +14,13 @@ import (
 // Blocks until ctx is cancelled. Suitable for both CLI and in-process
 // (android) use. dataDir is the plugin source directory (containing
 // package.json) used to sandbox file access; pass "" to disable.
-func RunPlugin(ctx context.Context, bundlePath string, dataDir string) error {
+func RunPlugin(ctx context.Context, bundlePath string, dataDir string, opts ...Option) error {
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		slog.Info("starting plugin", "file", bundlePath)
-		r := New(dataDir)
+		r := New(dataDir, opts...)
 		err := r.RunFile(ctx, bundlePath)
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -53,13 +54,18 @@ func FindDataDir(path string) string {
 	}
 }
 
-// RunPluginEnv is like RunPlugin but sets HYDRIS_SERVER first.
-func RunPluginEnv(ctx context.Context, bundlePath, dataDir, serverURL string) error {
+// RunPluginEnv is like RunPlugin but sets HYDRIS_SERVER first. serverClient, if
+// set, handles the plugin's requests to serverURL.
+func RunPluginEnv(ctx context.Context, bundlePath, dataDir, serverURL string, serverClient *http.Client) error {
+	var opts []Option
 	if serverURL != "" {
 		if !strings.Contains(serverURL, "://") {
 			serverURL = "http://" + serverURL
 		}
 		os.Setenv("HYDRIS_SERVER", serverURL)
+		if serverClient != nil {
+			opts = append(opts, WithServerClient(serverURL, serverClient))
+		}
 	}
-	return RunPlugin(ctx, bundlePath, dataDir)
+	return RunPlugin(ctx, bundlePath, dataDir, opts...)
 }

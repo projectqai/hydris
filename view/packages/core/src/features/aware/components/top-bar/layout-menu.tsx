@@ -10,7 +10,7 @@ import { Platform, Pressable, Text, View } from "react-native";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 
 import { Z } from "../../constants";
-import { PRESET_KEYBINDS, PRESETS } from "../../layouts";
+import { PRESET_KEYBINDS, PRESETS } from "../../presets";
 
 export function LayoutMenu({
   activePresetId,
@@ -55,8 +55,8 @@ export function LayoutMenu({
         <ControlButton
           onPress={() => setOpen((v) => !v)}
           variant={open ? "active" : "default"}
-          accessibilityLabel="Layout menu"
-          accessibilityState={{ expanded: open }}
+          accessibilityLabel={`Layout menu, ${activePreset?.name ?? "no preset"}`}
+          aria-expanded={open}
         >
           <PanelsTopLeft aria-hidden size={14} strokeWidth={2} color={t.iconDefault} />
           <Text className="font-sans-medium text-13 text-on-surface/75">
@@ -85,10 +85,7 @@ export function LayoutMenu({
             borderTopColor: t.borderMedium,
             borderBottomColor: t.borderFaint,
             zIndex: Z.TOPBAR,
-            shadowColor: "#000",
-            shadowOffset: { width: 0, height: 16 },
-            shadowOpacity: 0.6,
-            shadowRadius: 40,
+            boxShadow: "0 16px 40px rgba(0,0,0,0.6)",
             overflow: "hidden",
           }}
         >
@@ -106,6 +103,7 @@ export function LayoutMenu({
                   <Pressable
                     onPress={() => handleSelect(preset.id)}
                     role="menuitem"
+                    aria-current={isActive}
                     className={cn(
                       "group flex-row items-center px-2 py-2",
                       Platform.OS !== "web" && "py-3",

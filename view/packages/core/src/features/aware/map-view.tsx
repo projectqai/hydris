@@ -1,13 +1,24 @@
 "use dom";
 
-import type { MapActions } from "@hydris/map-engine/adapters/maplibre";
+import type { ActiveTool, MapActions } from "@hydris/map-engine/adapters/maplibre";
 import { MapView as MapAdapter } from "@hydris/map-engine/adapters/maplibre";
-import type { EntityFilter, GeoPosition } from "@hydris/map-engine/types";
-import type { EntityData } from "@hydris/map-engine/types";
+import {
+  collectRenderedPaths,
+  hasDragLanded,
+  livePositions,
+  type MapPath,
+  movePathVertex,
+  reconcileEditDragOverride,
+} from "@hydris/map-engine/geometry/rendered-paths";
+import type { EntityData, EntityFilter, GeoPosition, PathPoint } from "@hydris/map-engine/types";
+import { geodesicDistance, slantRangeAndElevation } from "@hydris/map-engine/utils/geodesy";
 import type { DOMProps } from "expo/dom";
 import { type DOMImperativeFactory, useDOMImperativeHandle } from "expo/dom";
 import { type Ref, useEffect, useRef, useState } from "react";
 
+import { calculateVerticalRate, formatRangeReadout } from "./utils/format-kinematics";
+import { arrivedPathIds } from "./utils/map-paths";
+import { buildPathLayerData } from "./utils/path-layer-data";
 import {
   deserializeEntity,
   type SerializedDelta,
@@ -29,7 +40,13 @@ export interface MapViewRef {
     trackHistoryVisible: boolean,
     clusteringEnabled: boolean,
   ) => void;
-  pushRangeRing: (centerJson: string | null, active: boolean) => void;
+  pushBullseye: (centerJson: string | null) => void;
+  pushPaths: (
+    pathsJson: string,
+    drawingId: string | null,
+    activeTool: ActiveTool,
+    editablePathId: string | null,
+  ) => void;
   pushHiddenLayers: (idsJson: string) => void;
   pushLayerOpacity: (json: string) => void;
 }
@@ -43,6 +60,19 @@ type FlyToTarget = {
   commandId: number;
 } | null;
 type ZoomCommand = string | null;
+
+function getRangePreviewLabel(source: GeoPosition, target: GeoPosition): string {
+  const sourceGeo = { latitude: source.lat, longitude: source.lng };
+  const targetGeo = { latitude: target.lat, longitude: target.lng };
+  const slantDistanceM =
+    source.alt === undefined || target.alt === undefined
+      ? null
+      : slantRangeAndElevation(
+          { ...sourceGeo, altitude: source.alt },
+          { ...targetGeo, altitude: target.alt },
+        ).slantDistanceM;
+  return formatRangeReadout(geodesicDistance(sourceGeo, targetGeo), slantDistanceM);
+}
 
 type MapViewProps = {
   ref: Ref<MapViewRef>;
@@ -64,7 +94,11 @@ type MapViewProps = {
   placementCoordColors?: { bg: string; border: string; text: string };
   onReady?: () => Promise<void>;
   onEntityClick?: (id: string | null) => Promise<void>;
-  onMapClick?: (lat: number, lng: number) => Promise<void>;
+  onMapClick?: (pointJson: string) => Promise<void>;
+  onPathCommit?: (pathId: string, sourceIndex: number, pointJson: string) => Promise<void>;
+  onPathInsert?: (pathId: string, sourceIndex: number, pointJson: string) => Promise<void>;
+  onDoubleClickFinish?: () => Promise<void>;
+  onSavedPathsArrived?: (pathIdsJson: string) => Promise<void>;
   onRadialRequest?: (
     entityId: string | null,
     screenX: number,
@@ -74,6 +108,7 @@ type MapViewProps = {
   ) => Promise<void>;
   onTrackingLost?: () => Promise<void>;
   onViewChange?: (lat: number, lng: number, zoom: number) => Promise<void>;
+  onPointerTypeChange?: (pointerType: string) => Promise<void>;
   dom?: DOMProps;
 };
 
@@ -98,9 +133,14 @@ export default function MapView({
   onReady,
   onEntityClick,
   onMapClick,
+  onPathCommit,
+  onPathInsert,
+  onDoubleClickFinish,
+  onSavedPathsArrived,
   onRadialRequest,
   onTrackingLost,
   onViewChange,
+  onPointerTypeChange,
 }: MapViewProps) {
   const initialView =
     initialLat != null && initialLng != null && initialZoom != null
@@ -138,11 +178,22 @@ export default function MapView({
   const [pushedDetectionsVisible, setPushedDetectionsVisible] = useState(detectionsVisible);
   const [pushedTrackHistoryVisible, setPushedTrackHistoryVisible] = useState(trackHistoryVisible);
   const [pushedClusteringEnabled, setPushedClusteringEnabled] = useState(clusteringEnabled);
-  const [pushedRangeRingCenter, setPushedRangeRingCenter] = useState<GeoPosition | null>(null);
-  const [pushedRangeRingsActive, setPushedRangeRingsActive] = useState(false);
+  const [pushedBullseyeCenter, setPushedBullseyeCenter] = useState<GeoPosition | null>(null);
+  const [pushedPaths, setPushedPaths] = useState<MapPath[]>([]);
+  const [pushedDrawingId, setPushedDrawingId] = useState<string | null>(null);
+  const [pushedEditablePathId, setPushedEditablePathId] = useState<string | null>(null);
+  const editablePathIdRef = useRef<string | null>(null);
+  const [pathDragOverride, setPathDragOverride] = useState<{
+    pathId: string;
+    sourceIndex: number;
+    point: PathPoint;
+  } | null>(null);
+  const [pushedActiveTool, setPushedActiveTool] = useState<ActiveTool>("none");
   const [pushedHiddenLayerIds, setPushedHiddenLayerIds] = useState<Set<string>>(new Set());
   const [pushedLayerOpacity, setPushedLayerOpacity] = useState<Record<string, number>>({});
 
+  const awaitedIdsRef = useRef(new Set<string>());
+  const pendingLocalRef = useRef(false);
   const pendingGeoRef = useRef(false);
   const pendingIdsRef = useRef(new Set<string>());
   const pendingVersionRef = useRef(0);
@@ -161,6 +212,7 @@ export default function MapView({
   };
 
   const flushRender = () => {
+    if (renderTimerRef.current !== null) clearTimeout(renderTimerRef.current);
     renderTimerRef.current = null;
     const ids = pendingIdsRef.current;
     const geo = pendingGeoRef.current;
@@ -173,6 +225,17 @@ export default function MapView({
   };
 
   const scheduleRender = () => {
+    if (pendingLocalRef.current) {
+      pendingLocalRef.current = false;
+      flushRender();
+      return;
+    }
+    for (const id of awaitedIdsRef.current) {
+      if (pendingIdsRef.current.has(id)) {
+        flushRender();
+        return;
+      }
+    }
     if (renderTimerRef.current !== null) return;
     renderTimerRef.current = setTimeout(flushRender, 300);
   };
@@ -210,6 +273,7 @@ export default function MapView({
       }
     }
     if (delta.geoChanged) pendingGeoRef.current = true;
+    if (delta.local) pendingLocalRef.current = true;
     pendingVersionRef.current = delta.version;
 
     const entities = delta.entities;
@@ -247,7 +311,44 @@ export default function MapView({
     }
   };
 
+  useEffect(() => {
+    awaitedIdsRef.current = new Set(
+      pushedPaths.flatMap((path) => (path.savedAs ? [path.savedAs] : [])),
+    );
+  }, [pushedPaths]);
+
+  useEffect(() => {
+    const arrived = arrivedPathIds(pushedPaths, (id) => entityMapRef.current.has(id));
+    if (arrived.length > 0) void onSavedPathsArrived?.(JSON.stringify(arrived));
+  }, [entityVersion, pushedPaths, onSavedPathsArrived]);
+
   const lastChange = { version: entityVersion, geoChanged, updatedIds };
+  const dragOverrideLanded = hasDragLanded(entityMapRef.current, pathDragOverride);
+  const renderedPaths = collectRenderedPaths({
+    entities: entityMapRef.current,
+    local: pushedPaths,
+    editingId: pushedEditablePathId,
+    dragOverride: pathDragOverride,
+  });
+
+  const pathAnchorPositions = new Map<string, GeoPosition>();
+  const pathAnchorVerticalRates = new Map<string, number>();
+  for (const path of renderedPaths) {
+    for (const point of path.points) {
+      if (point.type !== "entity") continue;
+      const entity = entityMapRef.current.get(point.entityId);
+      if (entity?.position) pathAnchorPositions.set(point.entityId, entity.position);
+      const verticalRate = calculateVerticalRate(entity?.velocityEnu);
+      if (verticalRate !== undefined) pathAnchorVerticalRates.set(point.entityId, verticalRate);
+    }
+  }
+
+  const pathData = {
+    paths: renderedPaths.map((path) =>
+      buildPathLayerData(path, pathAnchorPositions, pathAnchorVerticalRates),
+    ),
+    drawingId: pushedDrawingId,
+  };
 
   useDOMImperativeHandle(
     ref as Ref<DOMImperativeFactory>,
@@ -287,9 +388,25 @@ export default function MapView({
           setPushedTrackHistoryVisible(trackHistoryVisible);
           setPushedClusteringEnabled(clusteringEnabled);
         },
-        pushRangeRing: (centerJson: string | null, active: boolean) => {
-          setPushedRangeRingCenter(centerJson ? JSON.parse(centerJson) : null);
-          setPushedRangeRingsActive(active);
+        pushBullseye: (centerJson: string | null) => {
+          setPushedBullseyeCenter(centerJson ? JSON.parse(centerJson) : null);
+        },
+        pushPaths: (
+          pathsJson: string,
+          drawingId: string | null,
+          activeTool: ActiveTool,
+          editablePathId: string | null,
+        ) => {
+          const paths: MapPath[] = JSON.parse(pathsJson);
+          const previousEditingId = editablePathIdRef.current;
+          editablePathIdRef.current = editablePathId;
+          setPushedPaths(paths);
+          setPushedDrawingId(drawingId);
+          setPushedActiveTool(activeTool);
+          setPushedEditablePathId(editablePathId);
+          setPathDragOverride((override) =>
+            reconcileEditDragOverride(paths, editablePathId, override, previousEditingId),
+          );
         },
         pushHiddenLayers: (idsJson: string) => {
           const ids: string[] = JSON.parse(idsJson);
@@ -338,6 +455,37 @@ export default function MapView({
     }
   };
 
+  useEffect(() => {
+    if (dragOverrideLanded) setPathDragOverride(null);
+  }, [dragOverrideLanded]);
+
+  const handlePathDrag = (
+    pathId: string,
+    sourceIndex: number,
+    point: PathPoint,
+    phase: "move" | "release",
+  ) => {
+    setPathDragOverride({ pathId, sourceIndex, point });
+    if (phase === "move") return;
+
+    setPushedPaths((paths) =>
+      paths.map((path) =>
+        path.id === pathId
+          ? movePathVertex(
+              path,
+              sourceIndex,
+              point,
+              livePositions(entityMapRef.current, [...path.points, point]),
+            )
+          : path,
+      ),
+    );
+    if (!entityMapRef.current.has(pathId)) setPathDragOverride(null);
+    return onPathCommit?.(pathId, sourceIndex, JSON.stringify(point))?.catch(() => {
+      setPathDragOverride(null);
+    });
+  };
+
   const baseStyles = `
     html, body, #root {
       width: 100%;
@@ -375,18 +523,27 @@ export default function MapView({
         clusteringEnabled={pushedClusteringEnabled}
         isPlacing={isPlacing}
         placementCoordColors={placementCoordColors}
-        rangeRingCenter={pushedRangeRingCenter}
-        rangeRingsActive={pushedRangeRingsActive}
+        bullseyeCenter={pushedBullseyeCenter}
+        pathData={pathData}
+        activeTool={pushedActiveTool}
+        editablePathId={pushedEditablePathId}
+        getRangePreviewLabel={getRangePreviewLabel}
         hiddenMapLayerIds={pushedHiddenLayerIds}
         mapLayerOpacityOverrides={pushedLayerOpacity}
         onEntityClick={async (id) => await onEntityClick?.(id)}
-        onMapClick={async (lat, lng) => await onMapClick?.(lat, lng)}
+        onMapClick={async (point) => await onMapClick?.(JSON.stringify(point))}
+        onPathDrag={handlePathDrag}
+        onPathInsert={async (pathId, sourceIndex, point) =>
+          await onPathInsert?.(pathId, sourceIndex, JSON.stringify(point))
+        }
+        onDoubleClickFinish={() => void onDoubleClickFinish?.()}
         onRadialRequest={async (entityId, screenX, screenY, lat, lng) =>
           await onRadialRequest?.(entityId, screenX, screenY, lat, lng)
         }
         onReady={async () => await onReady?.()}
         onTrackingLost={async () => await onTrackingLost?.()}
         onViewChange={async (lat, lng, zoom) => await onViewChange?.(lat, lng, zoom)}
+        onPointerTypeChange={async (pointerType) => await onPointerTypeChange?.(pointerType)}
         onActionsReady={handleActionsReady}
       />
     </div>

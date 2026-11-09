@@ -141,7 +141,7 @@ function MessageRow({
   );
 }
 
-export function ReplyBanner() {
+function ReplyBanner() {
   const t = useThemeColors();
   const { colorScheme } = useColorScheme();
   const replyTo = useChatStore((s) => s.replyTo);

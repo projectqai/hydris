@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package world;
+
+option go_package = "github.com/projectqai/proto/go";
+
+message ManualControlInput {
+  ManualControlAxes axes = 1;
+}
+
+message ManualControlAxes {
+  optional float forward = 1;
+  optional float right = 2;
+  optional float up = 3;
+  optional float yaw = 4;
+  optional float pitch = 5;
+  optional float roll = 6;
+  optional float pan = 7;
+  optional float tilt = 8;
+  optional float zoom = 9;
+}

@@ -41,7 +41,7 @@ var pluginBuildTag string
 
 var pluginBuildCmd = &cobra.Command{
 	Use:   "build [dir]",
-	Short: "bundle a TypeScript plugin into an OCI image",
+	Short: "bundle a TypeScript or native plugin into an OCI image",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dir := "."
@@ -57,8 +57,12 @@ var pluginBuildCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if pkg.Name == "" || pkg.Main == "" {
-			return fmt.Errorf("package.json must have name and main fields")
+		var native map[string]string
+		if pkg.Hydris != nil {
+			native = pkg.Hydris.Native
+		}
+		if pkg.Name == "" || (pkg.Main == "" && len(native) == 0) {
+			return fmt.Errorf("package.json must have a name and either main or hydris.native")
 		}
 
 		tag := pluginBuildTag
@@ -71,12 +75,14 @@ var pluginBuildCmd = &cobra.Command{
 			}
 		}
 
-		slog.Info("bundling plugin", "entry", pkg.Main, "tag", tag)
-
-		// Bundle TypeScript/JavaScript with esbuild.
-		bundleData, err := esbuildBundle(filepath.Join(dir, pkg.Main))
-		if err != nil {
-			return err
+		// Bundle TypeScript/JavaScript with esbuild. A native plugin may
+		// have no JS at all.
+		var bundleData []byte
+		if pkg.Main != "" {
+			slog.Info("bundling plugin", "entry", pkg.Main, "tag", tag)
+			if bundleData, err = esbuildBundle(filepath.Join(dir, pkg.Main)); err != nil {
+				return err
+			}
 		}
 
 		// Read original package.json to include in the image.
@@ -90,6 +96,11 @@ var pluginBuildCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		nativeFiles, err := resolveNative(dir, native)
+		if err != nil {
+			return err
+		}
+		dataFiles = append(dataFiles, nativeFiles...)
 
 		// Create the OCI layer.
 		layer, err := makePluginLayer(pkgData, bundleData, dataFiles)
@@ -346,6 +357,25 @@ func esbuildBundle(entry string) ([]byte, error) {
 type pluginFile struct {
 	name string
 	data []byte
+	exec bool
+}
+
+// resolveNative reads the executable of every platform in hydris.native. All
+// must exist: build them before `hydris plugin build`.
+func resolveNative(dir string, native map[string]string) ([]pluginFile, error) {
+	var files []pluginFile
+	for platform, rel := range native {
+		if !filepath.IsLocal(filepath.FromSlash(rel)) {
+			return nil, fmt.Errorf("hydris.native[%s] = %q must be a path inside the plugin", platform, rel)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			return nil, fmt.Errorf("hydris.native[%s]: %w", platform, err)
+		}
+		slog.Info("packing native binary", "platform", platform, "file", rel, "size", len(data))
+		files = append(files, pluginFile{name: filepath.ToSlash(rel), data: data, exec: true})
+	}
+	return files, nil
 }
 
 // resolveFiles expands glob patterns from the package.json "files" field
@@ -353,6 +383,8 @@ type pluginFile struct {
 func resolveFiles(dir string, patterns []string) ([]pluginFile, error) {
 	var files []pluginFile
 	seen := make(map[string]bool)
+	// The plugin's default entities always ride along when present.
+	patterns = append(append([]string(nil), patterns...), plugin.DefaultsFile)
 	for _, pat := range patterns {
 		matches, err := filepath.Glob(filepath.Join(dir, pat))
 		if err != nil {
@@ -372,29 +404,34 @@ func resolveFiles(dir string, patterns []string) ([]pluginFile, error) {
 			if err != nil {
 				return nil, fmt.Errorf("read %s: %w", rel, err)
 			}
-			files = append(files, pluginFile{name: rel, data: data})
+			files = append(files, pluginFile{name: filepath.ToSlash(rel), data: data})
 		}
 	}
 	return files, nil
 }
 
 // makePluginLayer creates a gzipped tar layer containing package.json,
-// bundle.js, and any data files declared in the "files" field.
+// bundle.js (if any), and the data files and native binaries.
 func makePluginLayer(pkgJSON, bundle []byte, extra []pluginFile) (v1.Layer, error) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 
-	files := append([]pluginFile{
-		{"package.json", pkgJSON},
-		{"bundle.js", bundle},
-	}, extra...)
+	files := []pluginFile{{name: "package.json", data: pkgJSON}}
+	if bundle != nil {
+		files = append(files, pluginFile{name: "bundle.js", data: bundle})
+	}
+	files = append(files, extra...)
 
 	for _, f := range files {
+		mode := int64(0o644)
+		if f.exec {
+			mode = 0o755
+		}
 		if err := tw.WriteHeader(&tar.Header{
 			Name: f.name,
 			Size: int64(len(f.data)),
-			Mode: 0o644,
+			Mode: mode,
 		}); err != nil {
 			return nil, err
 		}

@@ -1,49 +1,69 @@
 import { HighlightText } from "@hydris/ui/command-palette/highlight-text";
 import { useListNav } from "@hydris/ui/command-palette/use-list-nav";
+import { SEVERITY_DOT } from "@hydris/ui/lib/severity";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
 import uFuzzy from "@leeoniya/ufuzzy";
 import type { Entity } from "@projectqai/proto/world";
-import { LinkStatus } from "@projectqai/proto/world";
 import type { LucideIcon } from "lucide-react-native";
 import { Check, Crosshair, Search } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
 import { Platform, Pressable, Text, TextInput, View } from "react-native";
 
 import { getEntityName, isDetectionEntity } from "../../../../lib/api/use-track-utils";
+import type { TileVariant } from "../../../mission/provider-state";
+import { useOwnState } from "../../../mission/use-mission-state";
 
 const uf = new uFuzzy({ intraMode: 1 });
 
 export type EntityItem = {
   id: string;
   name: string;
-  isOnline: boolean;
+  entity: Entity;
   subtitle?: string;
 };
 
 export function buildEntityItems(
-  entities: Map<string, Entity>,
-  opts: { match: (entity: Entity) => boolean; subtitle?: (entity: Entity) => string | undefined },
+  entities: Entity[],
+  subtitle?: (entity: Entity) => string | undefined,
 ): EntityItem[] {
   const result: EntityItem[] = [];
-  for (const entity of entities.values()) {
+
+  for (const entity of entities) {
     // a detection can carry a matching metric
     if (isDetectionEntity(entity)) continue;
-    if (!opts.match(entity)) continue;
     result.push({
       id: entity.id,
       name: getEntityName(entity),
-      isOnline: entity.link?.status === LinkStatus.LinkStatusConnected,
-      subtitle: opts.subtitle?.(entity),
+      entity,
+      subtitle: subtitle?.(entity),
     });
   }
   return result.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+const STATE_DOT: Record<TileVariant, string> = {
+  default: SEVERITY_DOT.neutral,
+  success: SEVERITY_DOT.success,
+  pending: SEVERITY_DOT.pending,
+  alert: SEVERITY_DOT.alert,
+};
+
+function EntityState({ entity }: { entity: Entity }) {
+  const state = useOwnState(entity);
+
+  return (
+    <View className="flex-row items-center gap-1.5">
+      <View className={cn("size-1.5 rounded-full", STATE_DOT[state.variant])} />
+      <Text className="text-muted-foreground font-mono text-xs">{state.label}</Text>
+    </View>
+  );
+}
+
 type Props = {
   entities: EntityItem[];
   icon: LucideIcon;
-  emptyLabel: string;
+  itemsLabel: string;
   placeholder: string;
   onSelect: (id: string) => void;
   selectable?: boolean;
@@ -55,7 +75,7 @@ type Props = {
 export function EntityPickerList({
   entities,
   icon: Icon,
-  emptyLabel,
+  itemsLabel,
   placeholder,
   onSelect,
   selectable = false,
@@ -118,77 +138,78 @@ export function EntityPickerList({
           <View className="items-center justify-center py-10">
             <Icon size={32} strokeWidth={1} color={t.iconMuted} />
             <Text className="text-muted-foreground mt-2 font-sans text-sm">
-              {entities.length === 0 ? `No ${emptyLabel} available` : "No matches found"}
+              {entities.length === 0 ? `No ${itemsLabel} available` : "No matches found"}
             </Text>
           </View>
         ) : (
-          filtered.map((entity, index) => {
-            const isPinned = entity.id === selectedId;
-            const isFollowing = !selectedId && entity.id === followsId;
-            const isHighlighted = index === highlightedIndex;
-            return (
-              <Pressable
-                ref={isHighlighted ? setHighlightedEl : undefined}
-                key={entity.id}
-                onPress={() => onSelect(entity.id)}
-                tabIndex={-1}
-                className={cn(
-                  "active:bg-surface-overlay/8 flex-row items-center gap-3 px-4 py-3",
-                  isHighlighted || isPinned || isFollowing
-                    ? "bg-surface-overlay/8"
-                    : "hover:bg-surface-overlay/5",
-                )}
-              >
-                {selectable ? (
-                  <View className="w-5 items-center justify-center">
-                    {isPinned ? (
-                      <Check
-                        size={16}
-                        strokeWidth={2.5}
-                        color={t.controlFgActive}
-                        aria-label="Pinned"
-                      />
-                    ) : isFollowing ? (
-                      <Crosshair
-                        size={15}
-                        strokeWidth={2}
-                        color={t.iconMuted}
-                        aria-label="Following"
-                      />
-                    ) : null}
-                  </View>
-                ) : (
-                  <View className="bg-surface-overlay/6 size-8 items-center justify-center rounded">
-                    <Icon size={16} strokeWidth={2} color={t.iconMuted} />
-                  </View>
-                )}
-                <View className="flex-1">
-                  <HighlightText
-                    text={entity.name}
-                    ranges={entity.ranges}
-                    className="font-sans-medium text-foreground/80 text-sm"
-                    highlightClassName="text-blue-foreground"
-                  />
-                  {entity.subtitle && (
-                    <Text className="text-muted-foreground font-mono text-xs">
-                      {entity.subtitle}
-                    </Text>
+          <View
+            // @ts-expect-error listbox is a React Native Web role
+            role="listbox"
+            aria-label={itemsLabel}
+          >
+            {filtered.map((entity, index) => {
+              const isPinned = entity.id === selectedId;
+              const isFollowing = !selectedId && entity.id === followsId;
+              const isHighlighted = index === highlightedIndex;
+
+              return (
+                <Pressable
+                  ref={isHighlighted ? setHighlightedEl : undefined}
+                  key={entity.id}
+                  onPress={() => onSelect(entity.id)}
+                  role="option"
+                  aria-selected={isHighlighted}
+                  tabIndex={-1}
+                  className={cn(
+                    "active:bg-surface-overlay/8 flex-row items-center gap-3 px-4 py-3",
+                    isHighlighted || isPinned || isFollowing
+                      ? "bg-surface-overlay/8"
+                      : "hover:bg-surface-overlay/5",
                   )}
-                </View>
-                <View className="flex-row items-center gap-1.5">
-                  <View
-                    className={cn(
-                      "size-1.5 rounded-full",
-                      entity.isOnline ? "bg-green" : "bg-foreground/60",
+                >
+                  {selectable ? (
+                    <View className="w-5 items-center justify-center">
+                      {isPinned ? (
+                        <Check
+                          size={16}
+                          strokeWidth={2.5}
+                          color={t.controlFgActive}
+                          aria-label="Pinned"
+                        />
+                      ) : isFollowing ? (
+                        <Crosshair
+                          size={15}
+                          strokeWidth={2}
+                          color={t.iconMuted}
+                          aria-label="Following"
+                        />
+                      ) : null}
+                    </View>
+                  ) : (
+                    <View className="bg-surface-overlay/6 size-8 items-center justify-center rounded">
+                      <Icon size={16} strokeWidth={2} color={t.iconMuted} />
+                    </View>
+                  )}
+                  <View className="flex-1">
+                    <HighlightText
+                      text={entity.name}
+                      ranges={entity.ranges}
+                      className="font-sans-medium text-foreground/80 text-sm"
+                      highlightClassName="text-blue-foreground"
+                    />
+                    {entity.subtitle && (
+                      <Text className="text-muted-foreground font-mono text-xs">
+                        {entity.subtitle}
+                      </Text>
                     )}
-                  />
-                  <Text className="text-muted-foreground font-mono text-xs">
-                    {entity.isOnline ? "online" : "offline"}
-                  </Text>
-                </View>
-              </Pressable>
-            );
-          })
+                  </View>
+                  {(entity.entity.device || entity.entity.configurable) && (
+                    <EntityState entity={entity.entity} />
+                  )}
+                </Pressable>
+              );
+            })}
+          </View>
         )}
       </View>
     </View>

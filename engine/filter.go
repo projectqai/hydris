@@ -89,6 +89,8 @@ func entityHasComponent(entity *pb.Entity, field uint32) bool {
 		return entity.Assembly != nil
 	case pb.EntityComponent_EntityComponentMapLayer:
 		return entity.MapLayer != nil
+	case pb.EntityComponent_EntityComponentMeasurement:
+		return entity.Measurement != nil
 	case pb.EntityComponent_EntityComponentManualControl:
 		return entity.ManualControl != nil
 	case pb.EntityComponent_EntityComponentTargetManualControl:
@@ -308,6 +310,22 @@ func (s *WorldServer) matchesEntityFilter(entity *pb.Entity, filter *pb.EntityFi
 	// Configuration filter (existence check only)
 	if filter.Config != nil {
 		if entity.Config == nil {
+			return false
+		}
+	}
+
+	// Capture filter: a decoder subscribes to the port it understands.
+	if filter.Capture != nil {
+		if entity.Capture == nil {
+			return false
+		}
+		if filter.Capture.Port != nil && (entity.Capture.Port == nil || entity.Capture.GetPort() != *filter.Capture.Port) {
+			return false
+		}
+		if filter.Capture.ContentType != nil && entity.Capture.GetContentType() != *filter.Capture.ContentType {
+			return false
+		}
+		if filter.Capture.CapturedBy != nil && entity.Capture.GetCapturedBy() != *filter.Capture.CapturedBy {
 			return false
 		}
 	}

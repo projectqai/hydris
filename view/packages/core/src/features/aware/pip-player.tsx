@@ -80,7 +80,7 @@ export function PIPPlayer({ minTop = PANEL_TOP_OFFSET - 12 }: PIPPlayerProps) {
               <View className="flex-1 flex-row items-center gap-1">
                 <GripHorizontal size={14} color={t.iconMuted} strokeWidth={1.5} />
                 <Text className="font-sans-medium text-foreground/90 text-xs" numberOfLines={1}>
-                  {window.entityName || "Unknown"}
+                  {window.entityName}
                 </Text>
                 {window.cameraLabel && window.cameraLabel !== window.entityName && (
                   <>

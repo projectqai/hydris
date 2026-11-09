@@ -56,6 +56,14 @@
       "description": "Feeds → Live global lightning strikes from the Blitzortung.org network",
       "icon": "zap",
       "compat": ">=0.0.20"
+    },
+    {
+      "name": "ros2",
+      "ref": "ghcr.io/projectqai/hydris/plugins/ros2:0.1.0",
+      "label": "ROS 2",
+      "description": "Network → Bridge hydris channels and ROS 2 topics, both ways (linux/amd64, linux/arm64)",
+      "icon": "bot",
+      "compat": ">=1.1.0-rc4"
     }
   ]
 }

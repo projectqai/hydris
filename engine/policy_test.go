@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"net/http"
+
+	"connectrpc.com/connect"
 	"testing"
 
 	"github.com/projectqai/hydris/builtin"
@@ -395,6 +397,49 @@ func TestAuthContext_ResolvesIdentity(t *testing.T) {
 	}
 }
 
+// TestAuthContext_ClaimedActors asserts the identities a builtin declares for
+// its actor reach policy as actor.plugin.actors, one header value per identity,
+// and only over the bufconn.
+func TestAuthContext_ClaimedActors(t *testing.T) {
+	pe := testPolicyEvaluator(nil)
+	i := &policyInterceptor{pe: pe}
+	chain := pe.compileChain(&pb.PolicyComponent{Rules: []*pb.PolicyRule{
+		{Action: pb.PolicyAction_PolicyActionAllow, Cel: celStr(`change.id in actor.plugin.actors`)},
+		{Action: pb.PolicyAction_PolicyActionDeny},
+	}})
+	hdr := http.Header{}
+	hdr.Set("X-Builtin-Name", "plugins")
+	hdr.Set("X-Builtin-Actor", "plugins.p")
+	hdr.Add("X-Builtin-Claimed-Actor", "p.air")
+	hdr.Add("X-Builtin-Claimed-Actor", "p.b,admin.actor")
+
+	verdict := func(ctx context.Context, id string) policyVerdict {
+		ctx, err := i.authContext(ctx, hdr, "bufconn")
+		if err != nil {
+			t.Fatal(err)
+		}
+		isBuiltin, _ := ctx.Value(builtinConnKey).(bool)
+		ec := pe.evalCtxFor(peerContext{}, false, isBuiltin, "plugins", "", actorFromContext(ctx))
+		ec.claimedActors, _ = ctx.Value(claimedActorsKey).([]string)
+		return pe.evalChain(chain, buildGRPCActivation(ec, isFlags("push"), &pb.Entity{Id: id}), 0)
+	}
+	bufCtx := context.WithValue(context.Background(), builtinConnKey, true)
+	for id, want := range map[string]policyVerdict{
+		"p.air":           verdictAllow,
+		"plugins.p":       verdictDeny,
+		"p.b":             verdictDeny,
+		"admin.actor":     verdictDeny,
+		"p.b,admin.actor": verdictDeny,
+	} {
+		if got := verdict(bufCtx, id); got != want {
+			t.Errorf("%s: verdict = %v, want %v", id, got, want)
+		}
+	}
+	if got := verdict(context.Background(), "p.air"); got != verdictDeny {
+		t.Errorf("remote X-Builtin-Claimed-Actor must be ignored: verdict = %v", got)
+	}
+}
+
 func TestCheckEntityChange_VerbDetection(t *testing.T) {
 	pe := testPolicyEvaluator(map[string]*pb.Entity{
 		"existing.1": {Id: "existing.1"},
@@ -471,5 +516,65 @@ func TestProtoFieldAccess_InCEL(t *testing.T) {
 	}
 	if out.Value() != false {
 		t.Error("expected has(change.camera) to be false for entity without camera")
+	}
+}
+
+// TestComponentsFunction locks in the allow-list primitive: components(change)
+// names the populated fields of the change, minus the id, so a policy can
+// confine an actor to a few well-known components.
+func TestComponentsFunction(t *testing.T) {
+	pe := testPolicyEvaluator(nil)
+	ast, issues := pe.env.Compile(`components(change).all(c, c in ["label", "geo", "controller"])`)
+	if issues != nil && issues.Err() != nil {
+		t.Fatal(issues.Err())
+	}
+	prg, err := pe.env.Program(ast)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eval := func(e *pb.Entity) bool {
+		out, _, err := prg.Eval(buildGRPCActivation(testEvalCtx(peerContext{address: "10.0.0.1"}, false), testIsFlags(nil), e))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.Value() == true
+	}
+	if !eval(&pb.Entity{Id: "x", Label: proto.String("a"), Geo: &pb.GeoSpatialComponent{Latitude: 1}}) {
+		t.Error("label and geo are allowed")
+	}
+	if !eval(&pb.Entity{Id: "x"}) {
+		t.Error("an entity carrying nothing but its id passes any allow-list")
+	}
+	if eval(&pb.Entity{Id: "x", Geo: &pb.GeoSpatialComponent{}, Policy: &pb.PolicyComponent{}}) {
+		t.Error("policy is not allowed")
+	}
+	if eval(&pb.Entity{Id: "x", Device: &pb.DeviceComponent{}}) {
+		t.Error("device is not allowed")
+	}
+}
+
+// TestCheck_CancelTaskIsTasking asserts CancelTask is authorized like RunTask:
+// as a task operation on the execution's entity, so a rule that keeps a
+// caller from tasking an entity also keeps it from cancelling there.
+func TestCheck_CancelTaskIsTasking(t *testing.T) {
+	pe := testPolicyEvaluator(nil)
+	pe.rules = pe.compileChain(&pb.PolicyComponent{Rules: []*pb.PolicyRule{
+		{Action: pb.PolicyAction_PolicyActionDeny, Cel: celStr(`is.task && change.id == "guarded"`)},
+		{Action: pb.PolicyAction_PolicyActionAllow},
+	}})
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		req  connect.AnyRequest
+		deny bool
+	}{
+		{connect.NewRequest(&pb.RunTaskRequest{EntityId: "guarded"}), true},
+		{connect.NewRequest(&pb.CancelTaskRequest{ExecutionId: "guarded"}), true},
+		{connect.NewRequest(&pb.CancelTaskRequest{ExecutionId: "open"}), false},
+	} {
+		err := pe.check(ctx, tc.req)
+		if (err != nil) != tc.deny {
+			t.Errorf("%T: denied=%v, want %v (%v)", tc.req.Any(), err != nil, tc.deny, err)
+		}
 	}
 }

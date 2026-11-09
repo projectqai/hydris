@@ -1,4 +1,4 @@
-import { EmptyState } from "@hydris/ui/empty-state";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@hydris/ui/empty-state";
 import { MetricKind } from "@projectqai/proto/metrics";
 import { Activity } from "lucide-react-native";
 import { View } from "react-native";
@@ -7,13 +7,11 @@ import { useShallow } from "zustand/react/shallow";
 import { PinButton } from "../../aware/components/layout/pane-pin-button";
 import { usePaneEntity } from "../../aware/pane-entity-context";
 import { useEntityStore } from "../../aware/store/entity-store";
-import { formatCompactRelativeTime } from "../../aware/utils/format-metrics";
 import { MetricTile, type MetricTileConfig } from "../../aware/widgets/metric-tile";
 import { getSensorKind } from "../adapter";
 import { RAD_DOSE_RATE_IDS } from "../metric-ids";
 import { LevelsWidget } from "./levels-widget";
-import { SensorWidgetShell } from "./sensor-widget-shell";
-import { SensorHeaderMeta } from "./widget-card";
+import { sensorHeaderContent, SensorWidgetShell } from "./sensor-widget-shell";
 
 // only the cbrn hazard metrics show on the tile. Count-kind masks
 // (errors/warnings) map to "general" and stay off.
@@ -32,20 +30,7 @@ function RadiationSensorWidget({ entityId }: { entityId: string }) {
         <MetricTile
           config={RADIATION_CONFIG}
           entityId={entityId}
-          header={{
-            name: data.name,
-            timestamp: data.measuredAt ? formatCompactRelativeTime(data.measuredAt) : "--:--",
-            meta: (s) => (
-              <SensorHeaderMeta
-                connectionState={data.connectionState}
-                signalStrength={data.signalStrength}
-                isSilentMode={data.isSilent}
-                hasSensorError={data.hasSensorError}
-                textSize={s.text}
-                iconSize={s.icon}
-              />
-            ),
-          }}
+          header={sensorHeaderContent(data)}
         />
       )}
     </SensorWidgetShell>
@@ -75,7 +60,11 @@ export function SensorPane({ entityId }: { entityId?: string }) {
           </View>
         )}
         <View className="flex-1">
-          <EmptyState icon={Activity} title="Sensor" subtitle={subtitle} />
+          <Empty>
+            <EmptyMedia icon={Activity} />
+            <EmptyTitle>Sensor</EmptyTitle>
+            <EmptyDescription>{subtitle}</EmptyDescription>
+          </Empty>
         </View>
       </View>
     );

@@ -44,6 +44,7 @@ cssInterop(LinearGradient, { className: "style" });
 import { useThemeStore } from "@hydris/core/features/aware/store/theme-store";
 import * as HydrisEngine from "@hydris/engine";
 import { useThemeColors } from "@hydris/ui/lib/theme";
+import { PressOutsideRoot } from "@hydris/ui/press-outside";
 import Constants from "expo-constants";
 
 export default function RootLayout() {
@@ -120,20 +121,22 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <KeyboardProvider>
         <SafeAreaProvider>
-          <View className="flex-1 bg-background">
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: t.background },
-                animation: "none",
-              }}
-            >
-              <Stack.Screen name="index" />
-              <Stack.Screen name="aware" />
-            </Stack>
-            <StatusBar hidden style={colorScheme === "dark" ? "light" : "dark"} />
-            <AppToaster />
-          </View>
+          <PressOutsideRoot>
+            <View className="flex-1 bg-background">
+              <Stack
+                screenOptions={{
+                  headerShown: false,
+                  contentStyle: { backgroundColor: t.background },
+                  animation: "none",
+                }}
+              >
+                <Stack.Screen name="index" />
+                <Stack.Screen name="aware" />
+              </Stack>
+              <StatusBar hidden style={colorScheme === "dark" ? "light" : "dark"} />
+              <AppToaster />
+            </View>
+          </PressOutsideRoot>
           <AlarmOverlay />
         </SafeAreaProvider>
       </KeyboardProvider>

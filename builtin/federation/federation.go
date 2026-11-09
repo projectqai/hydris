@@ -15,16 +15,45 @@ import (
 	"github.com/projectqai/hydris/engine"
 	"github.com/projectqai/hydris/goclient"
 	"github.com/projectqai/hydris/pkg/timesync"
+	"github.com/projectqai/hydris/pkg/tracing"
 	pb "github.com/projectqai/proto/go"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// relay pushes one federated entity to dst inside a "federation.relay" span
+// in the trace of the version being relayed. That trace is derived from the
+// entity id and fresh as the source node stores it (before clock-offset
+// shifting), exactly as the source derived it, so no lookup is needed; the
+// push then forwards the span as a traceparent header and the destination's
+// change links it as carrier. Entities without a version get no span.
+func (i *Instance) relay(ctx context.Context, dst pb.WorldServiceClient, e *pb.Entity, fresh *timestamppb.Timestamp, direction, peerNode string) error {
+	ctx, span := tracing.ContinueSpan(ctx, tracing.Derive(e.Id, fresh), "federation.relay",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("hydris.federation.link", i.entityID),
+			attribute.String("hydris.federation.direction", direction),
+			attribute.String("hydris.federation.peer_node", peerNode),
+		),
+	)
+	defer span.End()
+	_, err := dst.Push(ctx, &pb.EntityChangeRequest{Changes: []*pb.Entity{e}})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return err
+}
+
 type Instance struct {
-	entityID string
-	remote   string // server URL (host:port or http(s)://…)
-	logger   *slog.Logger
+	entityID    string
+	remote      string // server URL (host:port or http(s)://…)
+	fingerprint string // pinned mTLS identity of the remote ("" = no pin)
+	logger      *slog.Logger
 
 	ts timesync.Tracker
 }
@@ -66,6 +95,13 @@ func Run(ctx context.Context, logger *slog.Logger, _ string) error {
 				"description":    "Remote server URL to sync with, e.g. 10.0.0.2:50051 or https://10.0.0.2:50051. TLS connections authenticate with this node's certificate (mTLS).",
 				"ui:placeholder": "e.g. 10.0.0.2:50051",
 				"ui:order":       0,
+			},
+			"fingerprint": map[string]any{
+				"type":           "string",
+				"title":          "mTLS identity",
+				"description":    "Pin the remote's mTLS identity: the SHA-256 fingerprint of its TLS certificate. When set, the link only connects over TLS and refuses any server that does not present a pinned certificate, so it keeps working — and stays safe — when the remote's IP changes. Several fingerprints may be listed (comma or space separated) to stage a certificate rotation.",
+				"ui:placeholder": "e.g. 3316a5c578…(64 hex digits)",
+				"ui:order":       1,
 			},
 		},
 		"required": []any{"source"},
@@ -175,7 +211,9 @@ func autoDiscoverDownstream(ctx context.Context, logger *slog.Logger, serviceID,
 		if port == 0 {
 			port = 50051
 		}
-		addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+		// https:// pins the transport: auto-discovered links never fall back to plaintext.
+		source := "https://" + net.JoinHostPort(host, fmt.Sprintf("%d", port))
+		fingerprint := dev.Node.GetMtlsIdentity()
 
 		hostname := dev.Node.GetHostname()
 		if hostname == "" {
@@ -186,12 +224,15 @@ func autoDiscoverDownstream(ctx context.Context, logger *slog.Logger, serviceID,
 
 		existing, _ := client.GetEntity(ctx, &pb.GetEntityRequest{Id: childID})
 		if existing != nil && existing.Entity != nil {
+			// Keyed by the peer's identity; follow it to the new address.
+			updateDiscoveredConfig(ctx, logger, client, existing.Entity, source, fingerprint)
 			continue
 		}
 
 		cfg, _ := structpb.NewStruct(map[string]any{
-			"enabled": false,
-			"source":  addr,
+			"enabled":     false,
+			"source":      source,
+			"fingerprint": fingerprint,
 		})
 
 		_, err = client.Push(ctx, &pb.EntityChangeRequest{
@@ -217,8 +258,50 @@ func autoDiscoverDownstream(ctx context.Context, logger *slog.Logger, serviceID,
 			logger.Error("auto-discover: push child", "entity", event.Entity.Id, "error", err)
 			continue
 		}
-		logger.Info("auto-discover: created disabled downstream", "entity", event.Entity.Id, "addr", addr)
+		logger.Info("auto-discover: created disabled downstream", "entity", event.Entity.Id, "source", source)
 	}
+}
+
+// updateDiscoveredConfig points an auto-discovered downstream at the peer's
+// current address, preserving the rest of its config (notably "enabled").
+func updateDiscoveredConfig(ctx context.Context, logger *slog.Logger,
+	client pb.WorldServiceClient, child *pb.Entity, source, fingerprint string,
+) {
+	if child.Config == nil || child.Config.Value == nil || child.Config.Value.Fields == nil {
+		return
+	}
+	fields := child.Config.Value.Fields
+	currentSource := fields["source"].GetStringValue()
+	currentFP := fields["fingerprint"].GetStringValue()
+
+	// The pin is write-once: discovery fills it when empty but never changes
+	// an existing one. A peer presenting a different certificate is a new
+	// identity and gets its own link; moving an existing link's trust to a
+	// new certificate is an operator decision, not an automatic one.
+	if currentFP != "" {
+		fingerprint = currentFP
+	}
+	if currentSource == source && currentFP == fingerprint {
+		return
+	}
+
+	cfg := proto.Clone(child.Config).(*pb.ConfigurationComponent)
+	cfg.Value.Fields["source"] = structpb.NewStringValue(source)
+	if fingerprint != "" {
+		cfg.Value.Fields["fingerprint"] = structpb.NewStringValue(fingerprint)
+	}
+
+	if _, err := client.Push(ctx, &pb.EntityChangeRequest{
+		Changes: []*pb.Entity{{
+			Id:     child.Id,
+			Config: cfg,
+		}},
+	}); err != nil {
+		logger.Error("auto-discover: update config", "id", child.Id, "error", err)
+		return
+	}
+	logger.Info("auto-discover: updated downstream", "id", child.Id,
+		"source", source, "previousSource", currentSource, "fingerprint", fingerprint)
 }
 
 func runInstance(ctx context.Context, logger *slog.Logger, entity *pb.Entity) error {
@@ -235,14 +318,16 @@ func runInstance(ctx context.Context, logger *slog.Logger, entity *pb.Entity) er
 	if remote == "" {
 		return fmt.Errorf("federation config missing source")
 	}
+	fingerprint := fields["fingerprint"].GetStringValue()
 
 	instance := &Instance{
-		entityID: entity.Id,
-		remote:   remote,
-		logger:   logger,
+		entityID:    entity.Id,
+		remote:      remote,
+		fingerprint: fingerprint,
+		logger:      logger,
 	}
 
-	logger.Info("starting federation", "entityID", entity.Id, "remote", remote)
+	logger.Info("starting federation", "entityID", entity.Id, "remote", remote, "fingerprint", fingerprint)
 
 	return instance.runDownstream(ctx)
 }
@@ -281,6 +366,10 @@ func (i *Instance) connectToRemote(ctx context.Context) (*goclient.Connection, e
 	var opts []goclient.ConnectOption
 	if engine.NodeTLSCert != nil {
 		opts = append(opts, goclient.WithClientCert(*engine.NodeTLSCert))
+	}
+	if i.fingerprint != "" {
+		// TLS only; rejected unless the remote presents the pinned cert.
+		opts = append(opts, goclient.WithServerFingerprint(i.fingerprint))
 	}
 	return goclient.ConnectURL(ctx, i.remote, "", opts...)
 }
@@ -465,6 +554,9 @@ func (i *Instance) runDownstream(ctx context.Context) error {
 			if event.Entity == nil {
 				continue
 			}
+			// The version's trace is derived from the remote's own fresh,
+			// before we shift or bump it.
+			remoteFresh := event.Entity.GetLifetime().GetFresh()
 			shiftEntityTimestamps(event.Entity, -i.ts.Offset())
 			if !filterForFederation(event.Entity, remoteNodeID, keepaliveTTL) {
 				continue
@@ -472,10 +564,7 @@ func (i *Instance) runDownstream(ctx context.Context) error {
 			if event.Entity.Camera != nil {
 				rewriteCameraURLs(event.Entity, "http://"+i.remote)
 			}
-			_, err = localClient.Push(ctx, &pb.EntityChangeRequest{
-				Changes: []*pb.Entity{event.Entity},
-			})
-			if err != nil {
+			if err := i.relay(ctx, localClient, event.Entity, remoteFresh, "pull", remoteNodeID); err != nil {
 				i.logger.Error("downstream: failed to push to local", "targetEntity", event.Entity.Id, "error", err)
 			}
 		}
@@ -492,6 +581,9 @@ func (i *Instance) runDownstream(ctx context.Context) error {
 			return
 		}
 		i.logger.Info("downstream push started", "entityID", i.entityID)
+		// Every update to a vehicle repeats its last control frame; relay each
+		// frame once, or a lapsed command would be revived upstream.
+		relayedFrame := map[string]time.Time{}
 		for {
 			if ctx.Err() != nil {
 				errc <- ctx.Err()
@@ -517,16 +609,25 @@ func (i *Instance) runDownstream(ctx context.Context) error {
 			if !ownedByRemote {
 				continue
 			}
+			frame := event.Entity.TargetManualControl
+			if frame != nil {
+				if at := frame.GetAt().AsTime(); at.Equal(relayedFrame[event.Entity.Id]) {
+					frame = nil
+				} else {
+					relayedFrame[event.Entity.Id] = at
+				}
+			}
+			if event.Entity.TaskExecution == nil && frame == nil {
+				continue
+			}
+			localFresh := event.Entity.GetLifetime().GetFresh()
 			stub := &pb.Entity{
 				Id:                  event.Entity.Id,
 				TaskExecution:       event.Entity.TaskExecution,
-				TargetManualControl: event.Entity.TargetManualControl,
+				TargetManualControl: frame,
 			}
 			shiftEntityTimestamps(stub, i.ts.Offset())
-			_, err = remoteClient.Push(ctx, &pb.EntityChangeRequest{
-				Changes: []*pb.Entity{stub},
-			})
-			if err != nil {
+			if err := i.relay(ctx, remoteClient, stub, localFresh, "push", remoteNodeID); err != nil {
 				i.logger.Error("downstream: failed to push to remote", "targetEntity", stub.Id, "error", err)
 				_ = json.NewEncoder(os.Stderr).Encode(stub)
 			}
@@ -539,10 +640,12 @@ func (i *Instance) runDownstream(ctx context.Context) error {
 	return err
 }
 
-// rewriteCameraURLs rewrites private/localhost/credentialed camera stream
-// URLs to use the origin node's proxy endpoints. Streaming protocols are
-// pointed at the RTSP relay so that local proxy handlers can bridge them;
-// image/MJPEG go through the HTTP image proxy.
+// rewriteCameraURLs points every federated camera stream at the immediate
+// upstream's media proxy, so a downstream viewer reaches the camera through the
+// upstream (which it can reach via the federation source) rather than the
+// camera's own address (which it usually cannot). Video goes to the RTSP relay,
+// image/MJPEG to the HTTP image proxy. In multi-hop federation each hop
+// re-points to its own immediate upstream. HLS/Iframe are left unchanged.
 func rewriteCameraURLs(entity *pb.Entity, origin string) {
 	if entity.Camera == nil || origin == "" {
 		return
@@ -553,17 +656,6 @@ func rewriteCameraURLs(entity *pb.Entity, origin string) {
 	}
 	for idx, stream := range entity.Camera.Streams {
 		if stream.Url == "" {
-			continue
-		}
-		u, err := url.Parse(stream.Url)
-		if err != nil {
-			continue
-		}
-		// Only rewrite URLs that point to localhost/loopback or carry
-		// credentials. Other addresses (including RFC1918) are assumed to
-		// be already network-reachable and must not be changed — otherwise
-		// multi-hop federation would clobber valid proxy URLs.
-		if u.User == nil && !isLoopback(u.Hostname()) {
 			continue
 		}
 		switch stream.Protocol {
@@ -578,18 +670,6 @@ func rewriteCameraURLs(entity *pb.Entity, origin string) {
 			stream.Protocol = pb.MediaStreamProtocol_MediaStreamProtocolRtsp
 		}
 	}
-}
-
-// isLoopback returns true if the hostname is localhost or a loopback address.
-func isLoopback(host string) bool {
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	return ip.IsLoopback()
 }
 
 func init() {

@@ -2,55 +2,51 @@ package simcam
 
 import (
 	"image"
-	"image/color"
+	"image/draw"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/inconsolata"
 	"golang.org/x/image/math/fixed"
 )
 
-var textFace = inconsolata.Regular8x16
+const (
+	glyphW = 8
+	glyphH = 16
+)
 
-func drawText5x7(img *image.RGBA, s string, x, y int, c color.RGBA) int {
-	d := &font.Drawer{
-		Dst:  img,
-		Src:  image.NewUniform(c),
-		Face: textFace,
-		Dot:  fixed.P(x, y+textFace.Ascent),
+type glyph [glyphW * glyphH]uint8
+
+// glyphs holds pre-rasterised coverage masks so drawing text is a plain
+// alpha blit instead of a trip through font.Drawer every frame.
+var glyphs = buildGlyphs()
+
+func buildGlyphs() map[rune]*glyph {
+	face := inconsolata.Regular8x16
+	out := make(map[rune]*glyph)
+	dst := image.NewAlpha(image.Rect(0, 0, glyphW, glyphH))
+	add := func(r rune) {
+		draw.Draw(dst, dst.Bounds(), image.Transparent, image.Point{}, draw.Src)
+		d := &font.Drawer{Dst: dst, Src: image.Opaque, Face: face, Dot: fixed.P(0, face.Ascent)}
+		d.DrawString(string(r))
+		g := new(glyph)
+		copy(g[:], dst.Pix)
+		out[r] = g
 	}
-	d.DrawString(s)
-	return d.Dot.X.Ceil()
+	for r := rune(32); r < 127; r++ {
+		add(r)
+	}
+	add('°')
+	add('×')
+	add('©')
+	return out
 }
 
-//nolint:unused
-func drawText5x7Scaled(img *image.RGBA, s string, x, y int, c color.RGBA, scale int) int {
-	if scale <= 1 {
-		return drawText5x7(img, s, x, y, c)
+func glyphFor(r rune) *glyph {
+	if r == ' ' {
+		return nil
 	}
-
-	w := font.MeasureString(textFace, s).Ceil()
-	h := textFace.Height
-
-	tmp := image.NewRGBA(image.Rect(0, 0, w, h))
-	d := &font.Drawer{
-		Dst:  tmp,
-		Src:  image.NewUniform(color.White),
-		Face: textFace,
-		Dot:  fixed.P(0, textFace.Ascent),
+	if g, ok := glyphs[r]; ok {
+		return g
 	}
-	d.DrawString(s)
-
-	for ty := 0; ty < h; ty++ {
-		for tx := 0; tx < w; tx++ {
-			if tmp.Pix[ty*tmp.Stride+tx*4+3] == 0 {
-				continue
-			}
-			for sy := 0; sy < scale; sy++ {
-				for sx := 0; sx < scale; sx++ {
-					setPx(img, x+tx*scale+sx, y+ty*scale+sy, c)
-				}
-			}
-		}
-	}
-	return x + w*scale
+	return glyphs['?']
 }

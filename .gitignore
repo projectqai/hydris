@@ -1,4 +1,13 @@
 bin/
+node_modules/
+.turbo/
 android/.gradle/
 android/aar/libs/hydris-go.aar
 android/hydris-go.aar
+android/aar/build/
+hal/android/build/
+/hydris
+*.tsbuildinfo
+
+.envrc
+.direnv/

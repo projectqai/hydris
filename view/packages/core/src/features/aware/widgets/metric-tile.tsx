@@ -1,11 +1,11 @@
-import { EmptyState } from "@hydris/ui/empty-state";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@hydris/ui/empty-state";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { chooseTileFit, type TileGeometry, useTileMeasure } from "@hydris/ui/lib/tile-layout";
 import { cn } from "@hydris/ui/lib/utils";
 import { useIsScreenLocked } from "@hydris/ui/screen-lock";
 import { TileHeader, type TileHeaderContent, type TileHeaderSizes } from "@hydris/ui/tile-header";
 import type { Metric } from "@projectqai/proto/metrics";
-import { AlertLevel, type MetricKind, MetricUnit } from "@projectqai/proto/metrics";
+import { type MetricKind, MetricUnit } from "@projectqai/proto/metrics";
 import { LinearGradient } from "expo-linear-gradient";
 import { ChevronLeft, ChevronRight, type LucideIcon } from "lucide-react-native";
 import { type ReactNode, useMemo, useRef, useState } from "react";
@@ -16,6 +16,7 @@ import { PinButton } from "../components/layout/pane-pin-button";
 import { usePaneEntity } from "../pane-entity-context";
 import { selectEntity, useEntityStore } from "../store/entity-store";
 import { useSelectionStore } from "../store/selection-store";
+import { formatMetricAlert } from "../utils/format-entity";
 import {
   formatCompactRelativeTime,
   getMetricCategory,
@@ -28,7 +29,6 @@ import {
   scaleForDisplay,
 } from "../utils/format-metrics";
 
-type HealthLevel = "good" | "moderate" | "poor";
 type GaugeRange = { min: number; max: number; inverted?: boolean };
 
 export type MetricTileConfig = {
@@ -49,22 +49,10 @@ type Display = {
   short: string;
   value: string;
   unit: string;
-  health: HealthLevel | null;
+  alert: ReturnType<typeof formatMetricAlert>;
   rawValue: number;
   kind: MetricKind | undefined;
 };
-
-// yellow/red as literal classes, not theme tokens: the warning token is orange.
-const HEALTH_TEXT: Record<HealthLevel, string> = {
-  good: "text-green",
-  moderate: "text-yellow",
-  poor: "text-red",
-};
-
-function alertToHealth(m: Metric): HealthLevel | null {
-  if (m.alerting == null || m.alerting === AlertLevel.AlertLevelNone) return null;
-  return m.alerting === AlertLevel.AlertLevelWarning ? "moderate" : "poor";
-}
 
 function gaugePosition(
   rawValue: number,
@@ -91,7 +79,7 @@ function toDisplay(m: Metric): Display {
     short: label.split(/\s+/)[0] ?? label,
     value: formatted,
     unit: getUnitSymbol(unit),
-    health: alertToHealth(m),
+    alert: formatMetricAlert(m.alerting),
     rawValue: m.unit === MetricUnit.MetricUnitRatio ? value : raw,
     kind: m.kind ?? undefined,
   };
@@ -224,12 +212,18 @@ function heroValueEm(value: string): number {
   return em;
 }
 
-function HealthGauge({ position, t }: { position: number; t: Tier }) {
+function HealthGauge({ label, position, t }: { label: string; position: number; t: Tier }) {
   const barHeight = Math.max(3, Math.round(t.rowValue * 0.34));
   const capHeight = Math.round(t.rowValue * 1.1);
   const capWidth = Math.round(capHeight * 0.6);
   return (
     <View
+      accessible
+      accessibilityRole="progressbar"
+      accessibilityLabel={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(position * 100)}
       style={{
         height: capHeight,
         width: "100%",
@@ -315,7 +309,7 @@ function MetricRow({
       <Text
         className={cn(
           "font-sans-medium ml-2 shrink-0 tabular-nums",
-          item.health ? HEALTH_TEXT[item.health] : "text-foreground",
+          item.alert ? item.alert.className : "text-foreground",
         )}
         style={{ fontSize: tier.rowValue }}
         numberOfLines={1}
@@ -323,6 +317,7 @@ function MetricRow({
         {item.value}
         {item.unit ? <Text className="text-foreground/60"> {item.unit}</Text> : null}
       </Text>
+      {item.alert && <Text className="sr-only">{item.alert.label}</Text>}
     </View>
   );
 }
@@ -350,7 +345,7 @@ function Hero({
         className={cn(
           "leading-none tabular-nums",
           Platform.OS === "web" ? "font-sans-semibold" : "font-sans-bold",
-          hero.health ? HEALTH_TEXT[hero.health] : "text-foreground",
+          hero.alert ? hero.alert.className : "text-foreground",
         )}
         style={{ fontSize: tier.hero }}
         numberOfLines={1}
@@ -364,6 +359,7 @@ function Hero({
           >{` ${hero.unit}`}</Text>
         ) : null}
       </Text>
+      {hero.alert && <Text className="sr-only">{hero.alert.label}</Text>}
       <Text
         className="font-sans-semibold text-foreground/80"
         style={{ fontSize: tier.label, marginTop: tier.sectionGap * 0.4 }}
@@ -371,7 +367,7 @@ function Hero({
       >
         {hero.label}
       </Text>
-      {gaugePos != null ? <HealthGauge position={gaugePos} t={tier} /> : null}
+      {gaugePos != null ? <HealthGauge label={hero.label} position={gaugePos} t={tier} /> : null}
       {withPager && pages > 1 ? (
         <Pager
           page={page}
@@ -501,11 +497,13 @@ export function MetricTile({ config, entityId, header }: MetricTileProps) {
           </View>
         ) : null}
         <View className="min-h-0 flex-1" onLayout={onLayout}>
-          <EmptyState
-            icon={config.icon}
-            title={config.title}
-            subtitle={effectiveId ? "No metrics available" : "Select an entity or pin one"}
-          />
+          <Empty>
+            <EmptyMedia icon={config.icon} />
+            <EmptyTitle>{config.title}</EmptyTitle>
+            <EmptyDescription>
+              {effectiveId ? "No metrics available" : "Select an entity or pin one"}
+            </EmptyDescription>
+          </Empty>
         </View>
       </View>
     );

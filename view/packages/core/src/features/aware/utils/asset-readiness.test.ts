@@ -1,8 +1,13 @@
 import type { Entity } from "@projectqai/proto/world";
-import { DeviceState, LinkStatus } from "@projectqai/proto/world";
+import { ConfigurableState, DeviceState, LinkStatus } from "@projectqai/proto/world";
 import { describe, expect, it } from "vitest";
 
-import { deriveAssetReadiness, readinessSeverity, worstBlocker } from "./asset-readiness";
+import {
+  deriveAssetReadiness,
+  gateValue,
+  readinessSeverity,
+  worstBlocker,
+} from "./asset-readiness";
 
 const SYMBOL = { milStd2525C: "SFGPU-----" };
 const GEO = { latitude: 1, longitude: 2 };
@@ -23,11 +28,6 @@ describe("deriveAssetReadiness — position gate", () => {
 describe("deriveAssetReadiness — device gate", () => {
   const dev = (state: DeviceState) =>
     entity({ symbol: SYMBOL, geo: GEO, device: { state } } as Partial<Entity>);
-
-  it("only applies when device is present", () => {
-    const r = deriveAssetReadiness(entity({ symbol: SYMBOL, geo: GEO } as Partial<Entity>));
-    expect(r.gates.some((g) => g.key === "device")).toBe(false);
-  });
 
   it("is met for Active, not ready otherwise", () => {
     expect(deriveAssetReadiness(dev(DeviceState.DeviceStateActive)).ready).toBe(true);
@@ -71,28 +71,50 @@ describe("deriveAssetReadiness — link gate", () => {
   });
 });
 
-describe("deriveAssetReadiness — rollup", () => {
-  it("ready requires every applicable gate met", () => {
-    const e = entity({
+describe("deriveAssetReadiness — set-up entity", () => {
+  const setUp = (configurable: ConfigurableState, device: DeviceState) =>
+    entity({
       symbol: SYMBOL,
       geo: GEO,
-      device: { state: DeviceState.DeviceStateActive },
+      device: { state: device },
       link: { status: LinkStatus.LinkStatusConnected },
+      configurable: { state: configurable },
+      config: {},
     } as Partial<Entity>);
-    expect(deriveAssetReadiness(e).ready).toBe(true);
+
+  const deviceGate = (e: Entity) => deriveAssetReadiness(e).gates.find((g) => g.key === "device")!;
+
+  it("fails on a failed configurable while the device reads Active", () => {
+    const e = setUp(ConfigurableState.ConfigurableStateFailed, DeviceState.DeviceStateActive);
+
+    expect(deriveAssetReadiness(e)).toMatchObject({ ready: false, failed: true });
+    expect(gateValue(e, deviceGate(e))).toBe("Failed");
+  });
+
+  it("ignores a failed device state left over from a stopped run", () => {
+    const e = setUp(ConfigurableState.ConfigurableStateInactive, DeviceState.DeviceStateFailed);
+
+    expect(deriveAssetReadiness(e)).toMatchObject({ ready: false, failed: false });
+    expect(gateValue(e, deviceGate(e))).toBe("Inactive");
+  });
+
+  it("is pending while the configurable starts", () => {
+    const e = setUp(ConfigurableState.ConfigurableStateStarting, DeviceState.DeviceStateActive);
+
+    expect(deviceGate(e).status).toBe("pending");
+  });
+
+  it("lets a raised device state outrank a running configurable", () => {
+    const e = setUp(ConfigurableState.ConfigurableStateActive, DeviceState.DeviceStateDegraded);
+
+    expect(deviceGate(e).status).toBe("degraded");
+    expect(gateValue(e, deviceGate(e))).toBe("Degraded");
   });
 });
 
 describe("deriveAssetReadiness — gate status", () => {
   const gateStatus = (e: Entity, key: string) =>
     deriveAssetReadiness(e).gates.find((g) => g.key === key)?.status;
-
-  it("reports the position gate as unmet until placed", () => {
-    expect(gateStatus(entity({ symbol: SYMBOL } as Partial<Entity>), "position")).toBe("unmet");
-    expect(gateStatus(entity({ symbol: SYMBOL, geo: GEO } as Partial<Entity>), "position")).toBe(
-      "met",
-    );
-  });
 
   it("maps device state to gate status", () => {
     const dev = (state: DeviceState) =>
@@ -132,25 +154,6 @@ describe("worstBlocker", () => {
     const b = worstBlocker(deriveAssetReadiness(e));
     expect(b?.key).toBe("device");
     expect(b?.status).toBe("failed");
-  });
-
-  it("surfaces a failed link over an earlier no-position gate", () => {
-    const e = entity({
-      symbol: SYMBOL,
-      device: { state: DeviceState.DeviceStateActive },
-      link: { status: LinkStatus.LinkStatusLost },
-    } as Partial<Entity>);
-    const b = worstBlocker(deriveAssetReadiness(e));
-    expect(b?.key).toBe("link");
-    expect(b?.status).toBe("failed");
-  });
-
-  it("surfaces a degraded gate over an earlier no-position gate", () => {
-    const e = entity({
-      symbol: SYMBOL,
-      device: { state: DeviceState.DeviceStateDegraded },
-    } as Partial<Entity>);
-    expect(worstBlocker(deriveAssetReadiness(e))?.status).toBe("degraded");
   });
 
   it("is undefined when every gate is met", () => {

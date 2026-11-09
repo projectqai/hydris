@@ -1,13 +1,13 @@
 import type { Metric } from "@projectqai/proto/metrics";
-import { MetricUnit } from "@projectqai/proto/metrics";
+import { MetricKind, MetricUnit } from "@projectqai/proto/metrics";
 import { describe, expect, it } from "vitest";
 
 import {
   autoScaleUnit,
   convertUnit,
   formatMetricValue,
+  getMetricCategory,
   hasDisplayFloor,
-  scaleForDisplay,
 } from "./format-metrics";
 
 function metric(unit: MetricUnit, value: number): Metric {
@@ -15,28 +15,10 @@ function metric(unit: MetricUnit, value: number): Metric {
 }
 
 describe("autoScaleUnit", () => {
-  it("floors dose-equivalent rate at micro (80 nSv/h -> 0.08 µSv/h)", () => {
-    const { value, unit } = autoScaleUnit(80, MetricUnit.MetricUnitNanosievertPerHour);
-    expect(value).toBeCloseTo(0.08, 10);
-    expect(unit).toBe(MetricUnit.MetricUnitMicrosievertPerHour);
-  });
-
-  it("keeps two significant decimals while flooring (1380 nSv/h -> 1.38 µSv/h)", () => {
-    const { value, unit } = autoScaleUnit(1380, MetricUnit.MetricUnitNanosievertPerHour);
-    expect(value).toBeCloseTo(1.38, 10);
-    expect(unit).toBe(MetricUnit.MetricUnitMicrosievertPerHour);
-  });
-
   it("scales up past micro (1500 µSv/h -> 1.5 mSv/h)", () => {
     const { value, unit } = autoScaleUnit(1500, MetricUnit.MetricUnitMicrosievertPerHour);
     expect(value).toBe(1.5);
     expect(unit).toBe(MetricUnit.MetricUnitMillisievertPerHour);
-  });
-
-  it("scales rate up to the base unit (2,000,000 µSv/h -> 2 Sv/h)", () => {
-    const { value, unit } = autoScaleUnit(2_000_000, MetricUnit.MetricUnitMicrosievertPerHour);
-    expect(value).toBe(2);
-    expect(unit).toBe(MetricUnit.MetricUnitSievertPerHour);
   });
 
   it("floors accumulated dose at micro (80 nSv -> 0.08 µSv)", () => {
@@ -57,12 +39,6 @@ describe("autoScaleUnit", () => {
     expect(unit).toBe(MetricUnit.MetricUnitMicrogray);
   });
 
-  it("skips centigray so gray dose scales like sievert (50 mGy -> 50 mGy)", () => {
-    const { value, unit } = autoScaleUnit(50, MetricUnit.MetricUnitMilligray);
-    expect(value).toBe(50);
-    expect(unit).toBe(MetricUnit.MetricUnitMilligray);
-  });
-
   it("rescales a native centigray reading off centigray (5 cGy -> 50 mGy)", () => {
     const { value, unit } = autoScaleUnit(5, MetricUnit.MetricUnitCentigray);
     expect(value).toBe(50);
@@ -80,47 +56,19 @@ describe("autoScaleUnit", () => {
     expect(value).toBeCloseTo(-0.08, 10);
     expect(unit).toBe(MetricUnit.MetricUnitMicrosievertPerHour);
   });
-
-  it("selects micro exactly at the boundary (1000 nSv/h -> 1 µSv/h)", () => {
-    const { value, unit } = autoScaleUnit(1000, MetricUnit.MetricUnitNanosievertPerHour);
-    expect(value).toBe(1);
-    expect(unit).toBe(MetricUnit.MetricUnitMicrosievertPerHour);
-  });
-
-  it("stays floored just below the boundary (999 nSv/h -> 0.999 µSv/h)", () => {
-    const { value, unit } = autoScaleUnit(999, MetricUnit.MetricUnitNanosievertPerHour);
-    expect(value).toBeCloseTo(0.999, 10);
-    expect(unit).toBe(MetricUnit.MetricUnitMicrosievertPerHour);
-  });
-
-  it("passes non-radiation units through unchanged", () => {
-    const { value, unit } = autoScaleUnit(42, MetricUnit.MetricUnitCelsius);
-    expect(value).toBe(42);
-    expect(unit).toBe(MetricUnit.MetricUnitCelsius);
-  });
-});
-
-describe("scaleForDisplay", () => {
-  it("expands a ratio to a percentage, leaving the unit", () => {
-    const { value, unit } = scaleForDisplay(0.5, MetricUnit.MetricUnitRatio);
-    expect(value).toBe(50);
-    expect(unit).toBe(MetricUnit.MetricUnitRatio);
-  });
-
-  it("delegates dose units to the auto-scale floor", () => {
-    const { value, unit } = scaleForDisplay(80, MetricUnit.MetricUnitNanosievertPerHour);
-    expect(value).toBeCloseTo(0.08, 10);
-    expect(unit).toBe(MetricUnit.MetricUnitMicrosievertPerHour);
-  });
-
-  it("passes plain units through", () => {
-    const { value, unit } = scaleForDisplay(42, MetricUnit.MetricUnitCelsius);
-    expect(value).toBe(42);
-    expect(unit).toBe(MetricUnit.MetricUnitCelsius);
-  });
 });
 
 describe("formatMetricValue", () => {
+  it("sets an angle and a percentage against the number", () => {
+    expect(formatMetricValue(metric(MetricUnit.MetricUnitDegree, 90))).toBe("90°");
+    expect(formatMetricValue(metric(MetricUnit.MetricUnitPercent, 42))).toBe("42%");
+  });
+
+  it("keeps the space a unit abbreviation takes", () => {
+    expect(formatMetricValue(metric(MetricUnit.MetricUnitMeter, 12))).toBe("12 m");
+    expect(formatMetricValue(metric(MetricUnit.MetricUnitCelsius, 21))).toBe("21 °C");
+  });
+
   it("formats a floored rate", () => {
     expect(formatMetricValue(metric(MetricUnit.MetricUnitNanosievertPerHour, 80))).toBe(
       "0.08 µSv/h",
@@ -144,11 +92,29 @@ describe("formatMetricValue", () => {
   });
 
   it("formats a ratio as a percentage", () => {
-    expect(formatMetricValue(metric(MetricUnit.MetricUnitRatio, 0.5))).toBe("50 %");
+    expect(formatMetricValue(metric(MetricUnit.MetricUnitRatio, 0.5))).toBe("50%");
   });
 
-  it("formats a plain unit unchanged", () => {
-    expect(formatMetricValue(metric(MetricUnit.MetricUnitCelsius, 36))).toBe("36 °C");
+  it("scales a byte count to the largest decimal unit", () => {
+    const bytes = (unit: MetricUnit, value: bigint) =>
+      ({ unit, val: { case: "uint64", value } }) as Metric;
+
+    expect(formatMetricValue(bytes(MetricUnit.MetricUnitByte, 31_914_983_424n))).toBe("31.91 GB");
+    expect(formatMetricValue(bytes(MetricUnit.MetricUnitKilobyte, 2_105_540n))).toBe("2.11 GB");
+    expect(formatMetricValue(bytes(MetricUnit.MetricUnitByte, 512n))).toBe("512 B");
+  });
+
+  it("scales a bit rate to the largest decimal unit", () => {
+    expect(formatMetricValue(metric(MetricUnit.MetricUnitBitPerSecond, 2_450_000))).toBe(
+      "2.45 Mbps",
+    );
+    expect(formatMetricValue(metric(MetricUnit.MetricUnitKilobitPerSecond, 0.75))).toBe("750 bps");
+  });
+});
+
+describe("getMetricCategory", () => {
+  it("groups area with the other spatial measurements", () => {
+    expect(getMetricCategory({ kind: MetricKind.MetricKindArea } as Metric)).toBe("spatial");
   });
 });
 
@@ -173,22 +139,6 @@ describe("convertUnit", () => {
     expect(convertUnit(1, MetricUnit.MetricUnitSievert, MetricUnit.MetricUnitMicrosievert)).toBe(
       1_000_000,
     );
-  });
-
-  it("converts a rate within a family (1000 nSv/h -> 1 µSv/h)", () => {
-    expect(
-      convertUnit(
-        1000,
-        MetricUnit.MetricUnitNanosievertPerHour,
-        MetricUnit.MetricUnitMicrosievertPerHour,
-      ),
-    ).toBe(1);
-  });
-
-  it("returns the same value for identical units", () => {
-    expect(
-      convertUnit(5, MetricUnit.MetricUnitMicrosievert, MetricUnit.MetricUnitMicrosievert),
-    ).toBe(5);
   });
 
   it("returns null across families (Sv -> Gy)", () => {

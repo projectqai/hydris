@@ -53,7 +53,8 @@ bun.lock
 # Generated files
 *.generated.*
 generated
-packages/map-engine/src/layers/cluster-worker-code.ts
+apps/storybook/.rnstorybook/storybook.requires.ts
+packages/map-engine/src/**/*-worker-code.ts
 
 # IDE
 .vscode
@@ -101,6 +102,3 @@ packages/hydris-engine/.eslintrc.js
 packages/cesium
 packages/cesium-ion
 packages/cesium-ion-sdk
-
-# Submodules
-proto

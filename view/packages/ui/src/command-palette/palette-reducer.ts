@@ -1,17 +1,30 @@
-export const CATEGORY_IDS = ["commands", "assets", "cameras", "tracks"] as const;
+export const CATEGORY_IDS = ["mission", "commands", "assets", "cameras", "tracks"] as const;
 export type Category = (typeof CATEGORY_IDS)[number];
+
+export type PageTab = "overview" | "metrics" | "status";
 
 export type PaletteMode =
   | { kind: "root" }
   | { kind: "dimension"; dimension: string; dimensionLabel: string; category: Category }
-  | { kind: "entity-actions"; entityId: string; entityLabel: string }
   | { kind: "location-search" }
-  | { kind: "config"; entityId?: string; focusCategory?: string }
+  | { kind: "config"; entityId?: string; focusCategory?: string; adding?: boolean }
   | { kind: "asset-readiness" }
+  | { kind: "tracks" }
+  | { kind: "asset"; entityId: string }
   | { kind: "command-group"; groupId: string; groupLabel: string; initialCommandId?: string }
   | { kind: "mission-health" }
   | { kind: "diagnostic-export" }
-  | { kind: "mission-export" };
+  | { kind: "mission-export" }
+  | { kind: "sources" }
+  | { kind: "source-services"; source: string }
+  | { kind: "add-source-service"; source: string }
+  | { kind: "source-service"; source: string; providerId: string; tab?: PageTab }
+  | { kind: "camera"; entityId: string }
+  | { kind: "device"; source?: string; entityId: string; tab?: PageTab }
+  | { kind: "setup"; entityId: string; created?: boolean }
+  | { kind: "settings"; entityId: string }
+  | { kind: "other-services" }
+  | { kind: "devices-without-service" };
 
 export type PaletteState = {
   stack: PaletteMode[];
@@ -22,6 +35,7 @@ export type PaletteState = {
 
 export type PaletteAction =
   | { type: "push"; mode: PaletteMode }
+  | { type: "replace"; mode: PaletteMode }
   | { type: "pop" }
   | { type: "popTo"; index: number }
   | { type: "setQuery"; query: string }
@@ -32,8 +46,14 @@ export const initialPaletteState: PaletteState = {
   stack: [],
   query: "",
   queryStack: [],
-  activeCategory: "commands",
+  activeCategory: "mission",
 };
+
+export function paletteStateAt(mode: PaletteMode): PaletteState {
+  return mode.kind === "root"
+    ? initialPaletteState
+    : { ...initialPaletteState, stack: [mode], queryStack: [""] };
+}
 
 export function paletteReducer(state: PaletteState, action: PaletteAction): PaletteState {
   switch (action.type) {
@@ -44,6 +64,8 @@ export function paletteReducer(state: PaletteState, action: PaletteAction): Pale
         query: "",
         queryStack: [...state.queryStack, state.query],
       };
+    case "replace":
+      return { ...state, stack: [...state.stack.slice(0, -1), action.mode] };
     case "pop":
       return {
         ...state,

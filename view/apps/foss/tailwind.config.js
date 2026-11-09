@@ -4,6 +4,7 @@ module.exports = {
     "./app/**/*.{js,jsx,ts,tsx}",
     "../../packages/ui/src/**/*.{js,jsx,ts,tsx}",
     "../../packages/core/src/**/*.{js,jsx,ts,tsx}",
+    "!../../packages/*/src/**/*.stories.tsx",
   ],
   presets: [require("nativewind/preset"), require("@hydris/tailwind-config")],
 };

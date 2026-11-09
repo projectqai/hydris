@@ -3,6 +3,7 @@ import type { PaneContent } from "@hydris/ui/layout/types";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { X } from "lucide-react-native";
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { useShallow } from "zustand/react/shallow";
 
 import { useEntityStore } from "../../store/entity-store";
 import { useSelectionStore } from "../../store/selection-store";
@@ -22,12 +23,16 @@ export function PaneEntityPickerModal({
   onClose: () => void;
 }) {
   const t = useThemeColors();
-  const entities = useEntityStore((s) => s.entities);
-  const selectedOnMap = useSelectionStore((s) => s.selectedEntityId);
   const meta = paneEntityMeta(content);
+
+  const matched = useEntityStore(
+    useShallow((s) => (meta ? [...s.entities.values()].filter(meta.match) : [])),
+  );
+
+  const selectedOnMap = useSelectionStore((s) => s.selectedEntityId);
   if (!meta) return null;
 
-  const items = buildEntityItems(entities, { match: meta.match });
+  const items = buildEntityItems(matched);
   const pinnedId = getPaneEntityId(content);
   const Icon = meta.icon;
 
@@ -46,8 +51,8 @@ export function PaneEntityPickerModal({
         <EntityPickerList
           entities={items}
           icon={meta.icon}
-          emptyLabel={meta.noun}
-          placeholder={`Search ${meta.noun}…`}
+          itemsLabel={meta.itemsLabel}
+          placeholder={`Search ${meta.itemsLabel}…`}
           onSelect={(id) => (id === pinnedId ? onClear() : onSelect(id))}
           selectable
           selectedId={pinnedId}

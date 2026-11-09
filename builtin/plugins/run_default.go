@@ -5,12 +5,14 @@ package plugins
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/evanw/esbuild/pkg/api"
+	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/builtin/artifacts"
 	"github.com/projectqai/hydris/builtin/controller"
@@ -35,7 +37,7 @@ func runPlugin(ctx context.Context, logger *slog.Logger, info PluginInfo, server
 }
 
 func runLocalPlugin(ctx context.Context, logger *slog.Logger, info PluginInfo, serverURL string) error {
-	logger.Info("starting plugin in-process", "name", info.Name, "ref", info.Ref)
+	logger.Info("starting plugin", "name", info.Name, "ref", info.Ref)
 
 	abs, err := filepath.Abs(info.Ref)
 	if err != nil {
@@ -45,6 +47,12 @@ func runLocalPlugin(ctx context.Context, logger *slog.Logger, info PluginInfo, s
 	if err := checkBundleCompat(filepath.Dir(abs)); err != nil {
 		return err
 	}
+	if filepath.Base(abs) == "package.json" {
+		if ok, err := runNativeDir(ctx, info, filepath.Dir(abs)); ok {
+			return err
+		}
+		return fmt.Errorf("%w: %s declares no hydris.native binary", controller.ErrConflict, info.Ref)
+	}
 
 	bundlePath, err := bundleToTempFile(abs)
 	if err != nil {
@@ -53,11 +61,11 @@ func runLocalPlugin(ctx context.Context, logger *slog.Logger, info PluginInfo, s
 	defer os.Remove(bundlePath)
 
 	dataDir := rt.FindDataDir(abs)
-	return rt.RunPluginEnv(ctx, bundlePath, dataDir, serverURL)
+	return runBundle(ctx, info, bundlePath, dataDir, serverURL)
 }
 
 func runOCIPlugin(ctx context.Context, logger *slog.Logger, info PluginInfo, serverURL string) error {
-	logger.Info("starting plugin in-process", "name", info.Name, "ref", info.Ref)
+	logger.Info("starting plugin", "name", info.Name, "ref", info.Ref)
 
 	if info.EntityID == "" || artifacts.Server == nil {
 		return runOCIPluginDirect(ctx, info, serverURL)
@@ -68,7 +76,7 @@ func runOCIPlugin(ctx context.Context, logger *slog.Logger, info PluginInfo, ser
 
 	if ok, _ := store.Exists(ctx, artID); ok && ociCacheMatchesRef(ctx, info.EntityID, info.Ref) {
 		logger.Info("using cached OCI plugin", "ref", info.Ref)
-		return runCachedPlugin(ctx, store, artID, info.Ref, serverURL)
+		return runCachedPlugin(ctx, store, artID, info, serverURL)
 	}
 
 	img, err := plugin.PullOCIImage(info.Ref)
@@ -81,16 +89,19 @@ func runOCIPlugin(ctx context.Context, logger *slog.Logger, info PluginInfo, ser
 		return runOCIPluginDirect(ctx, info, serverURL)
 	}
 
-	return runCachedPlugin(ctx, store, artID, info.Ref, serverURL)
+	return runCachedPlugin(ctx, store, artID, info, serverURL)
 }
 
 func runOCIPluginDirect(ctx context.Context, info PluginInfo, serverURL string) error {
-	bundlePath, dataDir, cleanup, err := plugin.ResolveOCI(info.Ref, version.Version)
+	bundlePath, dataDir, cleanup, err := plugin.ResolveOCI(info.Ref, version.Version, info.EntityID)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	return rt.RunPluginEnv(ctx, bundlePath, dataDir, serverURL)
+	if ok, err := runNativeDir(ctx, info, dataDir); ok {
+		return err
+	}
+	return runBundle(ctx, info, bundlePath, dataDir, serverURL)
 }
 
 // ociCacheMatchesRef checks whether the cached artifact's source URL matches
@@ -147,15 +158,10 @@ func cacheOCILayer(ctx context.Context, logger *slog.Logger, store *artifacts.Lo
 	return nil
 }
 
-// runCachedPlugin extracts a gzip-compressed tar from the artifact store and runs it.
-func runCachedPlugin(ctx context.Context, store *artifacts.LocalStore, artID, ref, serverURL string) error {
-	rc, err := store.Get(ctx, artID)
-	if err != nil {
-		return fmt.Errorf("open cached artifact %s: %w", artID, err)
-	}
-	defer rc.Close()
-
-	dir, err := plugin.ExtractPluginTarGz(rc)
+// runExtractedTarGz extracts a gzip'd plugin tar and runs its bundle.js. The
+// OCI-cache and artifact:// paths both funnel here once they have a layer reader.
+func runExtractedTarGz(ctx context.Context, r io.Reader, info PluginInfo, serverURL string) error {
+	dir, err := plugin.ExtractPluginTarGz(r, info.EntityID)
 	if err != nil {
 		return err
 	}
@@ -164,22 +170,65 @@ func runCachedPlugin(ctx context.Context, store *artifacts.LocalStore, artID, re
 	if err := checkBundleCompat(dir); err != nil {
 		return err
 	}
+	if ok, err := runNativeDir(ctx, info, dir); ok {
+		return err
+	}
 
 	bundlePath := filepath.Join(dir, "bundle.js")
 	if _, err := os.Stat(bundlePath); err != nil {
-		return fmt.Errorf("plugin %q does not contain bundle.js", ref)
+		return fmt.Errorf("plugin %q does not contain bundle.js", info.Ref)
 	}
 
-	dataDir := rt.FindDataDir(bundlePath)
-	return rt.RunPluginEnv(ctx, bundlePath, dataDir, serverURL)
+	return runBundle(ctx, info, bundlePath, rt.FindDataDir(bundlePath), serverURL)
 }
 
+// runCachedPlugin extracts a gzip-compressed tar from the artifact store and runs it.
+func runCachedPlugin(ctx context.Context, store *artifacts.LocalStore, artID string, info PluginInfo, serverURL string) error {
+	rc, err := store.Get(ctx, artID)
+	if err != nil {
+		return fmt.Errorf("open cached artifact %s: %w", artID, err)
+	}
+	defer rc.Close()
+
+	return runExtractedTarGz(ctx, rc, info, serverURL)
+}
+
+// runArtifactPlugin runs a plugin from artifact://<id>, where id is the
+// plugin's own entity. The blob is a
+// `hydris plugin build` OCI image tarball; its first layer is the gzip'd tar
+// holding bundle.js.
 func runArtifactPlugin(ctx context.Context, logger *slog.Logger, info PluginInfo, serverURL string) error {
 	artEntityID := strings.TrimPrefix(info.Ref, "artifact://")
-	logger.Info("starting artifact plugin in-process", "name", info.Name, "artifact", artEntityID)
+	// The image must live on the plugin's own entity: authz.policy lets only
+	// admin write a plugin entity, so only admin can replace the code it runs.
+	if artEntityID != info.EntityID {
+		return fmt.Errorf("%w: plugin %q must run from its own artifact (artifact://%s), not %s", controller.ErrConflict, info.Name, info.EntityID, info.Ref)
+	}
+	logger.Info("starting artifact plugin", "name", info.Name, "artifact", artEntityID)
 
 	store := artifacts.Server.Local()
-	return runCachedPlugin(ctx, store, artEntityID, info.Ref, serverURL)
+
+	// tarball.Image re-opens the blob per layer/manifest read, so hand it an opener.
+	img, err := tarball.Image(func() (io.ReadCloser, error) {
+		return store.Get(ctx, artEntityID)
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("open artifact %s as OCI image tarball: %w", artEntityID, err)
+	}
+	layers, err := img.Layers()
+	if err != nil {
+		return fmt.Errorf("read layers: %w", err)
+	}
+	if len(layers) == 0 {
+		return fmt.Errorf("artifact %s has no layers", artEntityID)
+	}
+	rc, err := layers[0].Compressed()
+	if err != nil {
+		return fmt.Errorf("read plugin layer: %w", err)
+	}
+	defer rc.Close()
+
+	return runExtractedTarGz(ctx, rc, info, serverURL)
 }
 
 // bundleToTempFile bundles a .ts file with esbuild and writes to a temp file.

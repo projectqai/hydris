@@ -193,43 +193,37 @@ func watchManualControl(ctx context.Context, logger *slog.Logger, ip string, cfg
 	defer func() { _ = grpcConn.Close() }()
 	client := pb.NewWorldServiceClient(grpcConn)
 
-	stream, err := goclient.WatchEntitiesWithRetry(ctx, client, &pb.ListEntitiesRequest{
-		Filter: &pb.EntityFilter{
-			Id:        &camID,
-			Component: []uint32{65},
-		},
+	wake := make(chan struct{}, 1)
+	input := controller.WatchManualControl(ctx, logger, client, camID, func(*pb.ManualControlAxes) {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
 	})
-	if err != nil {
-		logger.Warn("axis: manual control watch", "error", err)
-		return
-	}
+
+	// A camera keeps moving until told otherwise, so link loss must stop it:
+	// the tick notices frames have stopped even though nothing arrives.
+	tick := time.NewTicker(controller.ManualLinkTimeout / 2)
+	defer tick.Stop()
 
 	var lastPanSpeed, lastTiltSpeed, lastZoomSpeed int
 	for {
-		event, err := stream.Recv()
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			logger.Warn("axis: manual control recv", "error", err)
+		select {
+		case <-ctx.Done():
 			return
-		}
-		if event.Entity == nil || event.T != pb.EntityChange_EntityChangeUpdated {
-			continue
+		case <-wake:
+		case <-tick.C:
 		}
 
 		panSpeed, tiltSpeed, zoomSpeed := 0, 0, 0
-		tmc := event.Entity.TargetManualControl
-		if tmc != nil && len(tmc.Input) > 0 {
-			if axes := tmc.Input[0].Axes; axes != nil {
-				pan := axes.GetPan()
-				if pan == 0 {
-					pan = axes.GetRight() * 0.5
-				}
-				panSpeed = int(pan * 15)
-				tiltSpeed = int(axes.GetTilt() * 15)
-				zoomSpeed = int(axes.GetForward() * 45)
+		if axes := input.Axes(); axes != nil {
+			pan := axes.GetPan()
+			if pan == 0 {
+				pan = axes.GetRight() * 0.5
 			}
+			panSpeed = int(pan * 15)
+			tiltSpeed = int(axes.GetTilt() * 15)
+			zoomSpeed = int((axes.GetForward() + axes.GetZoom()) * 45)
 		}
 
 		if panSpeed != lastPanSpeed || tiltSpeed != lastTiltSpeed {

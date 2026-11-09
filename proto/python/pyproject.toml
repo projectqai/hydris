@@ -1,0 +1,43 @@
+[tool.poetry]
+name = "platform-proto"
+version = "0.1.0"
+description = "Hydra platform protobuf/gRPC definitions"
+authors = ["Hydra"]
+license = "See LICENSE.txt"
+packages = [
+    {include = "platform_proto"},
+    {include = "hydra_client"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[tool.poetry.dependencies]
+python = ">=3.8"
+protobuf = ">=4.21.0"
+grpcio = ">=1.50.0"
+
+[tool.poetry.group.dev.dependencies]
+grpcio-tools = ">=1.50.0"
+pytest = ">=7.0.0"
+pytest-mock = ">=3.10.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v"
+# Prevent pytest from loading plugins from system site-packages (e.g., ROS)
+norecursedirs = [".git", ".tox", "dist", "build", "*.egg"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

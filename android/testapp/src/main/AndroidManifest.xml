@@ -18,5 +18,16 @@
         android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
         android:resource="@xml/usb_device_filter" />
     </activity>
+
+    <!-- Probes Keystore/storage availability before first unlock; triggered
+         via adb broadcast. directBootAware so it runs in the BFU state. -->
+    <receiver
+      android:name=".KeystoreBfuTest"
+      android:exported="true"
+      android:directBootAware="true">
+      <intent-filter>
+        <action android:name="ai.projectq.hydris.testapp.KEYSTORE_TEST" />
+      </intent-filter>
+    </receiver>
   </application>
 </manifest>

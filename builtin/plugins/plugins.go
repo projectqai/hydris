@@ -225,7 +225,7 @@ func isEnabled(entity *pb.Entity) bool {
 // and custom paths so a plugin is gated identically wherever it came from.
 func runPluginChild(ctx context.Context, logger *slog.Logger, info PluginInfo, serverURL string) error {
 	err := runPlugin(ctx, logger, info, serverURL)
-	if errors.Is(err, plugin.ErrIncompatibleVersion) {
+	if errors.Is(err, plugin.ErrIncompatibleVersion) || errors.Is(err, plugin.ErrNoNativeBinary) {
 		return fmt.Errorf("%w: %s", controller.ErrConflict, err)
 	}
 	return err
@@ -386,7 +386,7 @@ func customPluginSchema() *structpb.Struct {
 			"ref": map[string]any{
 				"type":        "string",
 				"title":       "Plugin Reference",
-				"description": "OCI image reference or local file path (.ts/.js)",
+				"description": "OCI image reference or local file path (.ts/.js, or package.json of a native plugin)",
 			},
 			"enabled": map[string]any{
 				"type":        "boolean",
@@ -420,9 +420,11 @@ func validatePluginRef(ref string) error {
 	return nil
 }
 
+// isLocalRef reports a plugin on disk: a .ts/.js entry point, or the
+// package.json of a native plugin.
 func isLocalRef(ref string) bool {
 	ext := filepath.Ext(ref)
-	return ext == ".ts" || ext == ".js"
+	return ext == ".ts" || ext == ".js" || filepath.Base(ref) == "package.json"
 }
 
 func registrySchema() *structpb.Struct {

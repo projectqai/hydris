@@ -6,6 +6,7 @@ import { useKeyedListNav } from "@hydris/ui/command-palette/use-keyed-list-nav";
 import { useKeyboardShortcut } from "@hydris/ui/keyboard";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
+import { ScrollShadow } from "@hydris/ui/scroll-shadow";
 import { ChevronRight, Radio, Search, Settings } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
@@ -13,22 +14,6 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import type { ConfigStateBadge } from "../../utils/entity-helpers";
 import { filterConfigTree, findAncestorKeys } from "../command-palette/palette-search";
 import type { CategoryGroup, ConfigSelection, DeviceNode } from "./use-config-tree";
-
-function isInputFocused(): boolean {
-  if (typeof document === "undefined") return false;
-  const el = document.activeElement;
-  if (!el) return false;
-  const tag = el.tagName;
-  if (
-    tag === "INPUT" ||
-    tag === "TEXTAREA" ||
-    tag === "SELECT" ||
-    (el as HTMLElement).isContentEditable
-  )
-    return true;
-  const role = el.getAttribute("role");
-  return role === "switch" || role === "checkbox" || role === "slider";
-}
 
 type TreeItem = {
   key: string;
@@ -42,6 +27,22 @@ type TreeItem = {
   isConfigurable?: boolean;
   ranges?: number[];
 };
+
+function rowPress(item: TreeItem, onSelect: () => void, onToggle: () => void) {
+  if (item.selection) return onSelect;
+
+  if (item.hasChildren) return onToggle;
+
+  return undefined;
+}
+
+function rowBackground(isHighlighted: boolean, isSelected: boolean) {
+  if (isHighlighted) return "bg-glass-hover";
+
+  if (isSelected) return "bg-glass";
+
+  return "hover:bg-glass active:bg-glass-hover";
+}
 
 function TreeRow({
   item,
@@ -86,20 +87,14 @@ function TreeRow({
     );
   }
 
-  const contentPress = item.selection ? onSelect : item.hasChildren ? onToggle : undefined;
-
   return (
     <Pressable
       ref={ref}
-      onPress={contentPress}
+      onPress={rowPress(item, onSelect, onToggle)}
       tabIndex={-1}
       className={cn(
         "min-h-11 flex-row items-center pl-3 outline-none",
-        isHighlighted
-          ? "bg-glass-hover"
-          : isSelected
-            ? "bg-glass"
-            : "hover:bg-glass active:bg-glass-hover",
+        rowBackground(isHighlighted, isSelected),
       )}
     >
       {Array.from({ length: item.depth }, (_, i) => (
@@ -285,7 +280,7 @@ function TreeView({
   }, [tree, collapsed, isSearching, searchResult, rangesByKey]);
 
   const { highlightedKey, setHighlightedKey, highlightedIndex, setHighlightedEl } = useKeyedListNav(
-    { rows, guard: isInputFocused },
+    { rows, yieldToFocus: true },
   );
 
   useEffect(() => {
@@ -334,7 +329,6 @@ function TreeView({
   useKeyboardShortcut(
     "Enter",
     useCallback(() => {
-      if (isInputFocused()) return false;
       const item = rows[highlightedIndex];
       if (!item) return false;
       if (item.hasChildren) {
@@ -347,13 +341,12 @@ function TreeView({
       }
       return false;
     }, [highlightedIndex, rows, onSelect, toggleCollapse]),
-    { priority: 200 },
+    { priority: 200, yieldToFocus: true },
   );
 
   useKeyboardShortcut(
     "ArrowRight",
     useCallback(() => {
-      if (isInputFocused()) return false;
       const rowIdx = rows.findIndex((r) => r.key === highlightedKey);
       if (rowIdx < 0) return false;
       const item = rows[rowIdx]!;
@@ -370,13 +363,12 @@ function TreeView({
       }
       return false;
     }, [rows, highlightedKey, collapsed, toggleCollapse, setHighlightedKey]),
-    { priority: 200 },
+    { priority: 200, yieldToFocus: true },
   );
 
   useKeyboardShortcut(
     "ArrowLeft",
     useCallback(() => {
-      if (isInputFocused()) return false;
       const rowIdx = rows.findIndex((r) => r.key === highlightedKey);
       if (rowIdx < 0) return false;
       const item = rows[rowIdx]!;
@@ -392,13 +384,15 @@ function TreeView({
           return true;
         }
       }
+
       return false;
     }, [rows, highlightedKey, collapsed, toggleCollapse, setHighlightedKey]),
-    { priority: 200 },
+    { priority: 200, yieldToFocus: true },
   );
 
   const isSelected = (item: TreeItem) => {
     if (!selection || !item.selection) return false;
+
     return selection.entityId === item.selection.entityId;
   };
 
@@ -407,29 +401,33 @@ function TreeView({
   }
 
   return (
-    <ScrollView className="flex-1 select-none" showsVerticalScrollIndicator={false}>
-      <View>
-        {rows.map((item, index) => (
-          <TreeRow
-            key={item.key}
-            item={item}
-            isSelected={isSelected(item)}
-            isHighlighted={index === highlightedIndex}
-            isExpanded={isSearching || !collapsed.has(item.key)}
-            onToggle={() => {
-              setHighlightedKey(item.key);
-              toggleCollapse(item.key);
-            }}
-            onSelect={() => {
-              setHighlightedKey(item.key);
-              if (item.hasChildren && collapsed.has(item.key)) toggleCollapse(item.key);
-              if (item.selection) onSelect(item.selection);
-            }}
-            ref={index === highlightedIndex ? setHighlightedEl : undefined}
-          />
-        ))}
-      </View>
-    </ScrollView>
+    <ScrollShadow size="sm" className="flex-1">
+      <ScrollView className="flex-1 select-none" showsVerticalScrollIndicator={false}>
+        <View>
+          {rows.map((item, index) => (
+            <TreeRow
+              key={item.key}
+              item={item}
+              isSelected={isSelected(item)}
+              isHighlighted={index === highlightedIndex}
+              isExpanded={isSearching || !collapsed.has(item.key)}
+              onToggle={() => {
+                setHighlightedKey(item.key);
+                toggleCollapse(item.key);
+              }}
+              onSelect={() => {
+                setHighlightedKey(item.key);
+
+                if (item.hasChildren && collapsed.has(item.key)) toggleCollapse(item.key);
+
+                if (item.selection) onSelect(item.selection);
+              }}
+              ref={index === highlightedIndex ? setHighlightedEl : undefined}
+            />
+          ))}
+        </View>
+      </ScrollView>
+    </ScrollShadow>
   );
 }
 

@@ -3,31 +3,65 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useKeyboardShortcut } from "../keyboard";
+import { focusedControlOwnsEnter } from "./use-list-nav";
 
-// keyboard highlight for the command-palette sidebars whose rows reflow as
-// groups expand and collapse. it tracks the highlight by row key rather than
-// index so it survives the reflow, and scrolls the highlighted row into view.
-// arrow keys move the highlight. Enter is left to the caller since what it does
-// depends on the row. the flat FlashList views use the index-based useListNav.
+function stepGrid(
+  selectable: readonly number[],
+  cellOf: (index: number) => number,
+  prev: number,
+  step: number,
+): number {
+  if (prev < 0) return selectable[0] ?? prev;
+
+  const target = cellOf(prev) + step;
+
+  if (step > 0) return selectable.find((i) => cellOf(i) >= target) ?? prev;
+
+  const before = selectable.filter((i) => cellOf(i) <= target);
+
+  return before.at(-1) ?? prev;
+}
+
 export function useKeyedListNav<T extends { key: string }>({
   rows,
   guard,
-  initialKey,
+  fallbackKey,
+  columns,
+  cells,
+  isSelectable,
+  onActivate,
+  yieldToFocus = false,
 }: {
   rows: readonly T[];
   guard?: () => boolean;
-  initialKey?: string | null;
+  fallbackKey?: string;
+  columns?: number;
+  cells?: readonly number[];
+  isSelectable?: (row: T) => boolean;
+  onActivate?: (row: T) => void;
+  yieldToFocus?: boolean;
 }) {
-  const [highlightedKey, setHighlightedKey] = useState<string | null>(initialKey ?? null);
+  const shortcut = { priority: 200, yieldToFocus };
+
+  const [highlightedKey, setHighlightedKey] = useState<string | null>(null);
   const highlightedElRef = useRef<HTMLElement | null>(null);
 
+  const selectable = useMemo(
+    () => rows.flatMap((row, i) => (!isSelectable || isSelectable(row) ? [i] : [])),
+    [rows, isSelectable],
+  );
+
+  const isGrid = !!columns;
+
   const highlightedIndex = useMemo(() => {
-    if (highlightedKey) {
-      const idx = rows.findIndex((r) => r.key === highlightedKey);
-      if (idx >= 0) return idx;
-    }
-    return rows.length > 0 ? 0 : -1;
-  }, [rows, highlightedKey]);
+    const idx = highlightedKey ? rows.findIndex((r) => r.key === highlightedKey) : -1;
+
+    if (idx >= 0 || isGrid) return idx;
+
+    const fallback = fallbackKey ? rows.findIndex((r) => r.key === fallbackKey) : -1;
+
+    return fallback >= 0 ? fallback : (selectable[0] ?? -1);
+  }, [rows, highlightedKey, isGrid, selectable, fallbackKey]);
 
   const setHighlightedEl = useCallback((node: unknown) => {
     highlightedElRef.current = node as HTMLElement | null;
@@ -39,26 +73,56 @@ export function useKeyedListNav<T extends { key: string }>({
     }
   }, [highlightedIndex]);
 
+  const move = useCallback(
+    (step: number) => {
+      if (guard?.()) return false;
+
+      const cellOf = (index: number) => cells?.[index] ?? index;
+      const next = rows[stepGrid(selectable, cellOf, highlightedIndex, step)];
+
+      if (next) setHighlightedKey(next.key);
+
+      return true;
+    },
+    [guard, rows, cells, selectable, highlightedIndex],
+  );
+
   useKeyboardShortcut(
     "ArrowDown",
-    useCallback(() => {
-      if (guard?.()) return false;
-      const next = highlightedIndex + 1;
-      if (next < rows.length) setHighlightedKey(rows[next]!.key);
-      return true;
-    }, [guard, highlightedIndex, rows]),
-    { priority: 200 },
+    useCallback(() => move(columns ?? 1), [move, columns]),
+    shortcut,
   );
 
   useKeyboardShortcut(
     "ArrowUp",
+    useCallback(() => move(-(columns ?? 1)), [move, columns]),
+    shortcut,
+  );
+
+  useKeyboardShortcut(
+    "ArrowRight",
+    useCallback(() => isGrid && move(1), [move, isGrid]),
+    shortcut,
+  );
+
+  useKeyboardShortcut(
+    "ArrowLeft",
+    useCallback(() => isGrid && move(-1), [move, isGrid]),
+    shortcut,
+  );
+
+  useKeyboardShortcut(
+    "Enter",
     useCallback(() => {
-      if (guard?.()) return false;
-      const prev = highlightedIndex - 1;
-      if (prev >= 0) setHighlightedKey(rows[prev]!.key);
+      const row = rows[highlightedIndex];
+
+      if (!onActivate || !row || guard?.() || focusedControlOwnsEnter()) return false;
+
+      onActivate(row);
+
       return true;
-    }, [guard, highlightedIndex, rows]),
-    { priority: 200 },
+    }, [onActivate, rows, highlightedIndex, guard]),
+    shortcut,
   );
 
   return { highlightedKey, setHighlightedKey, highlightedIndex, setHighlightedEl };

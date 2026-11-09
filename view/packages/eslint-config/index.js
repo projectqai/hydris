@@ -6,6 +6,7 @@ const prettierConfig = require("eslint-config-prettier");
 const unicornPlugin = require("eslint-plugin-unicorn");
 const unusedImportsPlugin = require("eslint-plugin-unused-imports");
 const simpleImportSortPlugin = require("eslint-plugin-simple-import-sort");
+const storybookPlugin = require("eslint-plugin-storybook");
 const reactCompilerPlugin = require("eslint-plugin-react-compiler");
 const globals = require("globals");
 
@@ -27,11 +28,12 @@ module.exports = [
       "**/.vscode/**",
       "**/generated/**",
       "**/*.generated.*",
+      "**/*-worker-code.ts",
       "**/.eslintrc.js",
     ],
   },
   {
-    files: ["**/*.{js,jsx,ts,tsx}"],
+    files: ["**/*.{js,jsx,ts,tsx,mts}"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
@@ -109,6 +111,49 @@ module.exports = [
       globals: {
         React: "readonly",
       },
+    },
+  },
+  {
+    files: ["**/*.{js,jsx,ts,tsx}"],
+    ignores: ["**/*.stories.tsx", "**/storybook/**", "**/__mocks__/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: "(^|/)(storybook|__mocks__)(/|$)|^@storybook/|\\.stories(\\.tsx)?$",
+              message: "App code must not import stories, mocks or Storybook code.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex:
+                "(^|/)(storybook(?!/entities$)|__mocks__)(/|$)|^@storybook/|\\.stories(\\.tsx)?$",
+              message: "Tests may import only the story fixtures in storybook/entities.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  ...storybookPlugin.configs["flat/recommended"],
+  {
+    files: ["**/*.stories.tsx"],
+    rules: {
+      "storybook/hierarchy-separator": "error",
+      "storybook/no-redundant-story-name": "error",
+      "storybook/prefer-pascal-case": "error",
     },
   },
 ];

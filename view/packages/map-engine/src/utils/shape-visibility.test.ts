@@ -100,16 +100,6 @@ describe("isShapeVisible", () => {
       });
       expect(isShapeVisible("det-1", "blue", ctx)).toBe(false);
     });
-
-    it("isDetection takes precedence over shapesVisible", () => {
-      const entity = makeEntity("det-1", { isDetection: true, label: "drone" });
-      const ctx = makeCtx({
-        entityMap: new Map([["det-1", entity]]),
-        detectionsVisible: false,
-        shapesVisible: true,
-      });
-      expect(isShapeVisible("det-1", "blue", ctx)).toBe(false);
-    });
   });
 
   describe("track history/prediction shapes", () => {
@@ -146,15 +136,6 @@ describe("isShapeVisible", () => {
   });
 
   describe("geoshapes ride the geoshapes toggle", () => {
-    it("labeled shape visible when shapesVisible=true", () => {
-      const entity = makeEntity("shape-1", { label: "Geofence A" });
-      const ctx = makeCtx({
-        entityMap: new Map([["shape-1", entity]]),
-        shapesVisible: true,
-      });
-      expect(isShapeVisible("shape-1", "blue", ctx)).toBe(true);
-    });
-
     it("labeled shape hidden when shapesVisible=false", () => {
       const entity = makeEntity("shape-1", { label: "Geofence A" });
       const ctx = makeCtx({

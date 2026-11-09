@@ -209,6 +209,12 @@ int main(int argc, char *argv[]) {
 		[config setValue:@YES forKey:@"allowUniversalAccessFromFileURLs"];
 		[config.preferences setValue:@YES forKey:@"allowFileAccessFromFileURLs"];
 
+		// WKWebView, unlike Safari, disables the Fullscreen API by default, which leaves
+		// video with no fullscreen button.
+		if (@available(macOS 12.3, *)) {
+			prefs.elementFullscreenEnabled = YES;
+		}
+
 		WKWebView *webview = [[WKWebView alloc] initWithFrame:frame configuration:config];
 		[webview setValue:@NO forKey:@"drawsBackground"];
 

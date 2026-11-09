@@ -1,6 +1,6 @@
-import { EmptyState } from "@hydris/ui/empty-state";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@hydris/ui/empty-state";
 import { useThemeColors } from "@hydris/ui/lib/theme";
-import { TileHeader } from "@hydris/ui/tile-header";
+import { TileHeader, type TileHeaderContent } from "@hydris/ui/tile-header";
 import type { LucideIcon } from "lucide-react-native";
 import { Activity, WifiOff } from "lucide-react-native";
 import type { ReactNode } from "react";
@@ -23,6 +23,23 @@ type Props = {
   children: (data: SensorWidgetData) => ReactNode;
 };
 
+export function sensorHeaderContent(data: SensorWidgetData): TileHeaderContent {
+  return {
+    name: data.name,
+    timestamp: data.measuredAt ? formatCompactRelativeTime(data.measuredAt) : "--:--",
+    meta: (s) => (
+      <SensorHeaderMeta
+        connectionState={data.connectionState}
+        signalStrength={data.signalStrength}
+        isSilentMode={data.isSilent}
+        hasSensorError={data.hasSensorError}
+        textSize={s.text}
+        iconSize={s.icon}
+      />
+    ),
+  };
+}
+
 export function SensorWidgetShell({
   entityId,
   icon = Activity,
@@ -36,7 +53,15 @@ export function SensorWidgetShell({
   const t = useThemeColors();
   const data = useSensorData(entityId);
 
-  if (!data) return <EmptyState icon={icon} title="Sensor" subtitle="No data available" />;
+  if (!data) {
+    return (
+      <Empty>
+        <EmptyMedia icon={icon} />
+        <EmptyTitle>Sensor</EmptyTitle>
+        <EmptyDescription>No data available</EmptyDescription>
+      </Empty>
+    );
+  }
 
   const glow =
     data.status === "cooldown" ? { color: "", intensity: 0 } : calculateGlow(data, colors);
@@ -52,24 +77,7 @@ export function SensorWidgetShell({
         glowIntensity={glow.intensity}
         isLocked={data.isLocked}
       >
-        {(!headerless || bodyReplaced) && (
-          <TileHeader
-            content={{
-              name: data.name,
-              timestamp: data.measuredAt ? formatCompactRelativeTime(data.measuredAt) : "--:--",
-              meta: (s) => (
-                <SensorHeaderMeta
-                  connectionState={data.connectionState}
-                  signalStrength={data.signalStrength}
-                  isSilentMode={data.isSilent}
-                  hasSensorError={data.hasSensorError}
-                  textSize={s.text}
-                  iconSize={s.icon}
-                />
-              ),
-            }}
-          />
-        )}
+        {(!headerless || bodyReplaced) && <TileHeader content={sensorHeaderContent(data)} />}
         {data.status === "disconnected" && !data.reading ? (
           <View className="flex-1 items-center justify-center gap-4">
             <WifiOff aria-hidden size={32} color={t.destructiveRed} strokeWidth={2} />

@@ -1,108 +1,113 @@
 "use no memo";
 
 import type { JsonObject } from "@bufbuild/protobuf";
-import { ControlButton, ControlSelect } from "@hydris/ui/controls";
+import { ControlButton } from "@hydris/ui/controls";
 import { useThemeColors } from "@hydris/ui/lib/theme";
+import { formatMinutesSeconds } from "@hydris/ui/lib/utils";
+import { RadioGroup, RadioGroupItem } from "@hydris/ui/radio-group";
+import { ScrollShadow } from "@hydris/ui/scroll-shadow";
 import { SegmentedControl } from "@hydris/ui/segmented-control";
 import type { DeviceClassOption, Entity } from "@projectqai/proto/world";
-import { ConfigurableState } from "@projectqai/proto/world";
-import { AlertTriangle, MapPin, Plus, Server, Timer, Trash2, X } from "lucide-react-native";
+import { MapPin, Plus, Server, Timer, Trash2, X } from "lucide-react-native";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ScrollView, Text, View } from "react-native";
 
 import { useEntityMutation } from "../../../../lib/api/use-entity-mutation";
-import { getEntityName, isRepositionable } from "../../../../lib/api/use-track-utils";
+import {
+  getConfigurableLabel,
+  getDeviceName,
+  getEntityName,
+  isRepositionable,
+} from "../../../../lib/api/use-track-utils";
 import { toast } from "../../../../lib/sonner";
+import { useNowUntil } from "../../../../lib/use-now-until";
+import { useOwnState } from "../../../mission/use-mission-state";
+import { useConfigHandshake } from "../../hooks/use-config-handshake";
 import { useEntityDelete } from "../../hooks/use-entity-delete";
+import { useOwnTaskables } from "../../hooks/use-entity-taskables";
 import { usePlacement } from "../../placement-context";
 import { useEntityStore } from "../../store/entity-store";
-import { getEntityIcon } from "../../utils/entity-helpers";
 import { formatRelativeTime, getSharedTimestamp } from "../../utils/format-metrics";
-import { SchemaForm } from "../schema-form";
-import { MetricsSection } from "./metrics-section";
-import { StatusSection } from "./status-section";
+import { ActionsSection } from "../entity-details/actions-section";
+import { EntityHeader } from "../entity-header";
+import { ErrorNotice } from "../error-notice";
+import { hasSchemaFields, SchemaForm } from "../schema-form";
+import { WaitingForApply } from "../waiting-for-apply";
+import type { DataTab } from "./data-tabs";
+import { DataTabContent, getDataTabs } from "./data-tabs";
 import type { ConfigSelection } from "./use-config-tree";
 
-const HANDSHAKE_TIMEOUT_MS = 30_000;
+export const NO_SCHEMA = "No schema available for this configuration";
 
-function useCooldownRemaining(until: number | undefined): string | null {
-  const [remaining, setRemaining] = useState(() =>
-    until ? Math.max(0, Math.ceil((until - Date.now()) / 1000)) : 0,
+export function FormScroll({
+  contentContainerClassName,
+  children,
+}: {
+  contentContainerClassName?: string;
+  children: ReactNode;
+}) {
+  return (
+    <ScrollShadow size="sm" className="flex-1">
+      <ScrollView
+        className="flex-1"
+        contentContainerClassName={contentContainerClassName}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {children}
+      </ScrollView>
+    </ScrollShadow>
   );
-
-  useEffect(() => {
-    if (!until) return;
-    const tick = () => setRemaining(Math.max(0, Math.ceil((until - Date.now()) / 1000)));
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [until]);
-
-  if (!until || remaining <= 0) return null;
-  const m = Math.floor(remaining / 60);
-  const s = remaining % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function ConfigurableSection({ entity }: { entity: Entity }) {
+function useCooldownRemaining(until: number | undefined): string | null {
+  const now = useNowUntil(until);
+  const remaining = until ? Math.max(0, Math.ceil((until - now) / 1000)) : 0;
+
+  if (!until || remaining <= 0) return null;
+
+  return formatMinutesSeconds(remaining);
+}
+
+export function ConfigurableSection({ entity }: { entity: Entity }) {
+  const taskables = useOwnTaskables(entity.id);
+
+  return (
+    <>
+      <ActionsSection entityId={entity.id} taskables={taskables} className="px-4 pt-2" />
+      <ConfigurableForm entity={entity} />
+    </>
+  );
+}
+
+function ConfigurableForm({ entity }: { entity: Entity }) {
   const { pushDeviceConfig, removeDeviceConfig, isPending } = useEntityMutation();
   const liveEntity = useEntityStore((s) => s.entities.get(entity.id));
-  const [sentVersion, setSentVersion] = useState<bigint | null>(null);
-  const sentVersionRef = useRef<bigint | null>(null);
-
   const configurable = liveEntity?.configurable;
+  const handshake = useConfigHandshake(configurable);
   const cooldownUntil =
     typeof configurable?.value?.cooldownUntil === "number"
       ? configurable.value.cooldownUntil
       : undefined;
   const cooldownLabel = useCooldownRemaining(cooldownUntil);
 
-  // watch for handshake completion
-  useEffect(() => {
-    if (sentVersionRef.current == null || !configurable) return;
-    if (configurable.appliedVersion < sentVersionRef.current) return;
-
-    const { state } = configurable;
-    if (
-      state === ConfigurableState.ConfigurableStateActive ||
-      state === ConfigurableState.ConfigurableStateScheduled
-    ) {
-      toast.success("Config applied");
-    } else if (state === ConfigurableState.ConfigurableStateFailed) {
-      toast.error(configurable.error ?? "Config failed");
-    }
-
-    sentVersionRef.current = null;
-    setSentVersion(null);
-  }, [configurable?.appliedVersion, configurable?.state, configurable]);
-
-  // timeout — device never responded
-  useEffect(() => {
-    if (sentVersion == null) return;
-    const t = setTimeout(() => {
-      sentVersionRef.current = null;
-      setSentVersion(null);
-      toast.error("Device did not respond");
-    }, HANDSHAKE_TIMEOUT_MS);
-    return () => clearTimeout(t);
-  }, [sentVersion]);
-
-  if (!configurable) return null;
+  if (!configurable?.schema || !hasSchemaFields(configurable.schema)) {
+    return (
+      <View className="items-center justify-center gap-2 px-4 py-6">
+        <Text className="text-muted-foreground font-sans text-sm">{NO_SCHEMA}</Text>
+      </View>
+    );
+  }
 
   const configValue = liveEntity?.config?.value ?? configurable.value;
-  const awaitingHandshake = sentVersion != null;
+  const awaitingHandshake = handshake.awaiting;
   const isCooldownActive = configurable.value?.cooldown === true;
   const isOrphaned = !liveEntity?.device;
 
   const handleSubmit = async (value: JsonObject) => {
-    if (!liveEntity || isOrphaned) return;
-    try {
-      const { version } = await pushDeviceConfig(liveEntity, value);
-      sentVersionRef.current = version;
-      setSentVersion(version);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Push failed");
-    }
+    if (!liveEntity || isOrphaned) return false;
+
+    return handshake.push(() => pushDeviceConfig(liveEntity, value));
   };
 
   const handleRemove = async () => {
@@ -117,49 +122,46 @@ function ConfigurableSection({ entity }: { entity: Entity }) {
 
   return (
     <View className="py-2">
-      {configurable.schema && Object.keys(configurable.schema).length > 0 ? (
-        <SchemaForm
-          schema={configurable.schema}
-          value={configValue}
-          onSubmit={handleSubmit}
-          onRemove={handleRemove}
-          isPending={isPending || awaitingHandshake}
-          isConfigured={!!liveEntity?.config}
-          disabled={isOrphaned}
-          extraActions={
-            isCooldownActive ? (
-              <ControlButton
-                onPress={() =>
-                  handleSubmit({ ...((configValue ?? {}) as object), cooldown: false })
-                }
-                icon={Timer}
-                label={cooldownLabel ? `Abort cooldown (${cooldownLabel})` : "Abort cooldown"}
-                hoverVariant="destructive"
-                disabled={isPending || awaitingHandshake || isOrphaned}
-                loading={isPending || awaitingHandshake}
-                size="lg"
-                fullWidth
-                labelClassName="font-mono text-xs font-semibold uppercase"
-                className="mt-3"
-                accessibilityLabel="Abort cooldown"
-              />
-            ) : undefined
-          }
-        />
-      ) : (
-        <View className="items-center justify-center gap-2 px-4 py-6">
-          <Text className="text-muted-foreground font-sans text-sm">
-            No schema available for this configuration
-          </Text>
-        </View>
-      )}
+      <SchemaForm
+        schema={configurable.schema}
+        value={configValue}
+        onSubmit={handleSubmit}
+        onRemove={handleRemove}
+        isPending={isPending || awaitingHandshake}
+        isConfigured={!!liveEntity?.config}
+        disabled={isOrphaned}
+        extraActions={
+          isCooldownActive ? (
+            <ControlButton
+              onPress={() => handleSubmit({ ...((configValue ?? {}) as object), cooldown: false })}
+              icon={Timer}
+              label={cooldownLabel ? `Abort cooldown (${cooldownLabel})` : "Abort cooldown"}
+              hoverVariant="destructive"
+              disabled={isPending || awaitingHandshake || isOrphaned}
+              loading={isPending || awaitingHandshake}
+              size="lg"
+              fullWidth
+              labelClassName="font-mono text-xs font-semibold uppercase"
+              className="mt-3"
+              accessibilityLabel="Abort cooldown"
+            />
+          ) : undefined
+        }
+        submitStatus={
+          <WaitingForApply
+            overdue={handshake.overdue}
+            configurable={configurable}
+            className="mt-3 justify-center"
+          />
+        }
+      />
     </View>
   );
 }
 
-function EntityHeader({
+function ConfigEntityHeader({
   entity,
-  title,
+  classLabel,
   isAddMode,
   onAddPress,
   onDeletePress,
@@ -167,95 +169,64 @@ function EntityHeader({
   metricsTimestamp,
 }: {
   entity: Entity;
-  title?: string;
+  classLabel?: string;
   isAddMode?: boolean;
   onAddPress?: () => void;
   onDeletePress?: () => void;
   onPositionPress?: () => void;
   metricsTimestamp?: string;
 }) {
-  const t = useThemeColors();
-  const Icon = getEntityIcon(entity);
-  const entityName = getEntityName(entity);
-  const subtitle = title && title !== entityName ? entityName : entity.id;
+  const name = classLabel ? getDeviceName(entity) : getEntityName(entity);
+  const subtitle = classLabel && classLabel !== name ? classLabel : entity.id;
   const AddIcon = isAddMode ? X : Plus;
+  const own = useOwnState(entity);
 
   return (
     <>
-      <View className="px-5 py-4">
-        <View className="flex-row items-center gap-3">
-          <View className="bg-glass border-surface-overlay/4 size-11 items-center justify-center rounded-lg border">
-            <Icon size={20} strokeWidth={2} color={t.iconDefault} />
-          </View>
-          <View className="flex-1 gap-0.5">
-            <Text className="font-sans-semibold text-foreground text-base" numberOfLines={1}>
-              {title ?? entityName}
-            </Text>
-            <View className="flex-row items-center gap-1.5">
-              <Text className="text-muted-foreground shrink font-mono text-xs" numberOfLines={1}>
-                {subtitle}
-              </Text>
-              {metricsTimestamp && (
-                <>
-                  <Text className="text-muted-foreground shrink-0 font-mono text-xs">·</Text>
-                  <Text
-                    className="text-muted-foreground shrink-0 font-mono text-xs"
-                    numberOfLines={1}
-                  >
-                    {metricsTimestamp}
-                  </Text>
-                </>
-              )}
-            </View>
-          </View>
-          {onPositionPress && (
-            <ControlButton
-              onPress={onPositionPress}
-              icon={MapPin}
-              label="Position"
-              size="sm"
-              accessibilityLabel="Set position on map"
-            />
-          )}
-          {onAddPress && (
-            <ControlButton
-              onPress={onAddPress}
-              icon={AddIcon}
-              label={isAddMode ? "Cancel" : "Add"}
-              hoverVariant={isAddMode ? undefined : "success"}
-              size="sm"
-              accessibilityLabel={isAddMode ? "Cancel" : "Add"}
-            />
-          )}
-          {onDeletePress && (
-            <ControlButton
-              onPress={onDeletePress}
-              icon={Trash2}
-              label="Delete"
-              hoverVariant="destructive"
-              size="sm"
-              accessibilityLabel="Delete"
-            />
-          )}
-        </View>
-      </View>
+      <EntityHeader
+        entity={entity}
+        title={name}
+        subtitle={subtitle}
+        timestamp={metricsTimestamp}
+        className="px-5 py-4"
+      >
+        {onPositionPress && (
+          <ControlButton
+            onPress={onPositionPress}
+            icon={MapPin}
+            label="Position"
+            size="sm"
+            accessibilityLabel="Set position on map"
+          />
+        )}
+        {onAddPress && (
+          <ControlButton
+            onPress={onAddPress}
+            icon={AddIcon}
+            label={isAddMode ? "Cancel" : "Add"}
+            hoverVariant={isAddMode ? undefined : "success"}
+            size="sm"
+            accessibilityLabel={isAddMode ? "Cancel" : "Add"}
+          />
+        )}
+        {onDeletePress && (
+          <ControlButton
+            onPress={onDeletePress}
+            icon={Trash2}
+            label="Delete"
+            hoverVariant="destructive"
+            size="sm"
+            accessibilityLabel="Delete"
+          />
+        )}
+      </EntityHeader>
 
-      {(entity.configurable?.error || entity.device?.error) && (
-        <View
-          accessibilityRole="alert"
-          className="mx-5 mb-2 flex-row items-start gap-2 rounded bg-red-500/10 px-3 py-2"
-        >
-          <AlertTriangle size={14} strokeWidth={2} color="rgb(248,113,113)" />
-          <Text className="text-red-foreground font-mono text-xs">
-            {entity.configurable?.error || entity.device?.error}
-          </Text>
-        </View>
-      )}
+      {own.error && <ErrorNotice className="mx-5 mb-2">{`${own.label}: ${own.error}`}</ErrorNotice>}
     </>
   );
 }
 
-function AddDeviceView({
+export function AddDeviceView({
   parentName,
   parentId,
   options,
@@ -282,19 +253,19 @@ function AddDeviceView({
 
   const selectedOpt = options.find((o) => o.class === selected) ?? options[0]!;
   const selectedLabel = selectedOpt.label || selectedOpt.class;
-  const selectOptions = options.map((o) => ({ value: o.class, label: o.label || o.class }));
 
   return (
     <View className="gap-3 px-4 py-4">
       <Text className="text-muted-foreground font-sans text-sm">Add device to {parentName}</Text>
 
       {options.length > 1 ? (
-        <ControlSelect
-          value={selected}
-          options={selectOptions}
-          onValueChange={setSelected}
-          accessibilityLabel="Device class"
-        />
+        <RadioGroup value={selected} onValueChange={setSelected} accessibilityLabel="Device class">
+          {options.map((o) => (
+            <RadioGroupItem key={o.class} value={o.class}>
+              {o.label || o.class}
+            </RadioGroupItem>
+          ))}
+        </RadioGroup>
       ) : (
         <Text className="font-sans-medium text-foreground text-sm">{selectedLabel}</Text>
       )}
@@ -320,17 +291,19 @@ function AddDeviceView({
 
 export function ConfigPanel({
   selection,
-  onSelect,
+  onCreated,
+  defaultAddMode = false,
 }: {
   selection: ConfigSelection;
-  onSelect?: (sel: ConfigSelection) => void;
+  onCreated?: (entityId: string) => void;
+  defaultAddMode?: boolean;
 }) {
   const t = useThemeColors();
   const entityId = selection?.entityId ?? null;
   const entity = useEntityStore((s) => (entityId ? s.entities.get(entityId) : undefined));
   const { enterPlacement, canPlace } = usePlacement();
-  const [isAddMode, setIsAddMode] = useState(false);
-  const [panelTab, setPanelTab] = useState<"config" | "metrics" | "status">("config");
+  const [isAddMode, setIsAddMode] = useState(defaultAddMode);
+  const [panelTab, setPanelTab] = useState<"config" | DataTab>("config");
   const { request: requestDelete, dialog: deleteDialog } = useEntityDelete();
 
   // exit add mode when selection changes
@@ -343,7 +316,8 @@ export function ConfigPanel({
   }, [entityId]);
 
   const isChildDevice = !!entity?.device?.parent;
-  const handleDeletePress = isChildDevice && entity ? () => requestDelete(entity) : undefined;
+  const handleDeletePress =
+    isChildDevice && entity ? () => requestDelete(entity, "Delete device") : undefined;
 
   if (!selection) {
     return (
@@ -366,11 +340,9 @@ export function ConfigPanel({
 
   const deviceClasses = entity.configurable?.supportedDeviceClasses ?? [];
   const entityName = getEntityName(entity);
-  const cfgLabel = entity.configurable?.label ?? entityName;
+  const cfgLabel = getConfigurableLabel(entity);
   const hasSchema =
     entity.configurable?.schema && Object.keys(entity.configurable.schema).length > 0;
-  const hasMetrics = (entity.metric?.metrics.length ?? 0) > 0;
-  const hasStatus = !!(entity.device || entity.power || entity.link);
   const metrics = entity.metric?.metrics ?? [];
   const sharedTs = getSharedTimestamp(metrics);
   const metricsTimestamp = sharedTs ? formatRelativeTime(sharedTs) : undefined;
@@ -379,35 +351,30 @@ export function ConfigPanel({
 
   const handleCreated = (newId: string) => {
     setIsAddMode(false);
-    onSelect?.({ type: "device", entityId: newId });
+    onCreated?.(newId);
   };
 
   const showAddMode = isAddMode && deviceClasses.length > 0;
 
   const tabs = [
     ...(hasSchema ? [{ id: "config" as const, label: "Config" }] : []),
-    ...(hasMetrics ? [{ id: "metrics" as const, label: "Metrics" }] : []),
-    ...(hasStatus ? [{ id: "status" as const, label: "Status" }] : []),
+    ...getDataTabs(entity),
   ];
 
   const activeTab = tabs.some((t) => t.id === panelTab) ? panelTab : (tabs[0]?.id ?? "config");
 
-  const renderTabContent = () => {
-    switch (activeTab) {
-      case "config":
-        return <ConfigurableSection key={entity.id} entity={entity} />;
-      case "metrics":
-        return <MetricsSection entity={entity} sharedTimestamp={sharedTs} />;
-      case "status":
-        return <StatusSection entity={entity} />;
-    }
-  };
+  const renderTabContent = () =>
+    activeTab === "config" ? (
+      <ConfigurableSection key={entity.id} entity={entity} />
+    ) : (
+      <DataTabContent tab={activeTab} entity={entity} sharedTimestamp={sharedTs} />
+    );
 
   const header = (
     <View key="header">
-      <EntityHeader
+      <ConfigEntityHeader
         entity={entity}
-        title={hasSchema ? cfgLabel : undefined}
+        classLabel={hasSchema ? cfgLabel : undefined}
         isAddMode={isAddMode}
         onAddPress={deviceClasses.length > 0 ? handleAddPress : undefined}
         onDeletePress={handleDeletePress}
@@ -454,9 +421,7 @@ export function ConfigPanel({
 
   return (
     <View className="flex-1">
-      <ScrollView className="flex-1" showsVerticalScrollIndicator={false}>
-        {scrollChildren}
-      </ScrollView>
+      <FormScroll>{scrollChildren}</FormScroll>
       {deleteDialog}
     </View>
   );

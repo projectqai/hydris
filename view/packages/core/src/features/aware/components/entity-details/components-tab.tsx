@@ -1,4 +1,4 @@
-import { EmptyState } from "@hydris/ui/empty-state";
+import { Empty, EmptyTitle } from "@hydris/ui/empty-state";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import type { Entity } from "@projectqai/proto/world";
 import { LinkStatus } from "@projectqai/proto/world";
@@ -11,7 +11,9 @@ import {
   Gauge,
   ListTodo,
   MapPin,
+  Paperclip,
   Radar,
+  RulerDimensionLine,
   Scan,
   Target,
   Wifi,
@@ -20,6 +22,8 @@ import type { ComponentType } from "react";
 import { Text, View } from "react-native";
 
 import { formatDeviceState } from "../../utils/format-entity";
+import { TOOL } from "../../utils/map-paths";
+import { readDrawing } from "../../utils/transform-entities";
 
 type ComponentsTabProps = {
   entity: Entity;
@@ -99,6 +103,21 @@ function getActiveComponents(entity: Entity): ComponentDef[] {
   if (entity.taskable) {
     components.push({ icon: ListTodo, label: "Taskable", description: "Can execute tasks" });
   }
+  const drawing = readDrawing(entity);
+  if (drawing?.kind === "range" || drawing?.kind === "freeform") {
+    components.push({
+      icon: RulerDimensionLine,
+      label: TOOL[drawing.kind].label,
+      description: `${drawing.points.length} point(s)`,
+    });
+  }
+  if (entity.artifact) {
+    components.push({
+      icon: Paperclip,
+      label: "Artifact",
+      description: entity.artifact.contentType || "Stored file",
+    });
+  }
 
   return components;
 }
@@ -107,7 +126,11 @@ export function ComponentsTab({ entity }: ComponentsTabProps) {
   const components = getActiveComponents(entity);
 
   if (components.length === 0) {
-    return <EmptyState title="No components" />;
+    return (
+      <Empty>
+        <EmptyTitle>No components</EmptyTitle>
+      </Empty>
+    );
   }
 
   return (

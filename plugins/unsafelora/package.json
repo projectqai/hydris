@@ -1,0 +1,19 @@
+{
+  "name": "@hydris/plugin-unsafelora",
+  "version": "0.0.1",
+  "main": "index.ts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.10.1",
+    "@projectqai/proto": "file:../../proto/ts"
+  },
+  "hydris": {
+    "actors": [
+      "unsafelora.actor"
+    ]
+  }
+}

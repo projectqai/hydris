@@ -12,6 +12,8 @@ import (
 	"github.com/projectqai/hydris/builtin/meshtastic/meshpb"
 	"github.com/projectqai/hydris/goclient"
 	"github.com/projectqai/hydris/pkg/cot"
+	"github.com/projectqai/hydris/pkg/hydrispayload"
+	"github.com/projectqai/hydris/pkg/zlibutil"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -264,29 +266,11 @@ func sendEntityAsPosition(ctx context.Context, logger *slog.Logger, radio *Radio
 	return radio.Send(toRadio)
 }
 
-const (
-	hydrisFlagGzip   = 1 << 0
-	hydrisTypeEntity = 0 << 1
-	hydrisTypeMask   = 0b00001110
-)
-
 func sendEntityAsHydris(ctx context.Context, logger *slog.Logger, radio *Radio, entity *pb.Entity, channel, hopLimit uint32) error {
-	raw, err := proto.Marshal(filterEntityForMesh(entity))
+	data, err := hydrispayload.Encode(filterEntityForMesh(entity))
 	if err != nil {
-		return fmt.Errorf("marshal entity: %w", err)
+		return fmt.Errorf("encode entity: %w", err)
 	}
-
-	// Try zlib — use whichever is smaller.
-	flags := byte(hydrisTypeEntity)
-	payload := raw
-	if compressed, err := zlibCompress(raw); err == nil && len(compressed) < len(raw) {
-		flags |= hydrisFlagGzip
-		payload = compressed
-	}
-
-	data := make([]byte, 1+len(payload))
-	data[0] = flags
-	copy(data[1:], payload)
 
 	if len(data) > maxPayloadSize {
 		logger.Warn("Entity too large for single mesh packet, dropping",
@@ -295,7 +279,7 @@ func sendEntityAsHydris(ctx context.Context, logger *slog.Logger, radio *Radio, 
 	}
 
 	logger.Info("Hydris proto outbound", "entityID", entity.Id,
-		"rawLen", len(raw), "wireLen", len(data), "gzip", flags&hydrisFlagGzip != 0)
+		"wireLen", len(data), "gzip", data[0]&hydrispayload.FlagGzip != 0)
 
 	toRadio := &meshpb.ToRadio{
 		Msg: &meshpb.ToRadio_Packet{
@@ -433,7 +417,7 @@ func sendDeleteCoT(ctx context.Context, logger *slog.Logger, radio *Radio, entit
 
 	logger.Info("CoT XML delete outbound", "entityID", entity.Id, "xml", string(cotXML))
 
-	compressed, err := zlibCompress(cotXML)
+	compressed, err := zlibutil.Compress(cotXML)
 	if err != nil {
 		return fmt.Errorf("zlib compress: %w", err)
 	}

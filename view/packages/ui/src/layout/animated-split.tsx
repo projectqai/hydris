@@ -243,6 +243,9 @@ export function AnimatedSplit({
           accessible
           accessibilityRole="adjustable"
           accessibilityLabel={`Resize ${isH ? "columns" : "rows"}`}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(targetRatio * 100)}
           style={[
             handleStyle,
             { cursor: isH ? "col-resize" : "row-resize", outlineStyle: "none" } as never,

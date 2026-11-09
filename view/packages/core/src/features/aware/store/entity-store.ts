@@ -1,5 +1,5 @@
 import type { Entity, GeoSpatialComponent } from "@projectqai/proto/world";
-import { DeviceState, Priority, SortField } from "@projectqai/proto/world";
+import { DeviceState, EntityComponent, Priority, SortField } from "@projectqai/proto/world";
 import { create } from "zustand";
 
 import {
@@ -27,15 +27,24 @@ const DERIVED_STATE_INTERVAL_MS = 500;
  * Ensures the engine emits Unobserved when a required component
  * disappears before lifetime.until (per-component GC).
  */
-export const ENTITY_STREAM_FILTER = {
+const ENTITY_STREAM_FILTER = {
   or: [
-    { component: [11] }, // geo: tracks, assets, sensors
-    { component: [16] }, // detection: contact reports, incl. detections with no geo and no bearing
-    { component: [50] }, // device: config tree
-    { component: [52] }, // configurable: orphaned configs (no device component)
-    { component: [25] }, // shape: coverage, history, prediction
-    { component: [23] }, // taskable: action buttons
-    { component: [63] }, // map_layer: plugin map overlays
+    // tracks, assets, sensors
+    { component: [EntityComponent.EntityComponentGeo] },
+    // contact reports, incl. detections with no geo and no bearing
+    { component: [EntityComponent.EntityComponentDetection] },
+    // config tree
+    { component: [EntityComponent.EntityComponentDevice] },
+    // orphaned configs (no device component)
+    { component: [EntityComponent.EntityComponentConfigurable] },
+    // coverage, history, prediction, drawn ranges
+    { component: [EntityComponent.EntityComponentShape] },
+    // action buttons
+    { component: [EntityComponent.EntityComponentTaskable] },
+    // runs that are separate entities
+    { component: [EntityComponent.EntityComponentTaskExecution] },
+    // plugin map overlays
+    { component: [EntityComponent.EntityComponentMapLayer] },
   ],
 };
 
@@ -72,8 +81,6 @@ type EntityState = {
   tracks: Entity[];
   assets: Entity[];
   detections: Entity[];
-  trackCount: number;
-  assetCount: number;
   selfGeo: GeoSpatialComponent | null;
   hydrisVersion: string | null;
   hydrisUpdateAvailable: string | null;
@@ -97,8 +104,6 @@ export const selectEntity = (id: string | null) => (state: EntityState) =>
 export const selectTracks = (state: EntityState) => state.tracks;
 export const selectAssets = (state: EntityState) => state.assets;
 export const selectDetections = (state: EntityState) => state.detections;
-export const selectTrackCount = (state: EntityState) => state.trackCount;
-export const selectAssetCount = (state: EntityState) => state.assetCount;
 export const selectLastChange = (state: EntityState) => state.lastChange;
 export const selectDetectionEntityIds = (state: EntityState) => state.detectionEntityIds;
 export const selectSelfGeo = (state: EntityState) => state.selfGeo;
@@ -114,15 +119,25 @@ export const selectDetectionsByDetector = (detectorEntityId: string) => (state: 
 
 function entitySortComparator(sort: SortConfig) {
   const dir = sort.descending ? -1 : 1;
+
   return (a: Entity, b: Entity) => {
     const fieldComparison = compareByField(a, b, sort.field);
+
     if (fieldComparison !== 0) return fieldComparison * dir;
+
     if (sort.field === SortField.SortFieldLabel) return 0;
-    const nameA = getEntityName(a);
-    const nameB = getEntityName(b);
-    const byName = nameA < nameB ? -1 : nameA > nameB ? 1 : 0;
-    return byName * dir;
+
+    return compareNames(a, b) * dir;
   };
+}
+
+function compareNames(a: Entity, b: Entity): number {
+  const nameA = getEntityName(a);
+  const nameB = getEntityName(b);
+
+  if (nameA < nameB) return -1;
+
+  return nameA > nameB ? 1 : 0;
 }
 
 // worse = higher, same direction as BLOCKER_SEVERITY in asset-readiness.ts
@@ -139,11 +154,8 @@ function deviceSeverity(state: DeviceState | undefined): number {
 
 function compareByField(a: Entity, b: Entity, field: ListSortField): number {
   switch (field) {
-    case SortField.SortFieldLabel: {
-      const nameA = getEntityName(a);
-      const nameB = getEntityName(b);
-      return nameA < nameB ? -1 : nameA > nameB ? 1 : 0;
-    }
+    case SortField.SortFieldLabel:
+      return compareNames(a, b);
     case SortField.SortFieldPriority:
       return (a.priority ?? 0) - (b.priority ?? 0);
     case SortField.SortFieldLifetimeFrom:
@@ -260,8 +272,6 @@ function computeDerivedState(entities: Map<string, Entity>, sort: SortConfig) {
     tracks,
     assets,
     detections,
-    trackCount: tracks.length,
-    assetCount: assets.length,
   };
 }
 
@@ -281,8 +291,6 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
   tracks: [],
   assets: [],
   detections: [],
-  trackCount: 0,
-  assetCount: 0,
   selfGeo: null as GeoSpatialComponent | null,
   hydrisVersion: null as string | null,
   hydrisUpdateAvailable: null as string | null,
@@ -448,8 +456,6 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
             tracks: [],
             assets: [],
             detections: [],
-            trackCount: 0,
-            assetCount: 0,
           });
         }
 
@@ -568,6 +574,7 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
         updatedIds: new Set([id]),
         deletedIds: new Set(),
         geoChanged,
+        local: true,
       };
       accumulateChanges(lastChange);
       scheduleDerivedStateUpdate();
@@ -642,8 +649,6 @@ export const useEntityStore = create<EntityState & EntityActions>()((set) => ({
       tracks: [],
       assets: [],
       detections: [],
-      trackCount: 0,
-      assetCount: 0,
       isConnected: false,
       error: null,
       lastChange: EMPTY_CHANGE,

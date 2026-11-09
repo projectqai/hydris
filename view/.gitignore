@@ -1,6 +1,7 @@
 # Monorepo
 apps/*/credentials.json
 apps/*/build
+apps/*/storybook-static
 packages/*/build
 
 # Turborepo
@@ -37,9 +38,6 @@ package-lock.json
 
 # Archives
 *.tar.gz
-
-# Maestro test artifacts
-.maestro/tests/
 
 # Claude Code
 .claude

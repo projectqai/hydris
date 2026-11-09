@@ -28,6 +28,8 @@ const UNIT_SYMBOLS: Partial<Record<MetricUnit, string>> = {
   [MetricUnit.MetricUnitOhm]: "Ω",
   [MetricUnit.MetricUnitMeter]: "m",
   [MetricUnit.MetricUnitKilometer]: "km",
+  [MetricUnit.MetricUnitSquareMeter]: "m²",
+  [MetricUnit.MetricUnitSquareKilometer]: "km²",
   [MetricUnit.MetricUnitFoot]: "ft",
   [MetricUnit.MetricUnitNauticalMile]: "NM",
   [MetricUnit.MetricUnitMeterPerSecond]: "m/s",
@@ -40,6 +42,7 @@ const UNIT_SYMBOLS: Partial<Record<MetricUnit, string>> = {
   [MetricUnit.MetricUnitBitPerSecond]: "bps",
   [MetricUnit.MetricUnitKilobitPerSecond]: "kbps",
   [MetricUnit.MetricUnitMegabitPerSecond]: "Mbps",
+  [MetricUnit.MetricUnitKilobytePerSecond]: "KB/s",
   [MetricUnit.MetricUnitMillisecond]: "ms",
   [MetricUnit.MetricUnitByte]: "B",
   [MetricUnit.MetricUnitKilobyte]: "KB",
@@ -150,7 +153,7 @@ export function getUnitSymbol(unit: MetricUnit): string {
   return UNIT_SYMBOLS[unit] ?? "";
 }
 
-type UnitFamily = "sv-rate" | "sv-dose" | "gy-rate" | "gy-dose";
+type UnitFamily = "sv-rate" | "sv-dose" | "gy-rate" | "gy-dose" | "bytes" | "bit-rate";
 
 type UnitTier = { unit: MetricUnit; nanoScale: number; display?: false };
 
@@ -185,6 +188,18 @@ const FAMILY_TIERS: Record<UnitFamily, UnitTier[]> = {
     { unit: MetricUnit.MetricUnitMilligray, nanoScale: 1_000_000 },
     { unit: MetricUnit.MetricUnitMicrogray, nanoScale: 1_000 },
     { unit: MetricUnit.MetricUnitNanogray, nanoScale: 1 },
+  ],
+  // Decimal, as the proto's byte and bit units are. The base is the byte or the bit.
+  bytes: [
+    { unit: MetricUnit.MetricUnitGigabyte, nanoScale: 1_000_000_000 },
+    { unit: MetricUnit.MetricUnitMegabyte, nanoScale: 1_000_000 },
+    { unit: MetricUnit.MetricUnitKilobyte, nanoScale: 1_000 },
+    { unit: MetricUnit.MetricUnitByte, nanoScale: 1 },
+  ],
+  "bit-rate": [
+    { unit: MetricUnit.MetricUnitMegabitPerSecond, nanoScale: 1_000_000 },
+    { unit: MetricUnit.MetricUnitKilobitPerSecond, nanoScale: 1_000 },
+    { unit: MetricUnit.MetricUnitBitPerSecond, nanoScale: 1 },
   ],
 };
 
@@ -261,6 +276,11 @@ export function scaleForDisplay(
   return autoScaleUnit(value, unit);
 }
 
+// A plane angle and a percentage are set against the number they qualify, where
+// a unit abbreviation takes a space. °C and °F are abbreviations, so they keep
+// theirs.
+const TIGHT_SYMBOLS = new Set(["°", "%"]);
+
 export function formatMetricValue(metric: Metric): string {
   const { value, unit } = scaleForDisplay(getMetricValue(metric), metric.unit);
 
@@ -269,7 +289,7 @@ export function formatMetricValue(metric: Metric): string {
     ? value.toLocaleString()
     : value.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
-  return symbol ? `${formatted} ${symbol}` : formatted;
+  return symbol ? `${formatted}${TIGHT_SYMBOLS.has(symbol) ? "" : " "}${symbol}` : formatted;
 }
 
 export function getMetricLabel(metric: Metric): string {
@@ -285,13 +305,20 @@ export function formatRelativeTime(timestamp: { seconds: bigint }): string {
   return formatDistanceToNowStrict(date, { addSuffix: true });
 }
 
+export function formatCompactDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+
+  return `${Math.floor(seconds / 86400)}d`;
+}
+
 export function formatCompactRelativeTime(timestamp: { seconds: bigint }): string {
   const diffS = Math.max(0, Math.floor(Date.now() / 1000 - Number(timestamp.seconds)));
-  if (diffS < 10) return "now";
-  if (diffS < 60) return `${diffS}s ago`;
-  if (diffS < 3600) return `${Math.floor(diffS / 60)}m ago`;
-  if (diffS < 86400) return `${Math.floor(diffS / 3600)}h ago`;
-  return `${Math.floor(diffS / 86400)}d ago`;
+
+  return diffS < 10 ? "now" : `${formatCompactDuration(diffS)} ago`;
 }
 
 export function getSharedTimestamp(
@@ -357,6 +384,7 @@ const KIND_CATEGORY: Partial<Record<MetricKind, MetricCategory>> = {
   [MetricKind.MetricKindSpeed]: "spatial",
   [MetricKind.MetricKindAcceleration]: "spatial",
   [MetricKind.MetricKindDepth]: "spatial",
+  [MetricKind.MetricKindArea]: "spatial",
   [MetricKind.MetricKindDataRate]: "network",
   [MetricKind.MetricKindLatency]: "network",
   [MetricKind.MetricKindDataSize]: "network",

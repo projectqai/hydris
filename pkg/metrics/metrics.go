@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime"
 	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
@@ -27,7 +28,20 @@ var (
 	gcNumGauge          metric.Int64ObservableGauge
 	gcPauseTotalGauge   metric.Int64ObservableGauge
 	numCPUGauge         metric.Int64ObservableGauge
+
+	// watchQueueLatency measures how long a change waits in a watcher's queue
+	// between being marked dirty and being drained for sending.
+	watchQueueLatency metric.Float64Histogram
 )
+
+// RecordWatchQueueLatency records one drain of a watcher's queue. No-op
+// before Init.
+func RecordWatchQueueLatency(d time.Duration) {
+	if watchQueueLatency == nil {
+		return
+	}
+	watchQueueLatency.Record(context.Background(), d.Seconds())
+}
 
 func Init() error {
 	meter = otel.Meter("hydris.metrics")
@@ -38,6 +52,15 @@ func Init() error {
 		"hydris.entities.count",
 		metric.WithDescription("Number of currently held entities"),
 		metric.WithUnit("{entities}"),
+	)
+	if err != nil {
+		return err
+	}
+
+	watchQueueLatency, err = meter.Float64Histogram(
+		"hydris.watch.queue_latency",
+		metric.WithDescription("Time a change waits in a watcher's queue from dirty to drain"),
+		metric.WithUnit("s"),
 	)
 	if err != nil {
 		return err

@@ -8,7 +8,6 @@ import { useEffect, useState } from "react";
 import { Text, View } from "react-native";
 
 import { useEntityStore } from "../../store/entity-store";
-import { AssetReadinessIndicator } from "./asset-readiness-indicator";
 import { Inset } from "./inset";
 
 function ConnectionIndicator() {
@@ -95,12 +94,9 @@ export function ContextStrip({ showConnection = true }: { showConnection?: boole
       </Inset>
 
       {showConnection && (
-        <>
-          <Inset>
-            <ConnectionIndicator />
-          </Inset>
-          <AssetReadinessIndicator />
-        </>
+        <Inset>
+          <ConnectionIndicator />
+        </Inset>
       )}
     </View>
   );

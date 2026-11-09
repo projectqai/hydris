@@ -4,7 +4,7 @@ export type Point = { x: number; y: number };
 
 const TAU = Math.PI * 2;
 
-export function sliceAngles(index: number, count: number): { start: number; end: number } {
+function sliceAngles(index: number, count: number): { start: number; end: number } {
   const span = TAU / count;
   const start = -Math.PI / 2 - span / 2 + index * span;
   return { start, end: start + span };

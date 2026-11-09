@@ -33,6 +33,8 @@ export function OverlayToggle({
   return (
     <Pressable
       onPress={onToggle}
+      role="button"
+      aria-pressed={isActive}
       className={cn(
         "flex-row items-center gap-2 rounded px-2.5 py-1 select-none",
         isActive

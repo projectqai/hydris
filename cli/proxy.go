@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"crypto/tls"
 	"embed"
 	"fmt"
 	"io"
@@ -129,8 +130,10 @@ func StartProxyServer(server, wgConfigPath string) (listenAddr string, err error
 	if err != nil {
 		return "", err
 	}
-	targetURL := &url.URL{Scheme: "http", Host: remoteAddr}
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+
+	// ParseServer returns the address as given, scheme included.
+	scheme, hostPort := goclient.SplitServerURL(remoteAddr)
+	targetURL := &url.URL{Scheme: "http", Host: hostPort}
 
 	var dialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 	if tunnel != nil {
@@ -143,12 +146,29 @@ func StartProxyServer(server, wgConfigPath string) (listenAddr string, err error
 	if dialContext != nil {
 		transport.DialContext = dialContext
 	}
-	proxy.Transport = transport
+
+	if scheme == "https" {
+		targetURL.Scheme = "https"
+		// The node is self-signed. No client cert: one the remote cannot verify
+		// makes it deny the connection outright, not fall back to anonymous.
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		// A custom TLS config disables the implicit h2 attempt, which gRPC needs.
+		transport.ForceAttemptHTTP2 = true
+	}
+
+	// SetURL rewrites the outbound Host to the target, unlike the old director:
+	// the engine resolves relative camera stream URLs against it (image.go).
+	proxy := &httputil.ReverseProxy{
+		Transport: transport,
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(targetURL)
+		},
+	}
 
 	bridges := media.NewBridgeManager()
 	bridges.DialContext = dialContext
 
-	handler, err := newProxyHandler(view.Dist, proxy, bridges, remoteAddr)
+	handler, err := newProxyHandler(view.Dist, proxy, bridges, hostPort)
 	if err != nil {
 		return "", fmt.Errorf("failed to create proxy handler: %w", err)
 	}

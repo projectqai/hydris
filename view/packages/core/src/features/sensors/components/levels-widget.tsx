@@ -15,11 +15,28 @@ type Props = {
   displaySlots?: number;
 };
 
+type Band = "high" | "moderate" | "low";
+
+const BAR_COLORS: Record<Band, string> = {
+  high: "bg-red",
+  moderate: "bg-warning",
+  low: "bg-green",
+};
+
+const BAND_LABELS: Record<Band, string> = { high: "High", moderate: "Moderate", low: "Low" };
+
+function getBand(value: number): Band {
+  if (value >= 6) return "high";
+
+  if (value >= 3) return "moderate";
+
+  return "low";
+}
+
 function getBarColor(index: number, value: number): string {
   if (index >= value) return "bg-surface-overlay/6";
-  if (value >= 6) return "bg-red";
-  if (value >= 3) return "bg-warning";
-  return "bg-green";
+
+  return BAR_COLORS[getBand(value)];
 }
 
 function LevelRow({ level, maxBars }: { level: LevelValue | null; maxBars: number }) {
@@ -48,6 +65,7 @@ function LevelRow({ level, maxBars }: { level: LevelValue | null; maxBars: numbe
           {empty ? "-" : level.value}
           <Text className="text-foreground/70">/{bars}</Text>
         </Text>
+        {!empty && <Text className="sr-only">{BAND_LABELS[getBand(level.value)]}</Text>}
       </View>
       <View style={{ height: barHeight, marginTop: barGap, gap: barGap }} className="flex-row">
         {Array.from({ length: bars }).map((_, i) => (

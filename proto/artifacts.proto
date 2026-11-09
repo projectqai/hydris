@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package world;
+
+import "world.proto";
+
+option go_package = "github.com/projectqai/proto/go";
+
+// Download artifact data by entity id or content hash
+message DownloadArtifactRequest {
+  oneof ref {
+    string id = 1;
+    string sha256 = 2;
+  }
+}
+
+message DownloadArtifactResponse {
+  // set in the first message only
+  optional ArtifactComponent meta = 1;
+
+  // data chunks
+  optional bytes chunk = 2;
+}
+
+// Upload artifact data for an existing artifact entity
+message UploadArtifactRequest {
+  // entity id, set in the first message only
+  optional string id = 1;
+
+  // data chunks
+  optional bytes chunk = 2;
+
+  // content type of the artifact, set in the first message only.
+  // If omitted, an existing part's content type is preserved.
+  optional string content_type = 3;
+}
+
+message UploadArtifactResponse {}
+
+service ArtifactService {
+  // stream artifact data
+  rpc DownloadArtifact(DownloadArtifactRequest) returns (stream DownloadArtifactResponse);
+
+  // upload or ingest an artifact
+  rpc UploadArtifact(stream UploadArtifactRequest) returns (UploadArtifactResponse);
+}

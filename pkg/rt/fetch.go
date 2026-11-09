@@ -33,8 +33,9 @@ func getInsecureClient() *http.Client {
 }
 
 // setupFetch registers global fetch(url, opts?), Headers, and Request classes,
-// backed by Go's net/http.
-func setupFetch(loop *eventloop.EventLoop, vm *goja.Runtime) {
+// backed by Go's net/http. Requests whose URL starts with serverURL go through
+// serverClient (when set) so the host can attach the plugin's identity.
+func setupFetch(loop *eventloop.EventLoop, vm *goja.Runtime, serverURL string, serverClient *http.Client) {
 	setupHeaders(vm)
 	setupURL(vm)
 	setupRequest(vm)
@@ -134,6 +135,9 @@ func setupFetch(loop *eventloop.EventLoop, vm *goja.Runtime) {
 			client := http.DefaultClient
 			if insecureTLS {
 				client = getInsecureClient()
+			}
+			if serverClient != nil && serverURL != "" && strings.HasPrefix(urlStr, serverURL) {
+				client = serverClient
 			}
 			resp, err := client.Do(req)
 			if err != nil {

@@ -613,3 +613,40 @@ func TestInitNodeIdentity_IsPersistable(t *testing.T) {
 		t.Error("node entity created by InitNodeIdentity must be persistable")
 	}
 }
+
+func TestLoadFromFile_FailsInterruptedExecutions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "world.yaml")
+
+	yaml := `id: "running"
+task_execution:
+  task: "running"
+  state: "TaskExecutionStateRunning"
+---
+id: "pending"
+task_execution:
+  task: "pending"
+---
+id: "done"
+task_execution:
+  task: "done"
+  state: "TaskExecutionStateCompleted"
+`
+	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	w := testWorld(map[string]*pb.Entity{})
+	if err := w.LoadFromFile(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"running", "pending"} {
+		ex := w.GetHead(id).GetTaskExecution()
+		if ex.GetState() != pb.TaskExecutionState_TaskExecutionStateFailed || ex.GetReason() == "" {
+			t.Errorf("%s: an execution in flight when hydris stopped must load as failed, got %v", id, ex)
+		}
+	}
+	if got := w.GetHead("done").GetTaskExecution().GetState(); got != pb.TaskExecutionState_TaskExecutionStateCompleted {
+		t.Errorf("a finished execution is kept, got %v", got)
+	}
+}

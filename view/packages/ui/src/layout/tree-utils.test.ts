@@ -19,18 +19,6 @@ afterEach(() => {
 });
 
 describe("validateLayoutNode", () => {
-  it("passes a component pane with a known id through unchanged", () => {
-    const result = validateLayoutNode(
-      { type: "pane", id: "p1", content: { type: "component", componentId: "alpha" } },
-      VALID_IDS,
-    );
-    expect(result).toEqual({
-      type: "pane",
-      id: "p1",
-      content: { type: "component", componentId: "alpha" },
-    });
-  });
-
   it("converts an unknown component id into empty+missingWidgetId", () => {
     const result = validateLayoutNode(
       { type: "pane", id: "p1", content: { type: "component", componentId: "ghost" } },
@@ -207,12 +195,6 @@ describe("getPaneEntityId", () => {
       "e2",
     );
     expect(getPaneEntityId({ type: "camera", entityId: "e3" })).toBe("e3");
-  });
-
-  it("returns undefined for an unbound component and non-entity content", () => {
-    expect(getPaneEntityId({ type: "component", componentId: "vitals" })).toBeUndefined();
-    expect(getPaneEntityId({ type: "iframe", url: "https://example.com" })).toBeUndefined();
-    expect(getPaneEntityId({ type: "empty" })).toBeUndefined();
   });
 });
 

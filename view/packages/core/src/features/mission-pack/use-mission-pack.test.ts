@@ -28,7 +28,7 @@ vi.mock("../../lib/sonner", () => ({
   },
 }));
 
-vi.mock("../aware/layouts", () => ({
+vi.mock("../aware/presets", () => ({
   PRESETS: [
     { id: "inspect", name: "Inspect", root: { type: "pane", id: "p", content: { type: "empty" } } },
     { id: "watch", name: "Watch", root: { type: "pane", id: "p", content: { type: "empty" } } },

@@ -24,6 +24,48 @@ import (
 // node device entity, and the long-lived TLS keypair used to serve HTTPS and to
 // present a client certificate for federation.
 
+// HostnameOverride replaces os.Hostname() as the node's reported hostname.
+// Android always returns "localhost", so Kotlin sets the device name instead.
+var HostnameOverride string
+
+// Hostname returns the platform override when set, otherwise os.Hostname().
+func Hostname() string {
+	if HostnameOverride != "" {
+		return HostnameOverride
+	}
+	h, _ := os.Hostname()
+	return h
+}
+
+// nodeTLSFingerprint returns the hex SHA-256 of the node's TLS leaf cert, or
+// "" when the TLS identity is not loaded yet.
+func nodeTLSFingerprint() string {
+	if NodeTLSCert == nil || len(NodeTLSCert.Certificate) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(NodeTLSCert.Certificate[0])
+	return hex.EncodeToString(sum[:])
+}
+
+// StampNodeTLSFingerprint records the node's TLS fingerprint on the node
+// entity; on first boot the certificate is generated after InitNodeIdentity.
+func (s *WorldServer) StampNodeTLSFingerprint() {
+	fp := nodeTLSFingerprint()
+	if fp == "" {
+		return
+	}
+	s.l.Lock()
+	defer s.l.Unlock()
+	if s.nodeEntity == nil || s.nodeEntity.Device == nil || s.nodeEntity.Device.Node == nil {
+		return
+	}
+	if s.nodeEntity.Device.Node.GetMtlsIdentity() == fp {
+		return
+	}
+	s.nodeEntity.Device.Node.MtlsIdentity = &fp
+	s.bus.Dirty(context.Background(), s.nodeEntity.Id, s.nodeEntity, pb.EntityChange_EntityChangeUpdated)
+}
+
 // hardwareNodeID derives a stable node identifier from hardware characteristics.
 // It tries /etc/machine-id first, then falls back to hashing MAC addresses,
 // then to a random ID as a last resort.
@@ -86,7 +128,7 @@ func (s *WorldServer) InitNodeIdentity() {
 
 	s.nodeID = hardwareNodeID()
 
-	hostname, _ := os.Hostname()
+	hostname := Hostname()
 	numCPU := uint32(runtime.NumCPU())
 
 	node := &pb.NodeDevice{
@@ -112,7 +154,7 @@ func (s *WorldServer) InitNodeIdentity() {
 	}
 
 	s.setEntity(s.nodeEntity.Id, s.nodeEntity, nil)
-	s.bus.Dirty(s.nodeEntity.Id, s.nodeEntity, pb.EntityChange_EntityChangeUpdated)
+	s.bus.Dirty(context.Background(), s.nodeEntity.Id, s.nodeEntity, pb.EntityChange_EntityChangeUpdated)
 
 	slog.Info("created new node identity", "nodeID", s.nodeID, "entityID", s.nodeEntity.Id)
 
@@ -138,6 +180,13 @@ func (s *WorldServer) SetNodeID(id string) {
 // with current values. Called both for freshly created and persisted nodes
 // so that version info is always up to date.
 func (s *WorldServer) fillNodeDeviceInfo(n *pb.NodeDevice) {
+	// Refresh facts that may be stale in persisted worlds (e.g. "localhost").
+	if h := Hostname(); h != "" {
+		n.Hostname = &h
+	}
+	if fp := nodeTLSFingerprint(); fp != "" {
+		n.MtlsIdentity = &fp
+	}
 	n.Os = strPtr(runtime.GOOS)
 	n.Arch = strPtr(runtime.GOARCH)
 	n.HydrisVersion = strPtr(version.Version)
@@ -170,7 +219,7 @@ func (s *WorldServer) checkForUpdate() {
 			s.l.Lock()
 			if s.nodeEntity != nil && s.nodeEntity.Device != nil && s.nodeEntity.Device.Node != nil {
 				s.nodeEntity.Device.Node.HydrisUpdateAvailable = &idx.HydrisVersion
-				s.bus.Dirty(s.nodeEntity.Id, s.nodeEntity, pb.EntityChange_EntityChangeUpdated)
+				s.bus.Dirty(context.Background(), s.nodeEntity.Id, s.nodeEntity, pb.EntityChange_EntityChangeUpdated)
 			}
 			s.l.Unlock()
 			slog.Info("hydris update available", "current", version.Version, "latest", idx.HydrisVersion)

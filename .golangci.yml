@@ -24,3 +24,9 @@ linters:
         - (*github.com/dop251/goja.Object).Set
         - (*github.com/pion/webrtc/v4.PeerConnection).Close
         - net/http.Post
+  exclusions:
+    rules:
+      # Fields deprecated in our own proto are kept on purpose for wire
+      # compatibility; using them is not a bug.
+      - linters: [staticcheck]
+        text: 'SA1019: .*Marked as deprecated in world\.proto'

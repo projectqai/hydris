@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 
 	"github.com/dop251/goja"
@@ -20,6 +21,10 @@ type Runtime struct {
 	loop      *eventloop.EventLoop
 	dataDir   string    // sandbox root for file access (directory containing package.json)
 	logWriter io.Writer // if set, console output goes here instead of slog
+
+	// fetch requests to serverURL go through serverClient when set
+	serverURL    string
+	serverClient *http.Client
 }
 
 // Option configures a Runtime.
@@ -28,6 +33,11 @@ type Option func(*Runtime)
 // WithLogWriter directs console.log/warn/error output to w.
 func WithLogWriter(w io.Writer) Option {
 	return func(r *Runtime) { r.logWriter = w }
+}
+
+// WithServerClient routes fetch requests targeting serverURL through client.
+func WithServerClient(serverURL string, client *http.Client) Option {
+	return func(r *Runtime) { r.serverURL = serverURL; r.serverClient = client }
 }
 
 // New creates a Runtime. dataDir is the plugin's source directory (containing
@@ -79,23 +89,44 @@ func (r *Runtime) RunScript(ctx context.Context, name, src string) error {
 	errCh := make(chan error, 1)
 	r.loop.RunOnLoop(func(vm *goja.Runtime) {
 		setupGlobals(r.loop, vm)
-		setupFetch(r.loop, vm)
+		setupFetch(r.loop, vm, r.serverURL, r.serverClient)
 		setupArtifactStore(r.loop, vm, ctx)
 		if r.dataDir != "" {
 			setupFileAccess(r.loop, vm, r.dataDir)
 		}
 		// Crash on unhandled promise rejections so RunPlugin can restart us.
+		// goja reports a rejection the moment it happens, before the microtask
+		// that would attach a handler has run, so the verdict is deferred one
+		// loop turn: a rejection still pending once the queue has drained is
+		// genuinely unhandled.
+		pending := make(map[*goja.Promise]struct{})
+		sweepScheduled := false
+		crash := func(p *goja.Promise) {
+			err := fmt.Errorf("unhandled promise rejection: %s", formatRejection(vm, p.Result()))
+			fmt.Fprintln(os.Stderr, err)
+			select {
+			case errCh <- err:
+			default:
+			}
+			r.loop.StopNoWait()
+		}
 		vm.SetPromiseRejectionTracker(func(p *goja.Promise, op goja.PromiseRejectionOperation) {
-			if op == goja.PromiseRejectionReject {
-				result := p.Result()
-				detail := formatRejection(vm, result)
-				err := fmt.Errorf("unhandled promise rejection: %s", detail)
-				fmt.Fprintln(os.Stderr, err)
-				select {
-				case errCh <- err:
-				default:
+			switch op {
+			case goja.PromiseRejectionReject:
+				pending[p] = struct{}{}
+				if sweepScheduled {
+					return
 				}
-				r.loop.StopNoWait()
+				sweepScheduled = true
+				r.loop.RunOnLoop(func(*goja.Runtime) {
+					sweepScheduled = false
+					for p := range pending {
+						crash(p)
+						return
+					}
+				})
+			case goja.PromiseRejectionHandle:
+				delete(pending, p)
 			}
 		})
 

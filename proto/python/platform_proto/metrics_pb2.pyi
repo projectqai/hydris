@@ -1,0 +1,366 @@
+from google.protobuf import timestamp_pb2 as _timestamp_pb2
+from google.protobuf.internal import containers as _containers
+from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
+from google.protobuf import descriptor as _descriptor
+from google.protobuf import message as _message
+from typing import ClassVar as _ClassVar, Iterable as _Iterable, Mapping as _Mapping, Optional as _Optional, Union as _Union
+
+DESCRIPTOR: _descriptor.FileDescriptor
+
+class MetricKind(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    MetricKindUnspecified: _ClassVar[MetricKind]
+    MetricKindTemperature: _ClassVar[MetricKind]
+    MetricKindPressure: _ClassVar[MetricKind]
+    MetricKindHumidity: _ClassVar[MetricKind]
+    MetricKindIlluminance: _ClassVar[MetricKind]
+    MetricKindSoundLevel: _ClassVar[MetricKind]
+    MetricKindWindSpeed: _ClassVar[MetricKind]
+    MetricKindWindDirection: _ClassVar[MetricKind]
+    MetricKindPrecipitation: _ClassVar[MetricKind]
+    MetricKindIrradiance: _ClassVar[MetricKind]
+    MetricKindVoltage: _ClassVar[MetricKind]
+    MetricKindCurrent: _ClassVar[MetricKind]
+    MetricKindPower: _ClassVar[MetricKind]
+    MetricKindEnergy: _ClassVar[MetricKind]
+    MetricKindFrequency: _ClassVar[MetricKind]
+    MetricKindResistance: _ClassVar[MetricKind]
+    MetricKindProgress: _ClassVar[MetricKind]
+    MetricKindPercentage: _ClassVar[MetricKind]
+    MetricKindDistance: _ClassVar[MetricKind]
+    MetricKindSpeed: _ClassVar[MetricKind]
+    MetricKindAcceleration: _ClassVar[MetricKind]
+    MetricKindDepth: _ClassVar[MetricKind]
+    MetricKindArea: _ClassVar[MetricKind]
+    MetricKindDataRate: _ClassVar[MetricKind]
+    MetricKindLatency: _ClassVar[MetricKind]
+    MetricKindDataSize: _ClassVar[MetricKind]
+    MetricKindCo2: _ClassVar[MetricKind]
+    MetricKindPm25: _ClassVar[MetricKind]
+    MetricKindPm10: _ClassVar[MetricKind]
+    MetricKindAqi: _ClassVar[MetricKind]
+    MetricKindPh: _ClassVar[MetricKind]
+    MetricKindRadon: _ClassVar[MetricKind]
+    MetricKindOxygen: _ClassVar[MetricKind]
+    MetricKindRadiationHazard: _ClassVar[MetricKind]
+    MetricKindChemicalHazard: _ClassVar[MetricKind]
+    MetricKindBiologicalHazard: _ClassVar[MetricKind]
+    MetricKindNuclearHazard: _ClassVar[MetricKind]
+    MetricKindWeight: _ClassVar[MetricKind]
+    MetricKindVolume: _ClassVar[MetricKind]
+    MetricKindVolumeFlowRate: _ClassVar[MetricKind]
+    MetricKindSignalStrength: _ClassVar[MetricKind]
+    MetricKindHeartRate: _ClassVar[MetricKind]
+    MetricKindOxygenSaturation: _ClassVar[MetricKind]
+    MetricKindBodyTemperature: _ClassVar[MetricKind]
+    MetricKindHealth: _ClassVar[MetricKind]
+    MetricKindAmmo: _ClassVar[MetricKind]
+    MetricKindFuel: _ClassVar[MetricKind]
+    MetricKindDuration: _ClassVar[MetricKind]
+    MetricKindCount: _ClassVar[MetricKind]
+
+class MetricUnit(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    MetricUnitUnspecified: _ClassVar[MetricUnit]
+    MetricUnitCelsius: _ClassVar[MetricUnit]
+    MetricUnitFahrenheit: _ClassVar[MetricUnit]
+    MetricUnitKelvin: _ClassVar[MetricUnit]
+    MetricUnitHectopascal: _ClassVar[MetricUnit]
+    MetricUnitPsi: _ClassVar[MetricUnit]
+    MetricUnitBar: _ClassVar[MetricUnit]
+    MetricUnitMillibar: _ClassVar[MetricUnit]
+    MetricUnitInHg: _ClassVar[MetricUnit]
+    MetricUnitPercent: _ClassVar[MetricUnit]
+    MetricUnitRatio: _ClassVar[MetricUnit]
+    MetricUnitVolt: _ClassVar[MetricUnit]
+    MetricUnitMillivolt: _ClassVar[MetricUnit]
+    MetricUnitAmpere: _ClassVar[MetricUnit]
+    MetricUnitMilliampere: _ClassVar[MetricUnit]
+    MetricUnitWatt: _ClassVar[MetricUnit]
+    MetricUnitKilowatt: _ClassVar[MetricUnit]
+    MetricUnitWattHour: _ClassVar[MetricUnit]
+    MetricUnitKilowattHour: _ClassVar[MetricUnit]
+    MetricUnitHertz: _ClassVar[MetricUnit]
+    MetricUnitKilohertz: _ClassVar[MetricUnit]
+    MetricUnitMegahertz: _ClassVar[MetricUnit]
+    MetricUnitOhm: _ClassVar[MetricUnit]
+    MetricUnitMeter: _ClassVar[MetricUnit]
+    MetricUnitKilometer: _ClassVar[MetricUnit]
+    MetricUnitFoot: _ClassVar[MetricUnit]
+    MetricUnitNauticalMile: _ClassVar[MetricUnit]
+    MetricUnitMeterPerSecond: _ClassVar[MetricUnit]
+    MetricUnitKnot: _ClassVar[MetricUnit]
+    MetricUnitKilometerPerHour: _ClassVar[MetricUnit]
+    MetricUnitMeterPerSecondSquared: _ClassVar[MetricUnit]
+    MetricUnitSquareMeter: _ClassVar[MetricUnit]
+    MetricUnitSquareKilometer: _ClassVar[MetricUnit]
+    MetricUnitLux: _ClassVar[MetricUnit]
+    MetricUnitDecibel: _ClassVar[MetricUnit]
+    MetricUnitDecibelA: _ClassVar[MetricUnit]
+    MetricUnitBitPerSecond: _ClassVar[MetricUnit]
+    MetricUnitKilobitPerSecond: _ClassVar[MetricUnit]
+    MetricUnitMegabitPerSecond: _ClassVar[MetricUnit]
+    MetricUnitKilobytePerSecond: _ClassVar[MetricUnit]
+    MetricUnitByte: _ClassVar[MetricUnit]
+    MetricUnitKilobyte: _ClassVar[MetricUnit]
+    MetricUnitMegabyte: _ClassVar[MetricUnit]
+    MetricUnitGigabyte: _ClassVar[MetricUnit]
+    MetricUnitPartsPerMillion: _ClassVar[MetricUnit]
+    MetricUnitMicrogramPerCubicMeter: _ClassVar[MetricUnit]
+    MetricUnitBecquerelPerCubicMeter: _ClassVar[MetricUnit]
+    MetricUnitNanosievert: _ClassVar[MetricUnit]
+    MetricUnitNanosievertPerHour: _ClassVar[MetricUnit]
+    MetricUnitMicrosievert: _ClassVar[MetricUnit]
+    MetricUnitMicrosievertPerHour: _ClassVar[MetricUnit]
+    MetricUnitMillisievert: _ClassVar[MetricUnit]
+    MetricUnitMillisievertPerHour: _ClassVar[MetricUnit]
+    MetricUnitSievert: _ClassVar[MetricUnit]
+    MetricUnitSievertPerHour: _ClassVar[MetricUnit]
+    MetricUnitNanogray: _ClassVar[MetricUnit]
+    MetricUnitNanograyPerHour: _ClassVar[MetricUnit]
+    MetricUnitMicrogray: _ClassVar[MetricUnit]
+    MetricUnitMicrograyPerHour: _ClassVar[MetricUnit]
+    MetricUnitMilligray: _ClassVar[MetricUnit]
+    MetricUnitMilligrayPerHour: _ClassVar[MetricUnit]
+    MetricUnitGray: _ClassVar[MetricUnit]
+    MetricUnitGrayPerHour: _ClassVar[MetricUnit]
+    MetricUnitCentigray: _ClassVar[MetricUnit]
+    MetricUnitCountsPerSecond: _ClassVar[MetricUnit]
+    MetricUnitPartsPerBillion: _ClassVar[MetricUnit]
+    MetricUnitMilligramPerCubicMeter: _ClassVar[MetricUnit]
+    MetricUnitMicrogramPerSquareMeter: _ClassVar[MetricUnit]
+    MetricUnitBin: _ClassVar[MetricUnit]
+    MetricUnitMillimeter: _ClassVar[MetricUnit]
+    MetricUnitMillimeterPerHour: _ClassVar[MetricUnit]
+    MetricUnitDegree: _ClassVar[MetricUnit]
+    MetricUnitRadian: _ClassVar[MetricUnit]
+    MetricUnitMillisecond: _ClassVar[MetricUnit]
+    MetricUnitSecond: _ClassVar[MetricUnit]
+    MetricUnitMinute: _ClassVar[MetricUnit]
+    MetricUnitHour: _ClassVar[MetricUnit]
+    MetricUnitKilogram: _ClassVar[MetricUnit]
+    MetricUnitGram: _ClassVar[MetricUnit]
+    MetricUnitPound: _ClassVar[MetricUnit]
+    MetricUnitLiter: _ClassVar[MetricUnit]
+    MetricUnitMilliliter: _ClassVar[MetricUnit]
+    MetricUnitCubicMeter: _ClassVar[MetricUnit]
+    MetricUnitGallon: _ClassVar[MetricUnit]
+    MetricUnitBeatsPerMinute: _ClassVar[MetricUnit]
+    MetricUnitCount: _ClassVar[MetricUnit]
+    MetricUnitLiterPerMinute: _ClassVar[MetricUnit]
+    MetricUnitCubicMeterPerHour: _ClassVar[MetricUnit]
+    MetricUnitDecibelMilliwatt: _ClassVar[MetricUnit]
+    MetricUnitWattPerSquareMeter: _ClassVar[MetricUnit]
+
+class SensorClip(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    SensorClipNone: _ClassVar[SensorClip]
+    SensorClipHigh: _ClassVar[SensorClip]
+    SensorClipLow: _ClassVar[SensorClip]
+
+class AlertLevel(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    AlertLevelNone: _ClassVar[AlertLevel]
+    AlertLevelWarning: _ClassVar[AlertLevel]
+    AlertLevelAlarm: _ClassVar[AlertLevel]
+    AlertLevelCritical: _ClassVar[AlertLevel]
+MetricKindUnspecified: MetricKind
+MetricKindTemperature: MetricKind
+MetricKindPressure: MetricKind
+MetricKindHumidity: MetricKind
+MetricKindIlluminance: MetricKind
+MetricKindSoundLevel: MetricKind
+MetricKindWindSpeed: MetricKind
+MetricKindWindDirection: MetricKind
+MetricKindPrecipitation: MetricKind
+MetricKindIrradiance: MetricKind
+MetricKindVoltage: MetricKind
+MetricKindCurrent: MetricKind
+MetricKindPower: MetricKind
+MetricKindEnergy: MetricKind
+MetricKindFrequency: MetricKind
+MetricKindResistance: MetricKind
+MetricKindProgress: MetricKind
+MetricKindPercentage: MetricKind
+MetricKindDistance: MetricKind
+MetricKindSpeed: MetricKind
+MetricKindAcceleration: MetricKind
+MetricKindDepth: MetricKind
+MetricKindArea: MetricKind
+MetricKindDataRate: MetricKind
+MetricKindLatency: MetricKind
+MetricKindDataSize: MetricKind
+MetricKindCo2: MetricKind
+MetricKindPm25: MetricKind
+MetricKindPm10: MetricKind
+MetricKindAqi: MetricKind
+MetricKindPh: MetricKind
+MetricKindRadon: MetricKind
+MetricKindOxygen: MetricKind
+MetricKindRadiationHazard: MetricKind
+MetricKindChemicalHazard: MetricKind
+MetricKindBiologicalHazard: MetricKind
+MetricKindNuclearHazard: MetricKind
+MetricKindWeight: MetricKind
+MetricKindVolume: MetricKind
+MetricKindVolumeFlowRate: MetricKind
+MetricKindSignalStrength: MetricKind
+MetricKindHeartRate: MetricKind
+MetricKindOxygenSaturation: MetricKind
+MetricKindBodyTemperature: MetricKind
+MetricKindHealth: MetricKind
+MetricKindAmmo: MetricKind
+MetricKindFuel: MetricKind
+MetricKindDuration: MetricKind
+MetricKindCount: MetricKind
+MetricUnitUnspecified: MetricUnit
+MetricUnitCelsius: MetricUnit
+MetricUnitFahrenheit: MetricUnit
+MetricUnitKelvin: MetricUnit
+MetricUnitHectopascal: MetricUnit
+MetricUnitPsi: MetricUnit
+MetricUnitBar: MetricUnit
+MetricUnitMillibar: MetricUnit
+MetricUnitInHg: MetricUnit
+MetricUnitPercent: MetricUnit
+MetricUnitRatio: MetricUnit
+MetricUnitVolt: MetricUnit
+MetricUnitMillivolt: MetricUnit
+MetricUnitAmpere: MetricUnit
+MetricUnitMilliampere: MetricUnit
+MetricUnitWatt: MetricUnit
+MetricUnitKilowatt: MetricUnit
+MetricUnitWattHour: MetricUnit
+MetricUnitKilowattHour: MetricUnit
+MetricUnitHertz: MetricUnit
+MetricUnitKilohertz: MetricUnit
+MetricUnitMegahertz: MetricUnit
+MetricUnitOhm: MetricUnit
+MetricUnitMeter: MetricUnit
+MetricUnitKilometer: MetricUnit
+MetricUnitFoot: MetricUnit
+MetricUnitNauticalMile: MetricUnit
+MetricUnitMeterPerSecond: MetricUnit
+MetricUnitKnot: MetricUnit
+MetricUnitKilometerPerHour: MetricUnit
+MetricUnitMeterPerSecondSquared: MetricUnit
+MetricUnitSquareMeter: MetricUnit
+MetricUnitSquareKilometer: MetricUnit
+MetricUnitLux: MetricUnit
+MetricUnitDecibel: MetricUnit
+MetricUnitDecibelA: MetricUnit
+MetricUnitBitPerSecond: MetricUnit
+MetricUnitKilobitPerSecond: MetricUnit
+MetricUnitMegabitPerSecond: MetricUnit
+MetricUnitKilobytePerSecond: MetricUnit
+MetricUnitByte: MetricUnit
+MetricUnitKilobyte: MetricUnit
+MetricUnitMegabyte: MetricUnit
+MetricUnitGigabyte: MetricUnit
+MetricUnitPartsPerMillion: MetricUnit
+MetricUnitMicrogramPerCubicMeter: MetricUnit
+MetricUnitBecquerelPerCubicMeter: MetricUnit
+MetricUnitNanosievert: MetricUnit
+MetricUnitNanosievertPerHour: MetricUnit
+MetricUnitMicrosievert: MetricUnit
+MetricUnitMicrosievertPerHour: MetricUnit
+MetricUnitMillisievert: MetricUnit
+MetricUnitMillisievertPerHour: MetricUnit
+MetricUnitSievert: MetricUnit
+MetricUnitSievertPerHour: MetricUnit
+MetricUnitNanogray: MetricUnit
+MetricUnitNanograyPerHour: MetricUnit
+MetricUnitMicrogray: MetricUnit
+MetricUnitMicrograyPerHour: MetricUnit
+MetricUnitMilligray: MetricUnit
+MetricUnitMilligrayPerHour: MetricUnit
+MetricUnitGray: MetricUnit
+MetricUnitGrayPerHour: MetricUnit
+MetricUnitCentigray: MetricUnit
+MetricUnitCountsPerSecond: MetricUnit
+MetricUnitPartsPerBillion: MetricUnit
+MetricUnitMilligramPerCubicMeter: MetricUnit
+MetricUnitMicrogramPerSquareMeter: MetricUnit
+MetricUnitBin: MetricUnit
+MetricUnitMillimeter: MetricUnit
+MetricUnitMillimeterPerHour: MetricUnit
+MetricUnitDegree: MetricUnit
+MetricUnitRadian: MetricUnit
+MetricUnitMillisecond: MetricUnit
+MetricUnitSecond: MetricUnit
+MetricUnitMinute: MetricUnit
+MetricUnitHour: MetricUnit
+MetricUnitKilogram: MetricUnit
+MetricUnitGram: MetricUnit
+MetricUnitPound: MetricUnit
+MetricUnitLiter: MetricUnit
+MetricUnitMilliliter: MetricUnit
+MetricUnitCubicMeter: MetricUnit
+MetricUnitGallon: MetricUnit
+MetricUnitBeatsPerMinute: MetricUnit
+MetricUnitCount: MetricUnit
+MetricUnitLiterPerMinute: MetricUnit
+MetricUnitCubicMeterPerHour: MetricUnit
+MetricUnitDecibelMilliwatt: MetricUnit
+MetricUnitWattPerSquareMeter: MetricUnit
+SensorClipNone: SensorClip
+SensorClipHigh: SensorClip
+SensorClipLow: SensorClip
+AlertLevelNone: AlertLevel
+AlertLevelWarning: AlertLevel
+AlertLevelAlarm: AlertLevel
+AlertLevelCritical: AlertLevel
+
+class MetricRange(_message.Message):
+    __slots__ = ("min_double", "min_float", "min_sint64", "min_uint64", "max_double", "max_float", "max_sint64", "max_uint64")
+    MIN_DOUBLE_FIELD_NUMBER: _ClassVar[int]
+    MIN_FLOAT_FIELD_NUMBER: _ClassVar[int]
+    MIN_SINT64_FIELD_NUMBER: _ClassVar[int]
+    MIN_UINT64_FIELD_NUMBER: _ClassVar[int]
+    MAX_DOUBLE_FIELD_NUMBER: _ClassVar[int]
+    MAX_FLOAT_FIELD_NUMBER: _ClassVar[int]
+    MAX_SINT64_FIELD_NUMBER: _ClassVar[int]
+    MAX_UINT64_FIELD_NUMBER: _ClassVar[int]
+    min_double: float
+    min_float: float
+    min_sint64: int
+    min_uint64: int
+    max_double: float
+    max_float: float
+    max_sint64: int
+    max_uint64: int
+    def __init__(self, min_double: _Optional[float] = ..., min_float: _Optional[float] = ..., min_sint64: _Optional[int] = ..., min_uint64: _Optional[int] = ..., max_double: _Optional[float] = ..., max_float: _Optional[float] = ..., max_sint64: _Optional[int] = ..., max_uint64: _Optional[int] = ...) -> None: ...
+
+class Metric(_message.Message):
+    __slots__ = ("unit", "id", "kind", "label", "measured_at", "range", "clipping", "double", "float", "sint64", "uint64", "alerting")
+    UNIT_FIELD_NUMBER: _ClassVar[int]
+    ID_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    LABEL_FIELD_NUMBER: _ClassVar[int]
+    MEASURED_AT_FIELD_NUMBER: _ClassVar[int]
+    RANGE_FIELD_NUMBER: _ClassVar[int]
+    CLIPPING_FIELD_NUMBER: _ClassVar[int]
+    DOUBLE_FIELD_NUMBER: _ClassVar[int]
+    FLOAT_FIELD_NUMBER: _ClassVar[int]
+    SINT64_FIELD_NUMBER: _ClassVar[int]
+    UINT64_FIELD_NUMBER: _ClassVar[int]
+    ALERTING_FIELD_NUMBER: _ClassVar[int]
+    unit: MetricUnit
+    id: int
+    kind: MetricKind
+    label: str
+    measured_at: _timestamp_pb2.Timestamp
+    range: MetricRange
+    clipping: SensorClip
+    double: float
+    float: float
+    sint64: int
+    uint64: int
+    alerting: AlertLevel
+    def __init__(self, unit: _Optional[_Union[MetricUnit, str]] = ..., id: _Optional[int] = ..., kind: _Optional[_Union[MetricKind, str]] = ..., label: _Optional[str] = ..., measured_at: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., range: _Optional[_Union[MetricRange, _Mapping]] = ..., clipping: _Optional[_Union[SensorClip, str]] = ..., double: _Optional[float] = ..., float: _Optional[float] = ..., sint64: _Optional[int] = ..., uint64: _Optional[int] = ..., alerting: _Optional[_Union[AlertLevel, str]] = ...) -> None: ...
+
+class MetricComponent(_message.Message):
+    __slots__ = ("metrics",)
+    METRICS_FIELD_NUMBER: _ClassVar[int]
+    metrics: _containers.RepeatedCompositeFieldContainer[Metric]
+    def __init__(self, metrics: _Optional[_Iterable[_Union[Metric, _Mapping]]] = ...) -> None: ...

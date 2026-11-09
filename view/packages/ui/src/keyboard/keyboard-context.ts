@@ -7,10 +7,14 @@ export type ShortcutRegistration = {
   key: string;
   handler: ShortcutHandler;
   priority: number;
+  yieldToFocus?: boolean;
+  layer?: string;
 };
 
 type KeyboardContextValue = {
   register: (shortcut: ShortcutRegistration) => () => void;
+  addLayer: (layer: string) => () => void;
+  layer?: string;
 };
 
 export const KeyboardContext = createContext<KeyboardContextValue | null>(null);

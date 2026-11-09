@@ -35,10 +35,34 @@ const EMBED_PROVIDERS: EmbedProvider[] = [
   },
 ];
 
-export function toEmbedUrl(url: string, hostname?: string): string {
+function matchEmbedProvider(
+  url: string,
+): { provider: EmbedProvider; match: RegExpMatchArray } | null {
   for (const provider of EMBED_PROVIDERS) {
     const match = url.match(provider.pattern);
-    if (match) return provider.toEmbedUrl(match, hostname);
+    if (match) return { provider, match };
   }
-  return url;
+  return null;
+}
+
+function isKnownEmbedUrl(url: string): boolean {
+  return matchEmbedProvider(url) !== null;
+}
+
+export function canEmbedFullscreen(url: string, firstPartyBaseUrl: string): boolean {
+  if (isKnownEmbedUrl(url)) return true;
+
+  try {
+    const firstPartyUrl = new URL(firstPartyBaseUrl);
+    if (firstPartyUrl.origin === "null") return false;
+    return new URL(url, firstPartyUrl).origin === firstPartyUrl.origin;
+  } catch {
+    return false;
+  }
+}
+
+export function toEmbedUrl(url: string, hostname?: string): string {
+  const result = matchEmbedProvider(url);
+  if (!result) return url;
+  return result.provider.toEmbedUrl(result.match, hostname);
 }

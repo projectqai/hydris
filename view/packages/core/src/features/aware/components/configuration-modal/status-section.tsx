@@ -5,22 +5,131 @@ import { cn } from "@hydris/ui/lib/utils";
 import type { Entity } from "@projectqai/proto/world";
 import { Activity, Battery, Cpu, Wifi } from "lucide-react-native";
 import type { ComponentType } from "react";
+import { Fragment } from "react";
 import { Text, View } from "react-native";
 
 import { formatTime } from "../../../../lib/api/use-track-utils";
 import { formatDeviceState, formatDuration, formatLinkStatus } from "../../utils/format-entity";
 
-function StatusRow({
-  label,
-  value,
-  valueClassName,
-  mono,
-}: {
+type StatusReading = {
+  key: string;
   label: string;
   value: string;
-  valueClassName?: string;
+  className?: string;
   mono?: boolean;
-}) {
+};
+
+type StatusGroupKey = "device" | "power" | "link";
+
+type StatusGroup = { key: StatusGroupKey; rows: StatusReading[] };
+
+export const DEVICE_STATE_KEY = "state";
+
+const GROUPS: Record<
+  StatusGroupKey,
+  { icon: ComponentType<{ size: number; color: string; strokeWidth?: number }>; label: string }
+> = {
+  device: { icon: Cpu, label: "Device" },
+  power: { icon: Battery, label: "Power" },
+  link: { icon: Wifi, label: "Data Link" },
+};
+
+function readDevice(
+  device: NonNullable<Entity["device"]>,
+  mission: Entity["mission"],
+): StatusReading[] {
+  const { label, className } = formatDeviceState(device.state);
+
+  const rows: StatusReading[] = [
+    { key: DEVICE_STATE_KEY, label: "State", value: label, className },
+  ];
+
+  if (mission?.destination) {
+    rows.push({ key: "destination", label: "Destination", value: mission.destination });
+  }
+
+  if (device.uniqueHardwareId) {
+    rows.push({
+      key: "hardware-id",
+      label: "Hardware ID",
+      value: device.uniqueHardwareId,
+      mono: true,
+    });
+  }
+
+  return rows;
+}
+
+function readPower(power: NonNullable<Entity["power"]>): StatusReading[] {
+  const { batteryChargeRemaining, voltage, remainingSeconds } = power;
+  const rows: StatusReading[] = [];
+
+  if (batteryChargeRemaining !== undefined) {
+    const value = `${Math.round(batteryChargeRemaining * 100)}%`;
+
+    rows.push({ key: "battery", label: "Battery", value, mono: true });
+  }
+
+  if (voltage !== undefined) {
+    rows.push({ key: "voltage", label: "Voltage", value: `${voltage.toFixed(1)} V`, mono: true });
+  }
+
+  if (remainingSeconds !== undefined) {
+    const value = formatDuration(remainingSeconds);
+
+    rows.push({ key: "remaining", label: "Remaining", value, mono: true });
+  }
+
+  return rows;
+}
+
+function readLink(link: NonNullable<Entity["link"]>): StatusReading[] {
+  const { label, className } = formatLinkStatus(link.status);
+  const rows: StatusReading[] = [{ key: "link", label: "Status", value: label, className }];
+
+  if (link.lastSeen) {
+    rows.push({
+      key: "last-seen",
+      label: "Last seen",
+      value: formatTime(link.lastSeen),
+      mono: true,
+    });
+  }
+
+  if (link.lastLatencyMs !== undefined) {
+    rows.push({ key: "latency", label: "Latency", value: `${link.lastLatencyMs} ms`, mono: true });
+  }
+
+  if (link.linkQualityPercent !== undefined) {
+    const value = `${link.linkQualityPercent}%`;
+
+    rows.push({ key: "quality", label: "Quality", value, mono: true });
+  }
+
+  if (link.rssiDbm !== undefined) {
+    rows.push({ key: "rssi", label: "RSSI", value: `${link.rssiDbm} dBm`, mono: true });
+  }
+
+  if (link.snrDb !== undefined) {
+    rows.push({ key: "snr", label: "SNR", value: `${link.snrDb} dB`, mono: true });
+  }
+
+  return rows;
+}
+
+export function readStatus({ device, mission, power, link }: Entity): StatusGroup[] {
+  const groups: StatusGroup[] = [];
+
+  if (device) groups.push({ key: "device", rows: readDevice(device, mission) });
+
+  if (power) groups.push({ key: "power", rows: readPower(power) });
+
+  if (link) groups.push({ key: "link", rows: readLink(link) });
+
+  return groups;
+}
+
+function StatusRow({ label, value, className, mono }: Omit<StatusReading, "key">) {
   return (
     <View className="flex-row items-baseline justify-between px-5 py-2">
       <Text className="text-foreground/80 flex-1 font-sans text-sm" numberOfLines={1}>
@@ -31,7 +140,7 @@ function StatusRow({
           "text-foreground shrink-0",
           mono ? "font-mono" : "font-sans-medium",
           "text-sm",
-          valueClassName,
+          className,
         )}
       >
         {value}
@@ -40,16 +149,10 @@ function StatusRow({
   );
 }
 
-function SectionHeader({
-  icon: Icon,
-  label,
-  first,
-}: {
-  icon: ComponentType<{ size: number; color: string; strokeWidth?: number }>;
-  label: string;
-  first?: boolean;
-}) {
+function SectionHeader({ group, first }: { group: StatusGroupKey; first: boolean }) {
   const t = useThemeColors();
+  const { icon: Icon, label } = GROUPS[group];
+
   return (
     <View
       className={cn(
@@ -65,82 +168,11 @@ function SectionHeader({
   );
 }
 
-function DeviceStatus({ entity, first }: { entity: Entity; first?: boolean }) {
-  if (!entity.device) return null;
-  const { label, className } = formatDeviceState(entity.device.state);
-  const labelEntries = Object.entries(
-    (entity.device as { labels?: Record<string, string> }).labels ?? {},
-  );
-
-  return (
-    <>
-      <SectionHeader icon={Cpu} label="Device" first={first} />
-      <StatusRow label="State" value={label} valueClassName={className} />
-      {!!entity.device.uniqueHardwareId && (
-        <StatusRow label="Hardware ID" value={entity.device.uniqueHardwareId} mono />
-      )}
-      {labelEntries.map(([key, val]) => (
-        <StatusRow key={key} label={key} value={String(val)} />
-      ))}
-    </>
-  );
-}
-
-function PowerStatus({ entity, first }: { entity: Entity; first?: boolean }) {
-  if (!entity.power) return null;
-
-  return (
-    <>
-      <SectionHeader icon={Battery} label="Power" first={first} />
-      {entity.power.batteryChargeRemaining !== undefined && (
-        <StatusRow
-          label="Battery"
-          value={`${Math.round(entity.power.batteryChargeRemaining * 100)}%`}
-          mono
-        />
-      )}
-      {entity.power.voltage !== undefined && (
-        <StatusRow label="Voltage" value={`${entity.power.voltage.toFixed(1)} V`} mono />
-      )}
-      {entity.power.remainingSeconds !== undefined && (
-        <StatusRow label="Remaining" value={formatDuration(entity.power.remainingSeconds)} mono />
-      )}
-    </>
-  );
-}
-
-function DataLinkStatus({ entity, first }: { entity: Entity; first?: boolean }) {
-  if (!entity.link) return null;
-  const { label, className } = formatLinkStatus(entity.link.status);
-
-  return (
-    <>
-      <SectionHeader icon={Wifi} label="Data Link" first={first} />
-      <StatusRow label="Status" value={label} valueClassName={className} />
-      {entity.link.lastSeen && (
-        <StatusRow label="Last seen" value={formatTime(entity.link.lastSeen)} mono />
-      )}
-      {entity.link.lastLatencyMs !== undefined && (
-        <StatusRow label="Latency" value={`${entity.link.lastLatencyMs} ms`} mono />
-      )}
-      {entity.link.linkQualityPercent !== undefined && (
-        <StatusRow label="Quality" value={`${entity.link.linkQualityPercent}%`} mono />
-      )}
-      {entity.link.rssiDbm !== undefined && (
-        <StatusRow label="RSSI" value={`${entity.link.rssiDbm} dBm`} mono />
-      )}
-      {entity.link.snrDb !== undefined && (
-        <StatusRow label="SNR" value={`${entity.link.snrDb} dB`} mono />
-      )}
-    </>
-  );
-}
-
 export function StatusSection({ entity }: { entity: Entity }) {
   const t = useThemeColors();
-  const hasAny = !!(entity.device || entity.power || entity.link);
+  const groups = readStatus(entity);
 
-  if (!hasAny) {
+  if (groups.length === 0) {
     return (
       <View className="items-center justify-center gap-2 px-4 py-8">
         <Activity size={24} strokeWidth={1.5} color={t.iconMuted} />
@@ -149,14 +181,16 @@ export function StatusSection({ entity }: { entity: Entity }) {
     );
   }
 
-  const hasDevice = !!entity.device;
-  const hasPower = !!entity.power;
-
   return (
     <View className="py-2">
-      <DeviceStatus entity={entity} first />
-      <PowerStatus entity={entity} first={!hasDevice} />
-      <DataLinkStatus entity={entity} first={!hasDevice && !hasPower} />
+      {groups.map(({ key, rows }, index) => (
+        <Fragment key={key}>
+          <SectionHeader group={key} first={index === 0} />
+          {rows.map(({ key: rowKey, ...row }) => (
+            <StatusRow key={rowKey} {...row} />
+          ))}
+        </Fragment>
+      ))}
     </View>
   );
 }

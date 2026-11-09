@@ -1,0 +1,16 @@
+[package]
+name = "hydris"
+version = "0.1.0"
+edition = "2021"
+description = "Protobuf and gRPC bindings for Hydris"
+license = "MIT"
+repository = "https://github.com/projectqai/proto"
+exclude = ["build.rs"]
+
+[dependencies]
+prost = "0.13"
+prost-types = "0.13"
+tonic = "0.12"
+
+[build-dependencies]
+tonic-build = "0.12"

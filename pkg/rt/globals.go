@@ -3,6 +3,9 @@ package rt
 import (
 	"compress/gzip"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
 	goHMAC "crypto/hmac"
 	"crypto/rand"
 	goSHA1 "crypto/sha1"
@@ -53,16 +56,45 @@ func setupSymbols(vm *goja.Runtime) {
 	`)
 }
 
+// forgivingBase64 decodes like the HTML forgiving-base64 algorithm: ASCII
+// whitespace is ignored and padding is optional.
+func forgivingBase64(s string) ([]byte, error) {
+	s = strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\t', '\n', '\f', '\r':
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.TrimRight(s, "=")
+	if len(s)%4 == 1 {
+		return nil, fmt.Errorf("length %d is not valid base64", len(s))
+	}
+	return base64.RawStdEncoding.DecodeString(s)
+}
+
 func setupBase64(vm *goja.Runtime) {
+	// Binary strings hold byte values as Unicode code points, not UTF-8 bytes.
 	vm.Set("btoa", func(s string) string {
-		return base64.StdEncoding.EncodeToString([]byte(s))
+		b := make([]byte, 0, len(s))
+		for _, r := range s {
+			if r > 0xFF {
+				panic(vm.NewTypeError("btoa: character U+%04X is outside the Latin1 range", r))
+			}
+			b = append(b, byte(r))
+		}
+		return base64.StdEncoding.EncodeToString(b)
 	})
 	vm.Set("atob", func(s string) string {
-		b, err := base64.StdEncoding.DecodeString(s)
+		b, err := forgivingBase64(s)
 		if err != nil {
 			panic(vm.NewTypeError("atob: invalid base64: %v", err))
 		}
-		return string(b)
+		r := make([]rune, len(b))
+		for i, c := range b {
+			r[i] = rune(c)
+		}
+		return string(r)
 	})
 }
 
@@ -506,8 +538,9 @@ func setupFormData(vm *goja.Runtime) {
 }
 
 // setupCrypto provides the Web Crypto API subset used by plugins:
-// crypto.randomUUID(), crypto.getRandomValues(typedArray),
-// and crypto.subtle.{digest, importKey, sign}.
+// crypto.randomUUID(), crypto.getRandomValues(typedArray), and
+// crypto.subtle.{digest, importKey, sign, encrypt, decrypt, deriveBits}
+// (HMAC, AES-GCM, HKDF).
 func setupCrypto(vm *goja.Runtime) {
 	cryptoObj := vm.NewObject()
 	cryptoObj.Set("randomUUID", func() string {
@@ -526,8 +559,33 @@ func setupCrypto(vm *goja.Runtime) {
 
 	subtle := vm.NewObject()
 
+	// Web Crypto reports every failure as a rejected promise, never a throw.
+	// goja reports an unhandled rejection as soon as it occurs, so the
+	// rejection is deferred one microtask to let await/catch attach a handler.
+	asyncVal, err := vm.RunString(`(fn) => function (...args) {
+		try { return fn.apply(this, args); }
+		catch (e) { return new Promise((_, reject) => { Promise.resolve().then(() => reject(e)); }); }
+	}`)
+	if err != nil {
+		panic(err)
+	}
+	asyncFn, _ := goja.AssertFunction(asyncVal)
+	async := func(fn func(goja.FunctionCall) goja.Value) goja.Value {
+		v, err := asyncFn(goja.Undefined(), vm.ToValue(fn))
+		if err != nil {
+			panic(err)
+		}
+		return v
+	}
+	operationError := func(format string, args ...any) *goja.Object {
+		return domError(vm, "OperationError", format, args...)
+	}
+	notSupported := func(format string, args ...any) *goja.Object {
+		return domError(vm, "NotSupportedError", format, args...)
+	}
+
 	// crypto.subtle.digest(algorithm, data) → Promise<ArrayBuffer>
-	subtle.Set("digest", func(call goja.FunctionCall) goja.Value {
+	subtle.Set("digest", async(func(call goja.FunctionCall) goja.Value {
 		algo := call.Argument(0).String()
 		data := exportBytes(vm, call.Argument(1))
 
@@ -537,71 +595,53 @@ func setupCrypto(vm *goja.Runtime) {
 			h = goSHA256.New()
 		case "SHA1":
 			h = goSHA1.New()
+		case "SHA384":
+			h = goSHA512.New384()
 		case "SHA512":
 			h = goSHA512.New()
 		default:
-			panic(vm.NewTypeError("unsupported digest algorithm: %s", algo))
+			panic(notSupported("unsupported digest algorithm: %s", algo))
 		}
 		h.Write(data)
 		result := h.Sum(nil)
 		p, resolve, _ := vm.NewPromise()
 		_ = resolve(vm.NewArrayBuffer(result))
 		return vm.ToValue(p)
-	})
+	}))
 
-	// crypto.subtle.importKey("raw", keyData, {name:"HMAC",hash:"SHA-256"}, false, ["sign"])
-	// → Promise<CryptoKey>
-	// We store the raw key bytes in the returned object.
-	subtle.Set("importKey", func(call goja.FunctionCall) goja.Value {
+	// Keep a copy of the key bytes because callers may modify their input buffer.
+	subtle.Set("importKey", async(func(call goja.FunctionCall) goja.Value {
 		format := call.Argument(0).String()
 		if format != "raw" {
-			panic(vm.NewTypeError("importKey: only 'raw' format is supported"))
+			panic(notSupported("importKey: only 'raw' format is supported"))
 		}
-		keyData := exportBytes(vm, call.Argument(1))
-		algoObj := call.Argument(2).ToObject(vm)
-		algoName := algoObj.Get("name").String()
-		if strings.ToUpper(algoName) != "HMAC" {
-			panic(vm.NewTypeError("importKey: only HMAC algorithm is supported"))
-		}
-		hashName := ""
-		if h := algoObj.Get("hash"); h != nil && !goja.IsUndefined(h) {
-			// hash can be a string ("SHA-256") or object ({ name: "SHA-256" }).
-			if hObj := h.ToObject(vm); hObj != nil && hObj.Get("name") != nil && !goja.IsUndefined(hObj.Get("name")) {
-				hashName = hObj.Get("name").String()
-			} else {
-				hashName = h.String()
-			}
+		keyData := append([]byte(nil), exportBytes(vm, call.Argument(1))...)
+		algoName, hashName := algorithmNames(vm, call.Argument(2))
+		switch algoName {
+		case "HMAC", "AES-GCM", "HKDF":
+		default:
+			panic(notSupported("importKey: unsupported algorithm %s", algoName))
 		}
 
 		key := vm.NewObject()
 		key.Set("_raw", vm.NewArrayBuffer(keyData))
+		key.Set("_alg", algoName)
 		key.Set("_hash", hashName)
 		key.Set("type", "secret")
 
 		p, resolve, _ := vm.NewPromise()
 		_ = resolve(key)
 		return vm.ToValue(p)
-	})
+	}))
 
 	// crypto.subtle.sign("HMAC", key, data) → Promise<ArrayBuffer>
-	subtle.Set("sign", func(call goja.FunctionCall) goja.Value {
+	subtle.Set("sign", async(func(call goja.FunctionCall) goja.Value {
 		keyObj := call.Argument(1).ToObject(vm)
 		rawKey := exportBytes(vm, keyObj.Get("_raw"))
 		hashName := keyObj.Get("_hash").String()
 		data := exportBytes(vm, call.Argument(2))
 
-		var hfn func() goHash.Hash
-		switch strings.ReplaceAll(strings.ToUpper(hashName), "-", "") {
-		case "SHA256":
-			hfn = goSHA256.New
-		case "SHA1":
-			hfn = goSHA1.New
-		case "SHA512":
-			hfn = goSHA512.New
-		default:
-			panic(vm.NewTypeError("unsupported HMAC hash: %s", hashName))
-		}
-
+		hfn := hashFunc(vm, hashName, "HMAC hash")
 		mac := goHMAC.New(hfn, rawKey)
 		mac.Write(data)
 		result := mac.Sum(nil)
@@ -609,10 +649,138 @@ func setupCrypto(vm *goja.Runtime) {
 		p, resolve, _ := vm.NewPromise()
 		_ = resolve(vm.NewArrayBuffer(result))
 		return vm.ToValue(p)
-	})
+	}))
+
+	// Go's GCM implementation accepts 12-byte nonces and 96..128-bit tags.
+	aesGCM := func(call goja.FunctionCall, seal bool) goja.Value {
+		algoName, _ := algorithmNames(vm, call.Argument(0))
+		if algoName != "AES-GCM" {
+			panic(notSupported("only AES-GCM is supported, got %s", algoName))
+		}
+		params := call.Argument(0).ToObject(vm)
+		keyObj := call.Argument(1).ToObject(vm)
+		if keyObj.Get("_alg").String() != "AES-GCM" {
+			panic(domError(vm, "InvalidAccessError", "key is not an AES-GCM key"))
+		}
+		rawKey := exportBytes(vm, keyObj.Get("_raw"))
+		iv := exportBytes(vm, params.Get("iv"))
+		var aad []byte
+		if ad := params.Get("additionalData"); ad != nil && !goja.IsUndefined(ad) {
+			aad = exportBytes(vm, ad)
+		}
+		tagBits := 128
+		if tl := params.Get("tagLength"); tl != nil && !goja.IsUndefined(tl) {
+			tagBits = int(tl.ToInteger())
+		}
+		data := exportBytes(vm, call.Argument(2))
+
+		if tagBits%8 != 0 || tagBits < 96 || tagBits > 128 {
+			panic(operationError("AES-GCM tagLength %d unsupported (96..128 bits)", tagBits))
+		}
+		block, err := aes.NewCipher(rawKey)
+		if err != nil {
+			panic(operationError("%v", err))
+		}
+		gcm, err := cipher.NewGCMWithTagSize(block, tagBits/8)
+		if err != nil {
+			panic(operationError("%v", err))
+		}
+		if len(iv) != gcm.NonceSize() {
+			panic(operationError("AES-GCM iv must be %d bytes, got %d", gcm.NonceSize(), len(iv)))
+		}
+		var out []byte
+		if seal {
+			out = gcm.Seal(nil, iv, data, aad)
+		} else if out, err = gcm.Open(nil, iv, data, aad); err != nil {
+			panic(operationError("%v", err))
+		}
+		p, resolve, _ := vm.NewPromise()
+		_ = resolve(vm.NewArrayBuffer(out))
+		return vm.ToValue(p)
+	}
+	subtle.Set("encrypt", async(func(call goja.FunctionCall) goja.Value { return aesGCM(call, true) }))
+	subtle.Set("decrypt", async(func(call goja.FunctionCall) goja.Value { return aesGCM(call, false) }))
+
+	subtle.Set("deriveBits", async(func(call goja.FunctionCall) goja.Value {
+		algoName, hashName := algorithmNames(vm, call.Argument(0))
+		if algoName != "HKDF" {
+			panic(notSupported("only HKDF is supported, got %s", algoName))
+		}
+		params := call.Argument(0).ToObject(vm)
+		keyObj := call.Argument(1).ToObject(vm)
+		if keyObj.Get("_alg").String() != "HKDF" {
+			panic(domError(vm, "InvalidAccessError", "key is not an HKDF key"))
+		}
+		ikm := exportBytes(vm, keyObj.Get("_raw"))
+		salt := exportBytes(vm, params.Get("salt"))
+		info := exportBytes(vm, params.Get("info"))
+		lengthBits := int(call.Argument(2).ToInteger())
+
+		if lengthBits <= 0 || lengthBits%8 != 0 {
+			panic(operationError("HKDF length must be a positive multiple of 8, got %d", lengthBits))
+		}
+		hfn := hashFunc(vm, hashName, "HKDF hash")
+		out, err := hkdf.Key(hfn, ikm, salt, string(info), lengthBits/8)
+		if err != nil {
+			panic(operationError("%v", err))
+		}
+		p, resolve, _ := vm.NewPromise()
+		_ = resolve(vm.NewArrayBuffer(out))
+		return vm.ToValue(p)
+	}))
 
 	cryptoObj.Set("subtle", subtle)
 	vm.Set("crypto", cryptoObj)
+}
+
+// algorithmNames reads a Web Crypto algorithm argument, which is either a
+// name string or {name, hash} with hash itself a string or {name}.
+func algorithmNames(vm *goja.Runtime, v goja.Value) (algo, hash string) {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return "", ""
+	}
+	if _, isString := v.Export().(string); isString {
+		return strings.ToUpper(v.String()), ""
+	}
+	obj := v.ToObject(vm)
+	if n := obj.Get("name"); n != nil && !goja.IsUndefined(n) {
+		algo = strings.ToUpper(n.String())
+	}
+	if h := obj.Get("hash"); h != nil && !goja.IsUndefined(h) {
+		if _, isString := h.Export().(string); isString {
+			hash = h.String()
+		} else if hObj := h.ToObject(vm); hObj != nil {
+			if n := hObj.Get("name"); n != nil && !goja.IsUndefined(n) {
+				hash = n.String()
+			}
+		}
+	}
+	return algo, hash
+}
+
+// domError builds an Error whose name matches the DOMException Web Crypto
+// would reject with, so plugins can branch on e.name.
+func domError(vm *goja.Runtime, name, format string, args ...any) *goja.Object {
+	e, err := vm.New(vm.Get("Error"), vm.ToValue(fmt.Sprintf(format, args...)))
+	if err != nil {
+		panic(err)
+	}
+	e.Set("name", name)
+	return e
+}
+
+func hashFunc(vm *goja.Runtime, name, what string) func() goHash.Hash {
+	switch strings.ReplaceAll(strings.ToUpper(name), "-", "") {
+	case "SHA256":
+		return goSHA256.New
+	case "SHA1":
+		return goSHA1.New
+	case "SHA384":
+		return goSHA512.New384
+	case "SHA512":
+		return goSHA512.New
+	}
+	panic(domError(vm, "NotSupportedError", "unsupported %s: %s", what, name))
 }
 
 // setupDecompressionStream provides a DecompressionStream that works with

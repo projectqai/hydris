@@ -38,6 +38,13 @@ const SIGNAL_LABELS: Record<ConnectionState, string> & Record<SignalStrength, st
   low: "LOW",
 };
 
+const STATUS_LABELS: Record<CardStatus, string | null> = {
+  normal: null,
+  alarm: "Alarm",
+  cooldown: "Cooldown",
+  disconnected: "Disconnected",
+};
+
 function useDisconnectPulse(status: CardStatus) {
   const opacity = useSharedValue(1);
 
@@ -143,6 +150,7 @@ export function WidgetCard({
   const t = useThemeColors();
   const pulseStyle = useDisconnectPulse(status);
   const { scale, onLayout } = useMeasuredScale();
+  const statusLabel = STATUS_LABELS[status];
 
   return (
     <Animated.View style={[{ flex: 1 }, pulseStyle]} onLayout={onLayout}>
@@ -153,6 +161,7 @@ export function WidgetCard({
           status === "disconnected" && "border-red/50",
         )}
       >
+        {statusLabel && <Text className="sr-only">{statusLabel}</Text>}
         {glowColor && glowIntensity > 0 ? (
           <VignetteGlow color={glowColor} intensity={glowIntensity} />
         ) : null}

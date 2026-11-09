@@ -78,7 +78,7 @@ func handleMissionExport(s *WorldServer, ring *LogRing, forced exportOpts) http.
 		idx := missionpkg.Index{}
 
 		if includeDiagnostic {
-			host, _ := os.Hostname()
+			host := Hostname()
 			idx.Diagnostic = &missionpkg.Diagnostic{
 				Timestamp:   now.Format(time.RFC3339),
 				Hostname:    host,

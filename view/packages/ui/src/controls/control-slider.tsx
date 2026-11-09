@@ -11,7 +11,7 @@ import { cn } from "../lib/utils";
 import { useIsScreenLocked } from "../screen-lock";
 
 const TRACK_H = 6;
-const THUMB_SIZE = 24;
+export const THUMB_SIZE = 24;
 const THUMB_RADIUS = THUMB_SIZE / 2;
 const COMPACT_TRACK_H = 4;
 const COMPACT_THUMB_SIZE = 14;
@@ -136,12 +136,10 @@ export function ControlSlider({
       className={cn(readOnly && "cursor-not-allowed opacity-60")}
       accessibilityRole="adjustable"
       accessibilityLabel={accessibilityLabel}
-      accessibilityValue={{
-        min,
-        max,
-        now: value,
-        text: unit ? `${value} ${unit}` : String(value),
-      }}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={value}
+      aria-valuetext={unit ? `${value} ${unit}` : String(value)}
     >
       {!compact && (
         <View className="mb-2 flex-row justify-between">

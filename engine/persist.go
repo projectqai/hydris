@@ -2,9 +2,9 @@ package engine
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -13,10 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/projectqai/hydris/builtin"
 	"github.com/projectqai/hydris/engine/meta"
 	"github.com/projectqai/hydris/engine/transform"
 	pb "github.com/projectqai/proto/go"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gopkg.in/yaml.v3"
 )
@@ -61,7 +63,14 @@ func (s *WorldServer) LoadDefaultEntities(entities []*pb.Entity) error {
 	entities = deduped
 
 	s.l.Lock()
-	defer s.l.Unlock()
+	defer func() {
+		s.l.Unlock()
+		// Defaults ship the policy chains and actor policies; compile them so
+		// callers gated before the first Push see the loaded rules.
+		if s.policyEval != nil {
+			s.policyEval.Rebuild()
+		}
+	}()
 
 	// Defaults must lose the LWW merge against any real runtime/persisted entity,
 	// so their timestamps stay near the Unix epoch. An unset timestamp falls back
@@ -89,7 +98,7 @@ func (s *WorldServer) LoadDefaultEntities(entities []*pb.Entity) error {
 		}
 
 		if es, ok := s.head[e.Id]; ok {
-			merged, accepted := s.mergeEntityComponents(e.Id, es, e, meta.Component{Reloaded: true})
+			merged, accepted, _ := s.mergeEntityComponents(e.Id, es, e, meta.Component{Reloaded: true})
 			if !accepted {
 				continue
 			}
@@ -99,7 +108,7 @@ func (s *WorldServer) LoadDefaultEntities(entities []*pb.Entity) error {
 			s.initEntityFrom(e, meta.Component{Reloaded: true})
 		}
 		transform.ReindexTransformers(s.transformers, s.headView, e.Id)
-		s.bus.Dirty(e.Id, s.head[e.Id].entity, pb.EntityChange_EntityChangeUpdated)
+		s.bus.Dirty(context.Background(), e.Id, s.head[e.Id].entity, pb.EntityChange_EntityChangeUpdated)
 		added++
 	}
 
@@ -120,9 +129,24 @@ func (s *WorldServer) LoadFromFile(path string) error {
 		return nil
 	}
 
-	entities, err := ParseEntities(inputBytes)
+	// The world file may have been written by a newer hydris (e.g. after a
+	// downgrade) carrying fields this build doesn't know. Refusing to start
+	// over that is worse than dropping them, but the next flush would erase
+	// them for good, so keep a copy of the original first.
+	entities, discarded, err := builtin.ParseEntitiesLenient(inputBytes)
 	if err != nil {
 		return err
+	}
+	if len(discarded) > 0 {
+		backup := path + ".unknown-fields.bak"
+		for _, d := range discarded {
+			slog.Warn("world file: discarded unknown fields", "path", path, "error", d)
+		}
+		if werr := os.WriteFile(backup, inputBytes, 0o600); werr != nil {
+			slog.Warn("world file: failed to back up original before discarding unknown fields", "backup", backup, "error", werr)
+		} else {
+			slog.Warn("world file: original kept as backup", "backup", backup, "entities_affected", len(discarded))
+		}
 	}
 
 	s.l.Lock()
@@ -138,56 +162,34 @@ func (s *WorldServer) LoadFromFile(path string) error {
 		if e.Lifetime.Fresh == nil || !e.Lifetime.Fresh.IsValid() {
 			e.Lifetime.Fresh = e.Lifetime.From
 		}
+		failInterrupted(e.TaskExecution)
 		s.initEntityFrom(e, meta.Component{Reloaded: true})
 	}
 
 	for _, e := range entities {
 		transform.ReindexTransformers(s.transformers, s.headView, e.Id)
-		s.bus.Dirty(e.Id, e, pb.EntityChange_EntityChangeUpdated)
+		s.bus.Dirty(context.Background(), e.Id, e, pb.EntityChange_EntityChangeUpdated)
 	}
 
 	slog.Info("loaded entities from file", "count", len(entities), "path", path)
 	return nil
 }
 
-func ParseEntities(b []byte) ([]*pb.Entity, error) {
-	decoder := yaml.NewDecoder(bytes.NewReader(b))
-	var entities []*pb.Entity
-
-	for {
-		var data map[string]interface{}
-		err := decoder.Decode(&data)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode YAML document: %w", err)
-		}
-
-		// Skip empty documents
-		if len(data) == 0 {
-			continue
-		}
-
-		// Convert to JSON then to protobuf
-		jsonBytes, err := json.Marshal(data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal to JSON: %w", err)
-		}
-
-		entity := &pb.Entity{}
-		unmarshaler := protojson.UnmarshalOptions{
-			DiscardUnknown: false,
-		}
-
-		if err := unmarshaler.Unmarshal(jsonBytes, entity); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal entity: %w", err)
-		}
-
-		entities = append(entities, entity)
+// failInterrupted fails an execution that was still pending or running when
+// the world was saved: whoever was carrying it out stopped with hydris, so
+// nobody would ever finish it.
+func failInterrupted(ex *pb.TaskExecutionComponent) {
+	if ex == nil {
+		return
 	}
+	if ex.State == pb.TaskExecutionState_TaskExecutionStatePending || ex.State == pb.TaskExecutionState_TaskExecutionStateRunning {
+		ex.State = pb.TaskExecutionState_TaskExecutionStateFailed
+		ex.Reason = proto.String("interrupted: hydris restarted")
+	}
+}
 
-	return entities, nil
+func ParseEntities(b []byte) ([]*pb.Entity, error) {
+	return builtin.ParseEntities(b)
 }
 
 // isLocal reports whether the entity belongs to this node.

@@ -50,6 +50,7 @@ export type FilterInput = Record<Affiliation, boolean> & {
   shapesVisible: boolean;
   detectionsVisible: boolean;
   clustering: boolean;
+  unclusteredIds: string[];
 };
 
 export type ClusterOutput = {
@@ -74,6 +75,17 @@ function getTargetIndexType(zoom: number): IndexType {
 
 function affiliationAt(code: AffiliationCode): Affiliation {
   return AFFILIATION_NAME[code];
+}
+
+function makeSingle(packed: PackedEntities, i: number, affiliation: Affiliation): ClusterOutput {
+  return {
+    isCluster: false,
+    lat: packed.positions[i * 2] as number,
+    lng: packed.positions[i * 2 + 1] as number,
+    entityId: packed.ids[i],
+    affiliation,
+    symbol: packed.symbols[i] ?? undefined,
+  };
 }
 
 function makeFeature(
@@ -103,10 +115,17 @@ export function createClusterEngine() {
   >();
   let clustersBySymbol = new Map<string, Supercluster<ClusterProperties, { symbol?: string }>>();
   let activeIndexType: IndexType | null = null;
+  let unclusteredSingles: ClusterOutput[] = [];
 
-  function buildIndices(packed: PackedEntities, filter: FilterInput, targetIndexType: IndexType) {
+  function buildIndices(
+    packed: PackedEntities,
+    filter: FilterInput,
+    targetIndexType: IndexType,
+    unclustered: ReadonlySet<string>,
+  ) {
     const { count } = packed;
     const minPoints = filter.clustering ? 3 : Infinity;
+    unclusteredSingles = [];
 
     if (targetIndexType === "symbol") {
       const featuresBySymbol = new Map<string, Feature<Point, ClusterProperties>[]>();
@@ -117,6 +136,10 @@ export function createClusterEngine() {
         if (!sym) continue;
         if (packed.hasShape[i] && !packed.isDetection[i] && !filter.shapesVisible) continue;
         if (packed.hasShape[i] && packed.isDetection[i] && !filter.detectionsVisible) continue;
+        if (unclustered.has(packed.ids[i] as string)) {
+          unclusteredSingles.push(makeSingle(packed, i, aff));
+          continue;
+        }
         const list = featuresBySymbol.get(sym) ?? [];
         list.push(makeFeature(packed, i, aff));
         featuresBySymbol.set(sym, list);
@@ -145,6 +168,10 @@ export function createClusterEngine() {
         if (!packed.symbols[i]) continue;
         if (packed.hasShape[i] && !packed.isDetection[i] && !filter.shapesVisible) continue;
         if (packed.hasShape[i] && packed.isDetection[i] && !filter.detectionsVisible) continue;
+        if (unclustered.has(packed.ids[i] as string)) {
+          unclusteredSingles.push(makeSingle(packed, i, aff));
+          continue;
+        }
         const list = featuresByAff.get(aff) ?? [];
         list.push(makeFeature(packed, i, aff));
         featuresByAff.set(aff, list);
@@ -173,6 +200,10 @@ export function createClusterEngine() {
         if (!packed.symbols[i]) continue;
         if (packed.hasShape[i] && !packed.isDetection[i] && !filter.shapesVisible) continue;
         if (packed.hasShape[i] && packed.isDetection[i] && !filter.detectionsVisible) continue;
+        if (unclustered.has(packed.ids[i] as string)) {
+          unclusteredSingles.push(makeSingle(packed, i, aff));
+          continue;
+        }
         features.push(makeFeature(packed, i, aff));
       }
 
@@ -250,10 +281,12 @@ export function createClusterEngine() {
       }
     }
 
+    results.push(...unclusteredSingles);
     return results;
   }
 
   let lastFilter: FilterInput | null = null;
+  let lastUnclusteredKey: string | null = null;
 
   function process(
     packed: PackedEntities,
@@ -263,6 +296,8 @@ export function createClusterEngine() {
   ): ClusterOutput[] {
     const targetIndexType = getTargetIndexType(Math.floor(zoom));
     const indexTypeChanged = targetIndexType !== activeIndexType;
+    const unclustered = new Set(filter.unclusteredIds);
+    const unclusteredKey = [...unclustered].sort().join(",");
     const filterChanged =
       !lastFilter ||
       filter.blue !== lastFilter.blue ||
@@ -271,13 +306,15 @@ export function createClusterEngine() {
       filter.unknown !== lastFilter.unknown ||
       filter.shapesVisible !== lastFilter.shapesVisible ||
       filter.detectionsVisible !== lastFilter.detectionsVisible ||
-      filter.clustering !== lastFilter.clustering;
+      filter.clustering !== lastFilter.clustering ||
+      unclusteredKey !== lastUnclusteredKey;
     const needsRebuild =
       geoChanged || indexTypeChanged || filterChanged || activeIndexType === null;
 
     if (needsRebuild) {
-      buildIndices(packed, filter, targetIndexType);
+      buildIndices(packed, filter, targetIndexType, unclustered);
       lastFilter = { ...filter };
+      lastUnclusteredKey = unclusteredKey;
     }
 
     return getClusters(zoom);

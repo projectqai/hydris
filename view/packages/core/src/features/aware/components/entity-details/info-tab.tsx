@@ -1,4 +1,4 @@
-import { EmptyState } from "@hydris/ui/empty-state";
+import { Empty, EmptyTitle } from "@hydris/ui/empty-state";
 import { InfoRow } from "@hydris/ui/info-row";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
@@ -10,46 +10,67 @@ import {
   AudioWaveform,
   Battery,
   Calendar,
+  CirclePower,
   Clock,
   Copy,
   Cpu,
   Fingerprint,
+  type LucideIcon,
   Network,
   Plug,
+  Settings2,
   Signal,
-  Tag,
   Wifi,
 } from "lucide-react-native";
 import { Pressable, Text, View } from "react-native";
 
 import { formatTime } from "../../../../lib/api/use-track-utils";
 import { toast } from "../../../../lib/sonner";
-import { formatDeviceState, formatDuration, formatLinkStatus } from "../../utils/format-entity";
+import {
+  formatConfigurableState,
+  formatDeviceState,
+  formatDuration,
+  formatLinkStatus,
+} from "../../utils/format-entity";
 import { EntityLinkRow } from "./entity-link-row";
 
 type InfoTabProps = {
   entity: Entity;
 };
 
-function LinkSection({ entity }: { entity: Entity }) {
+function StateRow({
+  icon: Icon,
+  label,
+  state,
+}: {
+  icon: LucideIcon;
+  label: string;
+  state: { label: string; className: string };
+}) {
   const t = useThemeColors();
+
+  return (
+    <View className="flex-row items-center gap-2 py-1.5">
+      <View className="w-5 items-center">
+        <Icon size={15} color={t.iconSubtle} strokeWidth={2} />
+      </View>
+      <View className="flex-1 flex-row items-center justify-between gap-2">
+        <Text className="font-sans-medium text-foreground/75 text-xs">{label}</Text>
+        <Text className={cn("font-sans-medium text-xs", state.className)}>{state.label}</Text>
+      </View>
+    </View>
+  );
+}
+
+function LinkSection({ entity }: { entity: Entity }) {
   if (!entity.link) return null;
-  const { label, className } = formatLinkStatus(entity.link.status);
 
   return (
     <View className="border-foreground/10 border-t px-3 pt-3 pb-2">
       <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
         Data Link
       </Text>
-      <View className="flex-row items-center gap-2 py-1.5">
-        <View className="w-5 items-center">
-          <Wifi size={15} color={t.iconSubtle} strokeWidth={2} />
-        </View>
-        <View className="flex-1 flex-row items-center justify-between gap-2">
-          <Text className="font-sans-medium text-foreground/75 text-xs">Status</Text>
-          <Text className={cn("font-sans-medium text-xs", className)}>{label}</Text>
-        </View>
-      </View>
+      <StateRow icon={Wifi} label="Status" state={formatLinkStatus(entity.link.status)} />
       {entity.link.rssiDbm !== undefined && (
         <InfoRow icon={Signal} label="RSSI" value={`${entity.link.rssiDbm} dBm`} mono />
       )}
@@ -93,30 +114,30 @@ function PowerSection({ entity }: { entity: Entity }) {
 }
 
 function DeviceSection({ entity }: { entity: Entity }) {
-  const t = useThemeColors();
   if (!entity.device) return null;
-  const { label, className } = formatDeviceState(entity.device.state);
-  const labelEntries = Object.entries(
-    (entity.device as { labels?: Record<string, string> }).labels ?? {},
-  );
+  const { configurable } = entity;
 
   return (
     <View className="border-foreground/10 border-t px-3 pt-3 pb-2">
       <Text className="text-foreground/75 text-11 mb-1 font-mono tracking-widest uppercase">
         Device
       </Text>
-      <View className="flex-row items-center gap-2 py-1.5">
-        <View className="w-5 items-center">
-          <Cpu size={15} color={t.iconSubtle} strokeWidth={2} />
-        </View>
-        <View className="flex-1 flex-row items-center justify-between gap-2">
-          <Text className="font-sans-medium text-foreground/75 text-xs">State</Text>
-          <Text className={cn("font-sans-medium text-xs", className)}>{label}</Text>
-        </View>
-      </View>
-      {entity.device.state === DeviceState.DeviceStateFailed && !!entity.device.error && (
-        <InfoRow icon={AlertTriangle} label="Error" value={entity.device.error} />
+      <StateRow icon={Cpu} label="State" state={formatDeviceState(entity.device.state)} />
+      {configurable && (
+        <StateRow
+          icon={Settings2}
+          label="Config"
+          state={formatConfigurableState(configurable.state)}
+        />
       )}
+      {!!entity.mission?.destination && (
+        <InfoRow icon={CirclePower} label="Destination" value={entity.mission.destination} />
+      )}
+      {(entity.device.state === DeviceState.DeviceStateFailed ||
+        entity.device.state === DeviceState.DeviceStateDegraded) &&
+        !!entity.device.error && (
+          <InfoRow icon={AlertTriangle} label="Error" value={entity.device.error} />
+        )}
       {!!entity.device.uniqueHardwareId && (
         <InfoRow
           icon={Fingerprint}
@@ -128,9 +149,6 @@ function DeviceSection({ entity }: { entity: Entity }) {
       {!!entity.device.parent && (
         <EntityLinkRow icon={Network} label="Parent" entityId={entity.device.parent} />
       )}
-      {labelEntries.map(([key, val]) => (
-        <InfoRow key={key} icon={Tag} label={key} value={String(val)} />
-      ))}
     </View>
   );
 }
@@ -151,7 +169,11 @@ export function InfoTab({ entity }: InfoTabProps) {
   const hasDevice = !!entity.device;
 
   if (!hasSymbol && !hasLifetime && !hasLink && !hasPower && !hasDevice) {
-    return <EmptyState title="No data available" />;
+    return (
+      <Empty>
+        <EmptyTitle>No data available</EmptyTitle>
+      </Empty>
+    );
   }
 
   return (

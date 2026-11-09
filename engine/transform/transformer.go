@@ -1,8 +1,14 @@
 package transform
 
 import (
+	"context"
+	"time"
+
 	"github.com/projectqai/hydris/engine/meta"
+	"github.com/projectqai/hydris/pkg/tracing"
 	pb "github.com/projectqai/proto/go"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -30,9 +36,14 @@ type Transformer interface {
 	Resolve(head map[string]*pb.Entity, changedID string, components map[int32]meta.Component) (upsert []*pb.Entity, remove []string)
 }
 
+// noopSpan stands in for transformers that produced nothing.
+var noopSpan = trace.SpanFromContext(context.Background())
+
 // Bus is an interface for the subset of engine.Bus that transformers need.
+// ctx carries the span of the change being processed, so watchers can
+// continue its trace.
 type Bus interface {
-	Dirty(id string, entity *pb.Entity, changeType pb.EntityChange)
+	Dirty(ctx context.Context, id string, entity *pb.Entity, changeType pb.EntityChange)
 }
 
 // ReindexTransformers lets all transformers register a loaded entity in their
@@ -50,9 +61,13 @@ func ReindexTransformers(transformers []Transformer, head map[string]*pb.Entity,
 // transformer's Name(). Attribution is by first producer — the transformer that
 // first populated the field; later transformers that only adjust its value do not
 // override it.
-func RunTransformers(transformers []Transformer, head map[string]*pb.Entity, bus Bus, changedID string, components map[int32]meta.Component) (upserted, removed []string, generatedBy map[string]map[int32]string) {
+//
+// ctx carries the trace of the change being processed: every transformer run
+// becomes a child span of it, and derived entities are notified under that
+// span so the trace continues through them.
+func RunTransformers(ctx context.Context, transformers []Transformer, head map[string]*pb.Entity, bus Bus, changedID string, components map[int32]meta.Component) (upserted, removed []string, generatedBy map[string]map[int32]string) {
 	generatedBy = map[string]map[int32]string{}
-	attribute := func(id string, num int32, name string) {
+	attributeTo := func(id string, num int32, name string) {
 		m := generatedBy[id]
 		if m == nil {
 			m = map[int32]string{}
@@ -63,24 +78,54 @@ func RunTransformers(transformers []Transformer, head map[string]*pb.Entity, bus
 		}
 	}
 
+	ctx, all := tracing.Tracer().Start(ctx, "transform",
+		trace.WithAttributes(tracing.AttrEntityID.String(changedID), attribute.Int("hydris.transformers", len(transformers))))
+	defer func() {
+		if all.IsRecording() {
+			all.SetAttributes(
+				attribute.Int("hydris.transform.upserted", len(upserted)),
+				attribute.Int("hydris.transform.removed", len(removed)),
+			)
+		}
+		all.End()
+	}()
+
 	changedIDs := []string{changedID}
 	for _, t := range transformers {
 		name := t.Name()
 		var newIDs []string
 		for _, id := range changedIDs {
 			before := populatedComponents(head[id])
+			// Each transformer's time is an attribute on the step span; a
+			// transformer only gets a span of its own when it changed
+			// something, so a trace shows what happened rather than every
+			// no-op.
+			started := time.Now()
 			upsert, remove := t.Resolve(head, id, components)
+			tctx := ctx
+			span := noopSpan
+			if len(upsert) > 0 || len(remove) > 0 {
+				tctx, span = tracing.Tracer().Start(ctx, "transform."+name,
+					trace.WithTimestamp(started),
+					trace.WithAttributes(
+						tracing.AttrTransformer.String(name), tracing.AttrEntityID.String(id),
+						attribute.Int("hydris.transform.upserted", len(upsert)),
+						attribute.Int("hydris.transform.removed", len(remove)),
+					))
+			} else if all.IsRecording() {
+				all.SetAttributes(attribute.Int64("hydris.transform."+name+"_us", time.Since(started).Microseconds()))
+			}
 			// Fields newly populated in place on the source entity.
 			for num := range populatedComponents(head[id]) {
 				if !before[num] {
-					attribute(id, num, name)
+					attributeTo(id, num, name)
 				}
 			}
 			for _, e := range upsert {
 				head[e.Id] = e
-				bus.Dirty(e.Id, e, pb.EntityChange_EntityChangeUpdated)
+				bus.Dirty(tctx, e.Id, e, pb.EntityChange_EntityChangeUpdated)
 				for num := range populatedComponents(e) {
-					attribute(e.Id, num, name)
+					attributeTo(e.Id, num, name)
 				}
 				newIDs = append(newIDs, e.Id)
 				upserted = append(upserted, e.Id)
@@ -88,11 +133,12 @@ func RunTransformers(transformers []Transformer, head map[string]*pb.Entity, bus
 			for _, rid := range remove {
 				if e, ok := head[rid]; ok {
 					delete(head, rid)
-					bus.Dirty(rid, e, pb.EntityChange_EntityChangeExpired)
+					bus.Dirty(tctx, rid, e, pb.EntityChange_EntityChangeExpired)
 					removed = append(removed, rid)
 					newIDs = append(newIDs, rid)
 				}
 			}
+			span.End()
 		}
 		changedIDs = append(changedIDs, newIDs...)
 	}

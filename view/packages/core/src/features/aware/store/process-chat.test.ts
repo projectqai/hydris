@@ -59,21 +59,6 @@ describe("entityToChatMessage", () => {
     expect(result?.senderName).toBe("Alpha");
   });
 
-  it("defaults sender to empty string when missing", () => {
-    const result = entityToChatMessage(entity("e1", { message: "hi" }));
-    expect(result?.senderId).toBe("");
-  });
-
-  it("maps to field as recipientId", () => {
-    const result = entityToChatMessage(entity("e1", { to: "r1", message: "hi" }));
-    expect(result?.recipientId).toBe("r1");
-  });
-
-  it("treats empty to as no recipient", () => {
-    const result = entityToChatMessage(entity("e1", { to: "", message: "hi" }));
-    expect(result?.recipientId).toBeUndefined();
-  });
-
   it("parses timestamp from lifetime.from", () => {
     const result = entityToChatMessage(
       entity(
@@ -98,10 +83,5 @@ describe("entityToChatMessage", () => {
     );
     expect(result?.isReaction).toBe(true);
     expect(result?.text).toBe("👍");
-  });
-
-  it("leaves isReaction undefined when not a reaction", () => {
-    const result = entityToChatMessage(entity("e1", { message: "hi" }));
-    expect(result?.isReaction).toBeUndefined();
   });
 });

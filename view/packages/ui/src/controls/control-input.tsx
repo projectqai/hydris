@@ -1,7 +1,8 @@
-import { forwardRef, type ReactNode, useState } from "react";
+import { forwardRef, type ReactNode, useCallback, useRef, useState } from "react";
 import type { TextInputProps } from "react-native";
 import { TextInput, View } from "react-native";
 
+import { useFieldControl } from "../field";
 import { useThemeColors } from "../lib/theme";
 import { cn } from "../lib/utils";
 
@@ -16,10 +17,24 @@ export const ControlInput = forwardRef<TextInput, ControlInputProps>(function Co
 ) {
   const t = useThemeColors();
   const [focused, setFocused] = useState(false);
+  const inputRef = useRef<TextInput>(null);
+  const editable = props.editable !== false && !props.readOnly;
+
+  useFieldControl({ activate: () => inputRef.current?.focus(), editable });
+
+  const setRefs = useCallback(
+    (node: TextInput | null) => {
+      inputRef.current = node;
+
+      if (typeof ref === "function") ref(node);
+      else if (ref) ref.current = node;
+    },
+    [ref],
+  );
 
   const input = (
     <TextInput
-      ref={ref}
+      ref={setRefs}
       placeholderTextColor={t.placeholder}
       autoCorrect={false}
       autoCapitalize="none"

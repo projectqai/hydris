@@ -1,6 +1,7 @@
 "use no memo";
 
 import { ControlButton, ControlInput } from "@hydris/ui/controls";
+import { ScrollShadow } from "@hydris/ui/scroll-shadow";
 import { useCallback, useState } from "react";
 import { Platform, ScrollView, Text, View } from "react-native";
 
@@ -47,44 +48,48 @@ export function DiagnosticExportView({ onClose }: { onClose: () => void }) {
   }, [note, onClose]);
 
   return (
-    <ScrollView className="flex-1" contentContainerClassName="px-4 py-2">
-      <Text className="text-muted-foreground py-3 font-mono text-xs">
-        This will download a diagnostic bundle containing the following data from this node.
-      </Text>
-      <View>
-        <FieldRow label="World state" description="All entities in the current world" />
-        <View className="bg-surface-overlay/6 h-px" />
-        <FieldRow label="Engine logs" description="Recent log output from this session" />
-        <View className="bg-surface-overlay/6 h-px" />
-        <FieldRow label="System info" description="Hostname, OS, version, uptime" />
-      </View>
-
-      <View className="mt-5 gap-1.5">
-        <View className="gap-0.5">
-          <Text className="text-foreground font-sans-medium text-sm">Description</Text>
-          <Text className="text-muted-foreground font-mono text-xs">What happened? (optional)</Text>
+    <ScrollShadow size="sm" className="flex-1">
+      <ScrollView className="flex-1" contentContainerClassName="px-4 py-2">
+        <Text className="text-muted-foreground py-3 font-mono text-xs">
+          This will download a diagnostic bundle containing the following data from this node.
+        </Text>
+        <View>
+          <FieldRow label="World state" description="All entities in the current world" />
+          <View className="bg-surface-overlay/6 h-px" />
+          <FieldRow label="Engine logs" description="Recent log output from this session" />
+          <View className="bg-surface-overlay/6 h-px" />
+          <FieldRow label="System info" description="Hostname, OS, version, uptime" />
         </View>
-        <ControlInput
-          value={note}
-          onChangeText={setNote}
-          placeholder="e.g. map tiles not loading after restart"
-          multiline
-          textAlignVertical="top"
-          className="min-h-20 p-3 text-xs"
-        />
-      </View>
 
-      <ControlButton
-        onPress={handleExport}
-        label={exporting ? "Exporting…" : "Export diagnostic"}
-        variant={!exporting ? "success" : "default"}
-        disabled={exporting}
-        loading={exporting}
-        size="lg"
-        fullWidth
-        labelClassName="font-mono text-xs font-semibold uppercase"
-        className="mt-3"
-      />
-    </ScrollView>
+        <View className="mt-5 gap-1.5">
+          <View className="gap-0.5">
+            <Text className="text-foreground font-sans-medium text-sm">Description</Text>
+            <Text className="text-muted-foreground font-mono text-xs">
+              What happened? (optional)
+            </Text>
+          </View>
+          <ControlInput
+            value={note}
+            onChangeText={setNote}
+            placeholder="e.g. map tiles not loading after restart"
+            multiline
+            textAlignVertical="top"
+            className="min-h-20 p-3 text-xs"
+          />
+        </View>
+
+        <ControlButton
+          onPress={handleExport}
+          label={exporting ? "Exporting…" : "Export diagnostic"}
+          variant={!exporting ? "success" : "default"}
+          disabled={exporting}
+          loading={exporting}
+          size="lg"
+          fullWidth
+          labelClassName="font-mono text-xs font-semibold uppercase"
+          className="mt-3"
+        />
+      </ScrollView>
+    </ScrollShadow>
   );
 }

@@ -58,10 +58,7 @@ export function PickerModalShell({
                 backgroundColor: t.card,
                 borderWidth: 1,
                 borderColor: t.borderSubtle,
-                shadowColor: "#000",
-                shadowOffset: { width: 0, height: 24 },
-                shadowOpacity: 0.7,
-                shadowRadius: 48,
+                boxShadow: "0 24px 48px rgba(0,0,0,0.7)",
                 overflow: "hidden",
               }
             : { flex: 1, backgroundColor: t.card }

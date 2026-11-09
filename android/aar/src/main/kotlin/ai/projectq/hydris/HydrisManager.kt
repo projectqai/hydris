@@ -9,7 +9,9 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import hydris.Hydris
 import ai.projectq.hydris.hal.KotlinBLE
+import ai.projectq.hydris.hal.KotlinNsd
 import ai.projectq.hydris.hal.KotlinSerial
+import ai.projectq.hydris.hal.KotlinJoystick
 import ai.projectq.hydris.hal.KotlinSensors
 import java.lang.ref.WeakReference
 import java.util.concurrent.CountDownLatch
@@ -22,6 +24,9 @@ object HydrisManager {
 
     @Volatile
     private var activityRef: WeakReference<Activity>? = null
+
+    @Volatile
+    private var joystick: KotlinJoystick? = null
     private val requestCode = AtomicInteger(PERMISSION_REQUEST_BASE)
     private val pendingRequests = mutableMapOf<Int, CountDownLatch>()
 
@@ -31,6 +36,7 @@ object HydrisManager {
      */
     fun setActivity(activity: Activity?) {
         activityRef = activity?.let { WeakReference(it) }
+        activity?.let { joystick?.attach(it) }
     }
 
     /**
@@ -122,12 +128,23 @@ object HydrisManager {
      * Called internally by HydrisEngineService before starting the engine.
      */
     fun registerProviders(context: Context) {
+        // os.Hostname() is "localhost" on Android; use the user-visible device name.
+        val deviceName = try {
+            android.provider.Settings.Global.getString(context.contentResolver, "device_name")
+        } catch (_: Exception) { null }
+        Hydris.setDeviceName(if (!deviceName.isNullOrBlank()) deviceName else Build.MODEL)
+
         Log.d(TAG, "Registering HAL platform")
         Hydris.setHalPlatform(
             KotlinBLE(context, ::requestPermission, ::requestPermissions),
             KotlinSerial(context),
             KotlinSensors(context),
+            KotlinNsd(context),
         )
+        joystick = KotlinJoystick(context).also { pad ->
+            Hydris.setHalJoystick(pad)
+            activityRef?.get()?.let { pad.attach(it) }
+        }
         Log.d(TAG, "HAL platform registered")
     }
 

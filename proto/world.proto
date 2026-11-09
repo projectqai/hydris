@@ -1,0 +1,1497 @@
+syntax = "proto3";
+
+package world;
+
+import "geometry.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "manualcontrol.proto";
+import "metrics.proto";
+import "policy.proto";
+import "software.proto";
+import "tasking.proto";
+import "taxonomy.proto";
+
+option go_package = "github.com/projectqai/proto/go";
+
+// ---------------------------------------
+
+message Entity {
+  // metadata
+
+  string id = 1;
+  optional string label = 2;
+
+  optional Controller controller = 3;
+  optional Lifetime lifetime = 4;
+  optional Priority priority = 5;
+  optional Lease lease = 6;
+  optional Routing routing = 7;
+  reserved 8;
+  reserved 9;
+  reserved 10;
+
+  // cop
+
+  optional GeoSpatialComponent geo = 11;
+  optional SymbolComponent symbol = 12;
+  optional CameraComponent camera = 15;
+  optional DetectionComponent detection = 16;
+  optional BearingComponent bearing = 17;
+  optional TrackComponent track = 21;
+  optional LocatorComponent locator = 22;
+  optional KinematicsComponent kinematics = 24;
+  optional GeoShapeComponent shape = 25;
+  optional ClassificationComponent classification = 26;
+  optional TransponderComponent transponder = 27;
+  optional AdministrativeComponent administrative = 28;
+  optional OrientationComponent orientation = 30;
+  optional NavigationComponent navigation = 34;
+  optional PowerComponent power = 33;
+  optional CaptureComponent capture = 35;
+  optional GnssComponent gnss = 42;
+  optional DeviceComponent device = 50;
+  optional LinkComponent link = 32;
+  optional PoseComponent pose = 38;
+  optional TargetPoseComponent target_pose = 62;
+  optional LocalShapeComponent local_shape = 29;
+  optional MetricComponent metric = 36;
+  optional ConfigurationComponent config = 51;
+  optional ConfigurableComponent configurable = 52;
+
+
+  // eventually consistent tasking
+
+  optional TaskableComponent taskable = 23;
+  optional TaskExecutionComponent task_execution = 41;
+
+  optional MissionComponent mission = 31;
+  optional SensorComponent sensor = 37;
+  optional InteractivityComponent interactivity = 60;
+  optional ArtifactComponent artifact = 61;
+  optional ChatComponent chat = 39;
+  optional AssemblyComponent assembly = 40;
+  optional MapLayerComponent map_layer = 63;
+  optional ManualControlComponent manual_control = 64;
+  optional TargetManualControlComponent target_manual_control = 65;
+  optional BoundsComponent bounds = 66;
+  optional PolicyComponent policy = 67;
+  optional AuthorizationComponent authorization = 68;
+  optional MeasurementComponent measurement = 69;
+}
+
+// A controller owns an entity or change
+message Controller {
+  // if of the controller service
+  optional string id = 1;
+  optional string node = 2;
+  // id of another entity from which the controller this has received from (for example a radio)
+  optional string origin = 3;
+}
+
+// Leases are used by controllers to negotiate exclusivity on an entity
+// The engine rejects pushes that attempt to change the holder of an active lease,
+// which a controller can use to "lock" something.
+// Note that this is a local lock, it is not distirbuted vertically
+message Lease {
+  string controller = 1;
+  optional google.protobuf.Timestamp expires = 2;
+}
+
+// all times are absolute wall clock. All involved systems must be synchronized to the same clock.
+// federation does this automatically. Consumers that cannot sync (TimeSync or NTP) can estimate
+// the upstream clock offset from EntityChangeEvent.now instead.
+message Lifetime {
+  // time this entity should become valid.
+  // will be set to now automatically if omited
+  optional google.protobuf.Timestamp from = 1;
+
+  // entities with until after or at now are considered expired / deleted
+  optional google.protobuf.Timestamp until = 2;
+
+  // last time we have seen this entity, normally between from and until
+  // if set, updates to an existing entity are ignored if the write isn't newer than existing
+  // Also considered the _version_ of an entity.
+  optional google.protobuf.Timestamp fresh = 3;
+}
+
+enum Priority {
+  PriorityUnspecified = 0;
+
+  // ROUTINE: Normal day-to-day traffic.
+  // May be delayed or colescated into a later update when bandwidth is constrained
+  PriorityRoutine = 1;
+
+  // IMMEDIATE: Delay would negatively affect the mission
+  // Sent before lower precedence messages
+  PriorityImmediate = 2;
+
+  // FLASH: Extreme urgency
+  // Sent before lower precedence messages and without respecting mission bandwidth/signal limits
+  // Highly visible flare, misuse can jeopardize missions
+  PriorityFlash = 3;
+}
+
+message Channel {
+  // empty string is the default channel
+  string name = 1;
+}
+
+// Presence of this component marks the entity as routable to other nodes
+// or downstream consumers. Entities without Routing stay local.
+message Routing {
+  repeated Channel channels = 1;
+}
+
+message GeoSpatialComponent {
+  double longitude = 1;
+  double latitude = 2;
+
+  // height above ellipsoid (WGS84) in meters
+  optional double altitude = 3;
+
+  // covariance in meters² (local ENU frame): xx=east², yy=north², zz=up²
+  optional CovarianceMatrix covariance = 4;
+
+  // fixed-point alternatives to the fields above, for bandwidth-constrained
+  // links: degrees × 1e7, and centimeters above ellipsoid (WGS84)
+  optional sint32 latitude_e7 = 5;
+  optional sint32 longitude_e7 = 6;
+  optional sint32 altitude_cm = 7;
+}
+
+enum GnssFixType {
+  GnssFixTypeNone = 0;
+  GnssFixType2D = 1;
+  GnssFixType3D = 2;
+  GnssFixTypeDGPS = 3;
+  GnssFixTypeRtkFloat = 4;
+  GnssFixTypeRtkFixed = 5;
+}
+
+message GnssComponent {
+  optional GnssFixType fix_type = 1;
+  optional uint32 satellites_visible = 2;
+  optional uint32 satellites_used = 3;
+  optional float hdop = 4;
+  optional float vdop = 5;
+  optional float pdop = 6;
+}
+
+message SymbolComponent {
+  string milStd2525C = 1;
+}
+
+message InteractivityComponent {
+  // use lucide names for max compat
+  optional string icon = 1;
+
+  // some url where a user can learn more about this entity
+  optional string reference_url = 3;
+}
+
+enum MediaStreamProtocol {
+  MediaStreamProtocolUnspecified = 0;
+  MediaStreamProtocolWebrtc = 1;
+  MediaStreamProtocolHls = 2;
+  MediaStreamProtocolMjpeg = 3;
+  MediaStreamProtocolImage = 4;
+  MediaStreamProtocolIframe = 5;
+  MediaStreamProtocolRtsp = 6;
+}
+
+enum MediaStreamRole {
+  MediaStreamRoleUnspecified = 0;
+  MediaStreamRoleMain = 1; // primary high-resolution stream
+  MediaStreamRoleSub = 2; // lower-resolution sub stream
+  MediaStreamRoleSnapshot = 3; // still image capture
+}
+
+message MediaStream {
+  string label = 1;
+  string url = 2;
+  MediaStreamProtocol protocol = 3;
+  MediaStreamRole role = 9; // stream role (main, sub, snapshot)
+  string codec = 10; // video codec, e.g. "H264", "H265"
+  optional int32 width = 11; // resolution width in pixels
+  optional int32 height = 12; // resolution height in pixels
+  optional google.protobuf.Timestamp epoch = 13; // wall-clock time of the first frame (mediaTime=0)
+}
+
+message CameraComponent {
+  repeated MediaStream streams = 1;
+
+  // If the camera is PTZ, this Entity represents where this camera is looking at
+  // The device driver reconcile target_pose->pose with physical actuation of the gymbal
+  optional string focal_point = 2;
+
+  // horizontal field of view in degrees, centered on the entity's azimuth.
+  // For varifocal cameras, this is the current effective FOV (computed by
+  // the engine from fov_wide/fov_tele + zoom if set).
+  optional double fov = 3;
+
+  // minimum detection range in meters (blind zone)
+  optional double range_min = 4;
+
+  // maximum detection range in meters
+  optional double range_max = 5;
+
+  // Static optical specs for varifocal/zoom cameras.
+  // When set, the engine computes effective fov from PolarOffset.range (focal distance):
+  //   zoom = range / range_max, fov = fov_wide + zoom * (fov_tele - fov_wide)
+  optional double fov_wide = 6; // horizontal FOV at widest zoom (degrees)
+  optional double fov_tele = 7; // horizontal FOV at max zoom (degrees)
+}
+
+// reference to external system
+message ArtifactLocation {
+  string url = 1;
+}
+
+message ArtifactEncryption {}
+
+message ArtifactComponent {
+  string id = 1 [deprecated = true];
+  string content_type = 2;
+
+  repeated ArtifactLocation location = 3;
+
+  optional int64 size_bytes = 4;
+  optional string sha256 = 5;
+
+  optional ArtifactEncryption encryption = 6;
+
+  map<string, Artifact> parts = 7;
+
+  oneof content {
+    SoftwareArtifact software = 8;
+  }
+}
+
+message Artifact {
+  string content_type = 2;
+  repeated ArtifactLocation location = 3;
+  optional int64 size_bytes = 4;
+  optional string sha256 = 5;
+}
+
+message ImageBoundingBox {
+  uint32 x = 1;
+  uint32 y = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  uint32 frame_width = 5;
+  uint32 frame_height = 6;
+}
+
+message DetectionComponent {
+  optional string detectorEntityId = 1;
+
+  // deprecated, use ClassificationTaxonomy
+  optional string classification = 2 [deprecated = true];
+
+  // deprecated, use lifetime.fresh
+  optional google.protobuf.Timestamp lastMeasured = 3 [deprecated = true];
+
+  // entity ids of evidence that triggered or supports this detection
+  repeated string evidence = 4;
+
+  optional ImageBoundingBox image_bbox = 5;
+  optional float confidence = 6;
+}
+
+message BoundsComponent {
+  float width_m = 1;
+  float height_m = 2;
+  float depth_m = 3;
+  // covariance: xx=width², yy=height², zz=depth²
+  optional CovarianceMatrix covariance = 4;
+}
+
+// Absolute bearing in the world, relative to the local ENU frame.
+// For root entities this is set directly; for child entities with a
+// PolarOffset the engine computes it by composing down the pose tree.
+message BearingComponent {
+  // clockwise angle from true north in degrees [0, 360)
+  optional double azimuth = 1;
+
+  // angle above the local horizontal plane in degrees [-90, 90]
+  // positive = above horizon, negative = below
+  optional double elevation = 2;
+
+  // angular extent of the observed object around the center bearing.
+  // for camera evidence, engine computes from ImageBoundingBox + CameraComponent.fov.
+  optional double azimuth_extent_deg = 3;
+  optional double elevation_extent_deg = 4;
+}
+
+message SensorComponent {
+  // entity IDS of GeoShapeComponent entities that describe the coverage
+  repeated string coverage = 2;
+}
+
+message Quaternion {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+  double w = 4;
+}
+
+// Symmetric 3x3 covariance matrix (upper triangle).
+// Units depend on the coordinate frame this matrix is attached to:
+//   - GeoSpatialComponent: meters² (ENU frame)
+//   - CartesianOffset:     meters² (east/north/up)
+//   - PolarOffset:         x=degrees², z=meters² (azimuth/elevation/range)
+//   - KinematicsEnu:       (m/s)² or (m/s²)²
+message CovarianceMatrix {
+  optional double mxx = 1;
+  optional double mxy = 2;
+  optional double mxz = 3;
+  optional double myy = 4;
+  optional double myz = 5;
+  optional double mzz = 6;
+}
+
+message CartesianOffset {
+  double east_m = 1;
+  double north_m = 2;
+  optional double up_m = 3;
+  // covariance in meters²: xx=east², yy=north², zz=up²
+  optional CovarianceMatrix covariance = 4;
+
+  optional Quaternion orientation = 5;
+}
+
+message PolarOffset {
+  // angle from the parent's forward axis, degrees [0, 360)
+  double azimuth = 1;
+  // above the parent's horizontal plane, degrees [-90, 90]
+  optional double elevation = 2;
+  // distance in meters. omit for bearing-only (passive sensor)
+  optional double range = 3;
+
+  // covariance: xx=degrees² (azimuth), yy=degrees² (elevation), zz=meters² (range)
+  // if error fields below are set, engine fills this automatically
+  optional CovarianceMatrix covariance = 4 [deprecated = true];
+
+  // measurement uncertainties (1-sigma), alternative to covariance matrix
+  // engine normalizes: fills covariance from these if covariance is missing, or vice versa
+  optional double azimuth_error_deg = 10;
+  optional double elevation_error_deg = 11;
+  optional double range_error_m = 12;
+
+  optional Quaternion orientation = 5;
+
+  // fixed-point alternatives to azimuth and azimuth_error_deg, in centidegrees
+  optional uint32 azimuth_cdeg = 6;
+  optional uint32 azimuth_error_cdeg = 7;
+}
+
+// This entity's pose is defined relative to a parent entity's coordinate frame.
+// The engine computes absolute GeoSpatialComponent by walking the tree.
+// If the pose cannot be fully resolved (e.g. missing range), no geo is produced.
+message PoseComponent {
+  // parent entity in the transform tree
+  string parent = 1;
+
+  oneof offset {
+    CartesianOffset cartesian = 2;
+    PolarOffset polar = 3;
+  }
+}
+
+// Desired pose for this joint, same shape as PoseComponent's offset.
+// A device specific reconciler continuously drives the actual PoseComponent toward this target.
+message TargetPoseComponent {
+  oneof offset {
+    CartesianOffset cartesian = 1;
+    PolarOffset polar = 2;
+  }
+}
+
+// Angular velocity around the entity's own body axes
+message AngularVelocity {
+  double roll_rate = 1; // radians per second
+  double pitch_rate = 2; // radians per second
+  double yaw_rate = 3; // radians per second
+}
+
+// Absolute orientation in the world, relative to the local ENU frame.
+// For root entities this is set directly; for child entities the engine
+// computes it by composing orientations down the pose tree.
+message OrientationComponent {
+  Quaternion orientation = 1;
+  optional CovarianceMatrix covariance = 2;
+}
+
+message TrackComponent {
+  optional string tracker = 1;
+
+  // entity ID of a GeoShapeComponent containing the track history
+  optional string history = 2;
+
+  // entity ID of a GeoShapeComponent containing the predicted forward track
+  optional string prediction = 3;
+
+  // typically detection entity IDs that contribute to this track
+  repeated string evidence = 4;
+
+  // confidence that this is a valid track
+  optional float confidence = 5;
+}
+
+message LocatorComponent {
+  string locatedEntityId = 1;
+}
+
+message TaskableContext {
+  optional string entityId = 1;
+}
+
+message TaskableAssignee {
+  optional string entityId = 1;
+}
+
+enum TaskableMode {
+  // RunTask places the TaskExecutionComponent on the same entity as the
+  // TaskableComponent. Only one execution at a time; a second RunTask while
+  // one is active is rejected.
+  TaskableModeExclusive = 0;
+
+  // Like Exclusive, but a new RunTask replaces the current execution
+  // instead of being rejected.
+  TaskableModeReconcile = 1;
+
+  // RunTask creates a new child entity with the TaskExecutionComponent.
+  // Multiple executions can run in parallel.
+  TaskableModeSpawn = 2;
+
+  // Like Reconcile, but the driver manages a priority queue of active tasks.
+  // RunTask creates child entities; the driver picks the highest-priority one.
+  TaskableModePriorityQueue = 3;
+}
+
+// owned by the controller, declaring what can be tasked
+message TaskableComponent {
+  // priority for which task should be shown first. higher = more important
+  optional uint32 priority = 1;
+
+  optional string label = 2;
+  repeated TaskableContext context = 3;
+  repeated TaskableAssignee assignee = 4;
+  // DEPRECATED: taskables are now strongly typed via `target`.
+  google.protobuf.Struct schema = 5 [deprecated = true];
+  TaskableMode mode = 6;
+  optional TaskableTarget target = 7;
+
+  optional string icon = 8;
+
+  // a human or LLM readable description of the effect this task will have.
+  // similar to llm tool descriptions, i.e. "power up the sensor", "closes the entry gate"
+  optional string effect = 9;
+
+  // this can be used by task providers to emit multiple alternative options of the same task ranked by priority
+  // for example [ {grouping: target.gate, assignee: camera1, grouping_priority: 1000 } ,
+  //    {grouping: target.gate, assignee: camera2, grouping_priority:1001 }]
+  // would show only the camera thats closer or less busy as option first _after_ determining if the task is shown at all
+  // a ui might also decide to display all alternatives.
+  optional string grouping = 10;
+  optional uint32 grouping_priority = 11;
+
+  // semantic meaning of the task (look-at, move-to, patrol, ...).
+  // independent of `target` (shape of input).
+  optional TaskingTaxonomy taxonomy = 12;
+
+  // set: the taskable exists but cannot run right now,
+  // the string is for humans, and may be empty
+  optional string disabled = 13;
+
+  // spawn and priority queue modes: how many executions the taskable keeps.
+  // RunTask fails while this many are pending or running, and otherwise
+  // expires the oldest finished ones to make room. unset: 10
+  optional uint32 max_executions = 14;
+}
+
+enum TaskExecutionState {
+  TaskExecutionStatePending = 0;
+  TaskExecutionStateRunning = 1;
+  TaskExecutionStateCompleted = 2;
+  TaskExecutionStateFailed = 3;
+}
+
+//created by the engine via RunTask, then owned by the controller
+message TaskExecutionComponent {
+  // entity ID of the TaskableComponent that defines this task
+  string task = 1;
+
+  // DEPRECATED: executions are now strongly typed via `target`.
+  optional google.protobuf.Struct parameters = 2 [deprecated = true];
+
+  // current execution state, updated by the controller
+  TaskExecutionState state = 3;
+
+  // human-readable message: what the controller is doing while it runs,
+  // the result or error once it is done
+  optional string reason = 4;
+
+  // priority level for PriorityQueue mode (higher = more important)
+  optional uint32 priority = 5;
+
+  optional TaskExecutionTarget target = 6;
+
+  // set by the controller while it works on the task: when it expects to be done. unset: unknown
+  optional google.protobuf.Timestamp eta = 7;
+
+  // set by the controller while it works on the task: how far along it is, in percent from 0 to 100. unset: unknown
+  optional uint32 progress = 8;
+}
+
+message KinematicsEnu {
+  // Velocity components in the local East-North-Up (ENU) coordinate frame.
+  // The ENU frame is a right-handed Cartesian coordinate system with origin
+  // at the entity's position (GeoSpatialComponent), where:
+  // - East axis: tangent to the parallel (line of constant latitude), pointing eastward
+  // - North axis: tangent to the meridian (line of constant longitude), pointing northward
+  // - Up axis: perpendicular to the WGS84 ellipsoid, pointing away from Earth center
+  //
+  // Note: This is NOT a body frame - the axes do not rotate with the entity's
+  // heading/attitude. Velocities are expressed relative to the Earth's surface.
+  // All units are in meters per second (m/s).
+  optional double east = 1; // m/s
+  optional double north = 2; // m/s
+  optional double up = 3; // m/s
+  optional CovarianceMatrix covariance = 4;
+}
+
+message KinematicsComponent {
+  // Velocity in local ENU frame (see KinematicsEnu for frame definition)
+  optional KinematicsEnu velocityEnu = 1;
+  // Acceleration in local ENU frame (m/s²)
+  optional KinematicsEnu accelerationEnu = 2;
+  // Angular velocity around the entity's body axes
+  optional AngularVelocity angularVelocityBody = 3;
+}
+
+message Geometry {
+  bytes wkb = 1 [deprecated = true];
+  PlanarGeometry planar = 2;
+}
+
+message GeoShapeComponent {
+  optional Geometry geometry = 1;
+  optional GeometryExtrusion extrusion = 2;
+}
+
+message LocalShapeComponent {
+  // entity ID whose frame this geometry is defined in
+  string relative_to = 2;
+
+  optional LocalGeometry geometry = 1;
+  optional GeometryExtrusion extrusion = 3;
+}
+
+// repeat the first vertex last to close the path
+message MeasurementComponent {
+  repeated MeasurementVertex vertex = 1;
+}
+
+message MeasurementVertex {
+  oneof at {
+    PlanarPoint point = 1;
+
+    // entity ID whose position this vertex follows
+    string entity = 2;
+  }
+}
+
+enum ClassificationIdentity {
+  ClassificationIdentityInvalid = 0;
+  ClassificationIdentityPending = 1; // P
+  ClassificationIdentityUnknown = 2; // U
+  ClassificationIdentityFriend = 3; // F
+  ClassificationIdentityNeutral = 4; // N
+  ClassificationIdentityHostile = 5; // H
+  ClassificationIdentitySuspect = 6; // S
+}
+
+enum ClassificationBattleDimension {
+  ClassificationBattleDimensionInvalid = 0;
+  ClassificationBattleDimensionUnknown = 1; // Z
+  ClassificationBattleDimensionSpace = 2; // P
+  ClassificationBattleDimensionAir = 3; // A
+  ClassificationBattleDimensionGround = 4; // G
+  ClassificationBattleDimensionSeaSurface = 5; // S
+  ClassificationBattleDimensionSubsurface = 6; // U
+}
+
+message ClassificationComponent {
+  optional ClassificationBattleDimension dimension = 1 [deprecated = true];
+  optional ClassificationIdentity identity = 2 [deprecated = true];
+  repeated ClassificationTaxonomy taxonomy = 3;
+}
+
+enum Affiliation {
+  AffiliationInvalid = 0;
+  AffiliationPending = 1; // P
+  AffiliationUnknown = 2; // U
+  AffiliationBlue = 3; // F
+  AffiliationNeutral = 4; // N
+  AffiliationRed = 5; // H
+  AffiliationSuspect = 6; // S
+}
+
+message IdentityComponent {
+  optional Affiliation affiliation = 1;
+}
+
+message TransponderAIS {
+  optional uint32 mmsi = 1;
+  optional uint32 imo = 2;
+  optional string callsign = 3;
+  optional string vessel_name = 4;
+
+  // Distances in meters from the reported position reference point (the GNSS
+  // antenna) to the hull, per ITU-R M.1371 msg 5 / 24B. Length = bow + stern,
+  // beam = port + starboard. Absent when the transponder reports all zeros.
+  optional uint32 dimension_to_bow_m = 5;
+  optional uint32 dimension_to_stern_m = 6;
+  optional uint32 dimension_to_port_m = 7;
+  optional uint32 dimension_to_starboard_m = 8;
+}
+
+message TransponderADSB {
+  optional uint32 icao_address = 1;
+  optional string flight_id = 2;
+}
+
+message TransponderComponent {
+  optional TransponderAIS ais = 1;
+  optional TransponderADSB adsb = 2;
+}
+
+message AdministrativeComponent {
+  // registration by an authority, e.g. MMSI, ICAO address, tail number
+  optional string id = 1;
+  optional string flag = 2;
+  optional string owner = 3;
+  optional string operator = 13;
+  optional string manufacturer = 4;
+  optional string model = 5; // for display, e.g. "Green Slusher 3000"
+  optional string part_number = 18; // machine-readable model, e.g. ICAO type "B738", Matter ProductID
+  optional string serial_number = 17; // by the manufacturer, e.g. MSN, VIN, USB serial
+  optional string hardware_revision = 19; // e.g. board revision, "Block II"
+  optional uint32 year_built = 6;
+  optional float length_m = 7;
+  optional float width_m = 10; // beam / lateral extent
+  optional float height_m = 11; // vertical extent (e.g. air draft)
+  optional float draught_m = 14; // vertical extent below waterline
+  optional float tonnage_gt = 8;
+  optional float deadweight_t = 15;
+  optional float engine_power_kw = 9;
+  optional float speed_max_kn = 16;
+  repeated string images = 12;
+}
+
+enum NavigationMode {
+  NavigationModeUnspecified = 0;
+  NavigationModePlanned = 1; // planned but not yet active
+  NavigationModeStationary = 2; // anchored, moored, landed
+  NavigationModeUnderway = 3; // might be human-controlled or we dont know
+  NavigationModeAutonomous = 4; // executing a known mission / auto
+  NavigationModeGuided = 5; // externally guided waypoint by a known system
+  NavigationModeLoitering = 6; // orbiting/holding pattern around a point
+  NavigationModeReturning = 7; // RTL / RTB
+}
+
+// Live navigation telemetry of an asset
+message NavigationComponent {
+  optional NavigationMode mode = 1;
+
+  optional bool armed = 2;
+  optional bool emergency = 3;
+
+  // current waypoint index in the active mission
+  optional uint32 waypoint_current = 4;
+
+  // total number of waypoints in the active mission
+  optional uint32 waypoint_total = 5;
+}
+
+message MissionComponent {
+  // asset entity IDs participating in this mission
+  repeated string members = 1;
+
+  // human-readable status from the source system. can be multi line / markdown
+  optional string description = 2;
+
+  // human-readable destination (e.g. port name)
+  optional string destination = 3;
+
+  // estimated time of arrival
+  optional google.protobuf.Timestamp eta = 4;
+}
+
+enum LinkStatus {
+  LinkStatusUnspecified = 0;
+  LinkStatusConnected = 1;
+  LinkStatusDegraded = 2;
+  LinkStatusLost = 3;
+}
+
+message LinkComponent {
+  optional LinkStatus status = 1;
+
+  // received signal strength indicator in dBm
+  optional sint32 rssi_dbm = 2;
+
+  // signal-to-noise ratio in dB
+  optional sint32 snr_db = 3;
+
+  // entity id of the device that manages the link to this entity
+  optional string via = 5;
+
+  // last measured end-to-end latency in milliseconds
+  optional uint32 last_latency_ms = 6;
+
+  // exponential moving average of latency in milliseconds
+  optional uint32 avg_latency_ms = 7;
+
+  // last time data was received over this link
+  optional google.protobuf.Timestamp last_seen = 8;
+
+  // link quality as percentage (0-100)
+  optional uint32 link_quality_percent = 9;
+
+  // transmit power in milliwatts
+  optional uint32 tx_power_mw = 10;
+
+  // active antenna index (e.g. 0 or 1 for antenna diversity)
+  optional uint32 active_antenna = 11;
+
+  // protocol-specific RF mode label (e.g. "250Hz", "50Hz")
+  optional string rf_mode = 12;
+
+  // packet rate in Hz
+  optional uint32 packet_rate_hz = 13;
+}
+
+message CaptureComponent {
+  // last raw payload received from this entity
+  optional bytes payload = 1;
+
+  // application-level port (e.g. LoRaWAN FPort, UDP port)
+  optional uint32 port = 2;
+
+  // content type hint (e.g. "application/octet-stream", "application/json")
+  optional string content_type = 3;
+
+  // entity ID of the device that captured this data
+  optional string captured_by = 4;
+
+  // when the payload was captured
+  optional google.protobuf.Timestamp captured_at = 5;
+
+  // more entities that are captured, such as artifacts when payload is too large
+  repeated string content = 6;
+}
+
+message CaptureFilter {
+  optional uint32 port = 1;
+  optional string content_type = 2;
+  optional string captured_by = 3;
+}
+
+message PowerComponent {
+  // battery charge remaining (0.0 - 1.0)
+  optional float battery_charge_remaining = 1;
+
+  // battery or board voltage in volts
+  optional float voltage = 2;
+
+  // estimated remaining operating time in seconds
+  optional uint32 remaining_seconds = 3;
+
+  // instantaneous current draw in amps
+  optional float current_a = 4;
+
+  // cumulative battery capacity consumed in milliamp-hours
+  optional float capacity_used_mah = 5;
+
+  // battery charge remaining in percent (0 - 100)
+  optional uint32 battery_charge_percent = 6;
+}
+
+enum DeviceState {
+  DeviceStatePending = 0;
+  DeviceStateActive = 1;
+  DeviceStateFailed = 2;
+  DeviceStateDegraded = 3;
+}
+
+enum ConfigurableState {
+  ConfigurableStateInactive = 0;
+  ConfigurableStateStarting = 1;
+  ConfigurableStateActive = 2;
+  ConfigurableStateFailed = 3;
+  ConfigurableStateConflict = 4;
+  ConfigurableStateScheduled = 5;
+}
+
+message DeviceClassOption {
+  string class = 1;
+
+  // Human-readable label for the UI select (e.g. "USB Serial Device")
+  string label = 2;
+
+  // Long text for a human
+  string description = 3;
+}
+
+// Presence of this component indicates a controller is managing this entity.
+// It declares what can be configured and reports the controller's state.
+// Always on the same entity as a DeviceComponent.
+// ConfigurationComponent (user-created config) is also placed on this entity.
+message ConfigurableComponent {
+  google.protobuf.Struct schema = 1;
+
+  // current state reported by the controller
+  google.protobuf.Struct value = 2;
+
+  ConfigurableState state = 3;
+  optional string error = 4;
+
+  // Human-readable label for the UI (e.g. "Defaults", "USB Device", "Channel 0")
+  optional string label = 5;
+
+  // Echoed from ConfigurationComponent.version after the controller
+  // has finished processing the configuration.
+  uint64 applied_version = 6;
+
+  // what kinds of devices can be attached underneath this entity
+  repeated DeviceClassOption supported_device_classes = 7;
+
+  // indicated when the controller will activate this entity
+  optional google.protobuf.Timestamp scheduled_at = 8;
+}
+
+// Physical device in the device tree. Describes hardware topology only.
+// Can be discovered automatically or created by hand.
+message DeviceComponent {
+  // parent device entity, forming the device tree. unset for root (node).
+  optional string parent = 1;
+
+  // TODO might not be needed?
+  // list of non-direct ancestors this device is made of
+  repeated string composition = 2;
+
+  // a stable identifier that remains the same no matter where the asset is connected to
+  // e.g. USB serial number, MAC address. lets the system recognize the same
+  // physical hardware even if it moves to a different port or node.
+  optional string unique_hardware_id = 4;
+
+  // numeric identity from a known list, for links too narrow for unique_hardware_id.
+  // a catalog maps it to unique_hardware_id.
+  optional uint64 unique_hardware_index = 5;
+
+  DeviceState state = 6;
+  optional string error = 7;
+
+  // device class (e.g. "usb_serial", "radio", "camera")
+  optional string class = 10;
+
+  // human-readable category for UI grouping (e.g. "Air", "Sea", "Network")
+  optional string category = 13;
+
+  // subsystem-specific descriptors
+  optional NodeDevice node = 20;
+  optional UsbDevice usb = 21;
+  optional IpDevice ip = 22;
+  optional SerialDevice serial = 23;
+  optional EthernetDevice ethernet = 24;
+  optional LPWANDevice lpwan = 25;
+  optional MeshtasticDevice meshtastic = 26;
+  optional BleDevice ble = 27;
+  optional DeviceSoftware software = 28;
+}
+
+message MissionPack {
+  map<string, string> layouts = 1;
+  optional uint32 entity_count = 2;
+  optional string pack_version = 3;
+  optional google.protobuf.Timestamp imported_at = 4;
+  optional uint32 artifact_count = 5;
+  optional uint64 artifact_total_size = 6;
+}
+
+message NodeDevice {
+  optional string hostname = 1;
+  optional string os = 2;
+  optional string arch = 3;
+  optional uint32 num_cpu = 4;
+  optional string os_version = 5;
+  optional string hydris_version = 6;
+  optional string hydris_update_available = 7;
+  optional MissionPack mission = 8;
+
+  // Lowercase hex SHA-256 of the node's TLS leaf certificate
+  optional string mtls_identity = 9;
+}
+
+message UsbDevice {
+  optional uint32 vendor_id = 1;
+  optional uint32 product_id = 2;
+  optional uint32 device_class = 3;
+  optional uint32 device_subclass = 4;
+  optional uint32 device_protocol = 5;
+  optional string manufacturer_name = 6;
+  optional string product_name = 7;
+  optional string serial_number = 8;
+}
+
+message IpDevice {
+  optional string host = 1;
+  optional uint32 port = 2;
+}
+
+message EthernetDevice {
+  // MAC address in canonical colon-separated hex (e.g. "aa:bb:cc:dd:ee:ff")
+  optional string mac_address = 1;
+
+  // vendor name resolved from the OUI prefix, if known
+  optional string vendor = 2;
+}
+
+message SerialDevice {
+  optional string path = 1;
+  optional uint32 baud_rate = 2;
+}
+
+message MeshtasticDevice {
+  optional uint32 node_num = 1;
+  optional string long_name = 2;
+  optional string short_name = 3;
+  optional string hardware_model = 4;
+  optional bytes public_key = 5;
+}
+
+message LPWANDevice {
+  // IEEE 802 EUI-64 identifier (e.g. "a84041c6545d1429")
+  optional string eui = 1;
+
+  // network address assigned after join/activation (e.g. "012a7125")
+  optional string address = 2;
+}
+
+message BleDevice {
+  // MAC address or platform-specific identifier
+  optional string address = 1;
+
+  // advertised device name
+  optional string name = 2;
+
+  // advertised GATT service UUIDs
+  repeated string service_uuids = 4;
+}
+
+// Configuration pushed onto an entity. The engine delivers entities with
+// Config to the matching controller via Reconcile.
+message ConfigurationComponent {
+  google.protobuf.Struct value = 3;
+
+  // Monotonically increasing counter set by the config pusher.
+  // The controller echoes this back in ConfigurableComponent.applied_version
+  // once the configuration has been processed.
+  uint64 version = 5;
+}
+
+message ChatComponent {
+  optional string sender = 1; // entity pointer: sender entity ID
+  optional string to = 3; // entity pointer: recipient entity ID (if known)
+  string message = 4; // message text
+  optional string reply_to = 5; // id of chat message this is a reply to. if the downstream doesnt support replys, it'll appear as regular message
+  optional bool reaction = 6; // this message is a reaction rather than text reply. if the downstream doesnt support reactions, it'll appear as regular reply
+}
+
+message AssemblyComponent {
+  // if set, this entity is part of some other bigger entity, like a vehicle
+  optional string parent = 1;
+
+  // pointer to ids of GeoShapeComponent entities that describe the outline of this assembly
+  repeated string outline = 2;
+}
+
+// Toggleable overlays over the base map
+message MapLayerComponent {
+  int32 z_index = 1;
+  float opacity = 2;
+
+  oneof source {
+    Tile tiles = 10;
+    Image image = 11;
+  }
+
+  // XYZ tile template e.g. "https://.../{z}/{x}/{y}.png"
+  message Tile {
+    string url = 1;
+  }
+
+  // single bitmap centered on the entity's geo, sized in meters.
+  message Image {
+    reserved 2, 3, 4, 5;
+    reserved "west", "south", "east", "north";
+    string url = 1;
+    double width_m = 6;
+    double height_m = 7;
+  }
+}
+
+message ManualControlComponent {
+  repeated ManualControlInput input = 1;
+}
+
+// A manual control frame. Push an entity stub carrying this component to send
+// one. Frames are commands, not state: the component lapses within a fraction of
+// a second, so a driver that stops hearing from its operator fails safe. Drivers
+// watch the entity and act on a frame only when `at` changes, since every other
+// update to the entity repeats the last frame.
+//
+// The first session to send takes control. Frames from another session are
+// rejected with FailedPrecondition until the holder releases or goes silent.
+// An empty input releases control.
+message TargetManualControlComponent {
+  repeated ManualControlInput input = 1;
+
+  // opaque id the sender generates when it starts driving
+  optional string session = 2;
+
+  // when the node holding the entity received the frame. Set by that node;
+  // whatever the sender puts here is replaced.
+  optional google.protobuf.Timestamp at = 3;
+}
+
+// ---------------------------------------------
+
+message EntityFilter {
+  optional string id = 1; // exact match on entity id
+  optional string label = 2; // exact match on entity label
+  optional GeoFilter geo = 3; // entity geo intersects with geometry/bounds
+  optional TaskableFilter taskable = 4;
+  repeated uint32 component = 5; // entity must have ALL these components
+  optional CaptureFilter capture = 6;
+  optional ControllerFilter controller = 7;
+  optional TrackFilter track = 8;
+  optional MissionFilter mission = 9;
+
+  optional ChannelFilter channel = 10; // entity must be routed to this channel
+
+  optional DeviceFilter device = 50;
+  optional ConfigurationFilter config = 51;
+
+  repeated EntityFilter or = 100; // matches if ANY child filter matches
+  EntityFilter not = 101; // matches if child filter does NOT match
+}
+
+message ControllerFilter {
+  optional string id = 1;
+  optional string node = 2;
+  optional string origin = 3;
+}
+
+message TrackFilter {
+  optional string tracker = 1;
+}
+
+message MissionFilter {
+  // find member assets of this mission
+  optional string mission_id = 1;
+
+  // find missions containing this asset
+  optional string member_id = 2;
+}
+
+message TaskableFilter {
+  optional TaskableContext context = 1;
+  optional TaskableAssignee assignee = 2;
+}
+
+message GeoFilter {
+  oneof geo {
+    Geometry geometry = 1; // intersects with this geometry (bounding box check)
+    string geoEntityId = 2; // intersects with another entity's geo bounds
+  }
+}
+
+message DeviceFilter {
+  // match devices with this parent entity ID (for building the device tree)
+  optional string parent = 1;
+
+  optional string unique_hardware_id = 4;
+
+  // match device class string (e.g. "usb_serial", "radio")
+  optional string device_class = 5;
+
+  // match BLE device properties
+  optional BleDeviceFilter ble = 6;
+
+  // match USB device properties
+  optional UsbDeviceFilter usb = 7;
+}
+
+// Matches against BleDevice fields. All set fields must match.
+message BleDeviceFilter {
+  optional string address = 1;
+  optional string name = 2;
+  repeated string service_uuids = 4;
+}
+
+// Matches against UsbDevice fields. All set fields must match.
+message UsbDeviceFilter {
+  optional uint32 vendor_id = 1;
+  optional uint32 product_id = 2;
+  optional uint32 device_class = 3;
+  optional uint32 device_subclass = 4;
+  optional uint32 device_protocol = 5;
+  optional string manufacturer_name = 6;
+  optional string product_name = 7;
+  optional string serial_number = 8;
+}
+
+message ConfigurationFilter {}
+
+message ChannelFilter {
+  // match entities routed to this channel name
+  string name = 1;
+}
+
+enum SortField {
+  SortFieldUnspecified = 0;
+  SortFieldLabel = 1;
+  SortFieldPriority = 2;
+
+  // lifetime
+  SortFieldLifetimeFrom = 10;
+  SortFieldLifetimeUntil = 11;
+  SortFieldLifetimeFresh = 12;
+
+  // geo
+  SortFieldGeoLatitude = 20;
+  SortFieldGeoLongitude = 21;
+  SortFieldGeoAltitude = 22;
+
+  // classification
+  SortFieldClassificationIdentity = 30;
+  SortFieldClassificationDimension = 31;
+
+  // bearing
+  SortFieldBearingAzimuth = 50;
+  SortFieldBearingElevation = 51;
+
+  // administrative
+  SortFieldAdministrativeLength = 70;
+  SortFieldAdministrativeWidth = 71;
+  SortFieldAdministrativeHeight = 72;
+  SortFieldAdministrativeTonnage = 73;
+  SortFieldAdministrativeEnginePower = 74;
+  SortFieldAdministrativeYearBuilt = 75;
+
+  // link
+  SortFieldLinkRssi = 90;
+  SortFieldLinkSnr = 91;
+  SortFieldLinkLastLatency = 92;
+  SortFieldLinkAvgLatency = 93;
+  SortFieldLinkQuality = 94;
+  SortFieldLinkLastSeen = 95;
+  SortFieldLinkPacketRate = 96;
+
+  // power
+  SortFieldPowerBatteryCharge = 100;
+  SortFieldPowerVoltage = 101;
+  SortFieldPowerRemainingSeconds = 102;
+  SortFieldPowerCurrent = 103;
+  SortFieldPowerCapacityUsed = 104;
+
+  // device
+  SortFieldDeviceState = 130;
+
+  // metric
+  SortFieldMetricValue = 150;
+  SortFieldMetricMeasuredAt = 151;
+  SortFieldMetricAlertLevel = 152;
+}
+
+message SortOption {
+  SortField field = 1;
+  bool descending = 2;
+
+  // for SortFieldMetric*
+  oneof metric_selector {
+    uint32 metric_id = 20;
+    MetricKind metric_kind = 21;
+  }
+}
+
+message WatchBehavior {
+  // Maximum non-flash message rate this consumer can handle (0 = unlimited)
+  optional float max_rate_hz = 1;
+
+  // Only deliver messages at or above this priority level
+  // Default (unset or PriorityReserved0) = deliver all priorities
+  optional Priority min_priority = 3;
+
+  // Re-stream all matching entities at this interval in milliseconds, even if unchanged.
+  // For consumers that dont understand lifetimes and require fixed interval updates
+  // 0 or unset = only stream actual changes
+  // values lower than 1000 might be capped to 1s
+  optional uint32 keepalive_interval_ms = 4;
+
+  // When true, update events only contain the components that actually changed
+  // rather than the full entity. The initial snapshot always sends full entities.
+  optional bool diff = 5;
+
+  // Send an EntityChangeHeartbeat event when the stream has been idle for this
+  // long, so consumers keep receiving EntityChangeEvent.now for clock offset
+  // estimation. unset = 30s, 0 = no heartbeats. values lower than 1000 are capped to 1s
+  optional uint32 heartbeat_interval_ms = 6;
+}
+
+message ListEntitiesRequest {
+  reserved 1; //deprecated
+  EntityFilter filter = 2;
+
+  // sort by. more than 2 are actually ignored
+  repeated SortOption sort = 3;
+
+  optional WatchBehavior behaviour = 4;
+
+  // request dump of internal state. might be ignored
+  bool dump_internal = 10;
+}
+
+message ListEntitiesResponse {
+  repeated Entity entities = 1;
+  repeated google.protobuf.Struct internal = 2;
+}
+
+message EntityChangeRequest {
+  // components present (set) in the pushed entity are replaced entirely, not recursively.
+  // Components not included in the message are left unchanged.
+  // missing Components are NOT removed
+  repeated Entity changes = 1;
+
+  // replaces the whole entity atoomically.
+  // missing Components ARE removed
+  repeated Entity replacements = 2;
+}
+
+message ExpireEntityRequest {
+  string id = 1;
+}
+
+message ExpireEntityResponse {}
+
+message EntityChangeResponse {
+  bool accepted = 1;
+  string debug = 2;
+}
+
+enum EntityChange {
+  EntityChangeInvalid = 0;
+  EntityChangeUpdated = 1;
+  EntityChangeExpired = 2;
+  EntityChangeUnobserved = 3;
+  EntityChangeHeartbeat = 4;
+}
+
+// Proto field numbers of Entity component fields.
+// Used in EntityFilter.component and Lifetime.components.
+enum EntityComponent {
+  EntityComponentUnspecified = 0;
+  EntityComponentLabel = 2;
+  EntityComponentController = 3;
+  EntityComponentLifetime = 4;
+  EntityComponentPriority = 5;
+  EntityComponentLease = 6;
+  EntityComponentRouting = 7;
+  EntityComponentGeo = 11;
+  EntityComponentSymbol = 12;
+  EntityComponentCamera = 15;
+  EntityComponentDetection = 16;
+  EntityComponentBearing = 17;
+  EntityComponentTrack = 21;
+  EntityComponentLocator = 22;
+  EntityComponentTaskable = 23;
+  EntityComponentKinematics = 24;
+  EntityComponentShape = 25;
+  EntityComponentClassification = 26;
+  EntityComponentTransponder = 27;
+  EntityComponentAdministrative = 28;
+  EntityComponentLocalShape = 29;
+  EntityComponentOrientation = 30;
+  EntityComponentMission = 31;
+  EntityComponentLink = 32;
+  EntityComponentPower = 33;
+  EntityComponentNavigation = 34;
+  EntityComponentCapture = 35;
+  EntityComponentMetric = 36;
+  EntityComponentSensor = 37;
+  EntityComponentPose = 38;
+  EntityComponentChat = 39;
+  EntityComponentTaskExecution = 41;
+  EntityComponentGnss = 42;
+  EntityComponentDevice = 50;
+  EntityComponentConfig = 51;
+  EntityComponentConfigurable = 52;
+  EntityComponentInteractivity = 60;
+  EntityComponentArtifact = 61;
+  EntityComponentTargetPose = 62;
+  EntityComponentAssembly = 40;
+  EntityComponentMapLayer = 63;
+  EntityComponentManualControl = 64;
+  EntityComponentTargetManualControl = 65;
+  EntityComponentBounds = 66;
+  EntityComponentPolicy = 67;
+  EntityComponentAuthorization = 68;
+  EntityComponentMeasurement = 69;
+}
+
+message EntityChangeEvent {
+  Entity entity = 1;
+  EntityChange t = 2;
+
+  // upstream wall clock at the time this event was sent.
+  // Consumers should use TimeSync() ideally, but this is a good enough fallback when TimeSync isnt possible
+  google.protobuf.Timestamp now = 3;
+}
+
+message EntityChangeBatch {
+  repeated EntityChangeEvent events = 1;
+}
+
+message GetEntityRequest {
+  string id = 1;
+
+  // request dump of internal state. might be ignored
+  bool dump_internal = 10;
+}
+
+message GetEntityResponse {
+  Entity entity = 1;
+  google.protobuf.Struct internal = 2;
+}
+
+message GetSelfRequest {}
+
+message GetSelfResponse {
+  string entity_id = 1;
+  Entity entity = 2;
+}
+
+message GetLocalNodeRequest {}
+
+message GetLocalNodeResponse {
+  Entity entity = 1;
+  string node_id = 2;
+}
+
+message ObserverRequest {}
+
+message ObserverState {
+  Geometry geo = 1;
+  optional google.protobuf.Timestamp viewHistory = 2;
+}
+
+message RunTaskRequest {
+  string entityId = 1;
+
+  // priority for PriorityQueue mode (higher = more important)
+  optional uint32 priority = 2;
+
+  optional TaskExecutionTarget target = 6;
+}
+
+enum TaskStatus {
+  TaskStatusInvalid = 0;
+  TaskStatusRunning = 1;
+  TaskStatusCompleted = 2;
+  TaskStatusFailed = 3;
+}
+
+message RunTaskResponse {
+  string executionId = 1;
+  TaskStatus status = 2;
+  optional string humanReadableReason = 3;
+}
+
+message CancelTaskRequest {
+  // RunTaskResponse.executionId: the taskable for exclusive and reconcile
+  // taskables, the execution entity for spawned and queued ones
+  string executionId = 1;
+}
+
+message CancelTaskResponse {}
+
+message HardResetRequest {}
+message HardResetResponse {}
+
+message LoadMissionRequest {
+  string artifact_id = 1;
+}
+
+message LoadMissionResponse {
+  MissionPack mission = 1;
+  optional string error = 2;
+}
+
+message TimeSyncRequest {
+  google.protobuf.Timestamp t1 = 1;
+  // Client's receive timestamp of the previous exchange. When set, the server
+  // can pair it with the stored T1/T2/T3 of that exchange to compute proper
+  // NTP-style offset and RTT. Omitted on the first probe.
+  google.protobuf.Timestamp t4 = 4;
+}
+
+message TimeSyncResponse {
+  google.protobuf.Timestamp t1 = 1;
+  google.protobuf.Timestamp t2 = 2;
+  google.protobuf.Timestamp t3 = 3;
+}
+
+// interact with the world model
+service WorldService {
+  // list entities present in the world once
+  rpc ListEntities(ListEntitiesRequest) returns (ListEntitiesResponse);
+
+  // request every detail about one entity
+  rpc GetEntity(GetEntityRequest) returns (GetEntityResponse);
+
+  // continously monitor entities present in the world. this is used by downstream C2.
+  rpc WatchEntities(ListEntitiesRequest) returns (stream EntityChangeEvent);
+
+  // Create or update an entity. Used by capabilities.
+  rpc Push(EntityChangeRequest) returns (EntityChangeResponse);
+
+  // expire an entity, setting its lifetime.until to now
+  rpc ExpireEntity(ExpireEntityRequest) returns (ExpireEntityResponse);
+
+  // get information about the local node the client is connected to
+  rpc GetLocalNode(GetLocalNodeRequest) returns (GetLocalNodeResponse);
+
+  // return the identity entity for the calling connection
+  rpc GetSelf(GetSelfRequest) returns (GetSelfResponse);
+
+  // create an instance of a specific task entity
+  rpc RunTask(RunTaskRequest) returns (RunTaskResponse);
+
+  // clear or cancel an execution
+  // fails with FAILED_PRECONDITION when the execution cannot be cancelled
+  rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
+
+  // clear all engine state including persistence
+  rpc HardReset(HardResetRequest) returns (HardResetResponse);
+
+  // replace the world with a stored mission pack artifact
+  rpc LoadMission(LoadMissionRequest) returns (LoadMissionResponse);
+
+  // NTP-style time synchronization for federation clock offset estimation
+  rpc TimeSync(TimeSyncRequest) returns (TimeSyncResponse);
+}

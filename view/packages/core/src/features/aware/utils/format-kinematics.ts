@@ -1,36 +1,54 @@
-import type {
-  AngularVelocity,
-  GeoSpatialComponent,
-  KinematicsEnu,
-  OrientationComponent,
-} from "@projectqai/proto/world";
+import type { AngularVelocity, KinematicsEnu, OrientationComponent } from "@projectqai/proto/world";
 
-const EARTH_RADIUS = 6_371_008.8;
-const DEG = Math.PI / 180;
-
-export function haversineDistance(
-  a: Pick<GeoSpatialComponent, "latitude" | "longitude">,
-  b: Pick<GeoSpatialComponent, "latitude" | "longitude">,
-): number {
-  const dLat = (b.latitude - a.latitude) * DEG;
-  const dLon = (b.longitude - a.longitude) * DEG;
-  const sinLat = Math.sin(dLat / 2);
-  const sinLon = Math.sin(dLon / 2);
-  const h =
-    sinLat * sinLat + Math.cos(a.latitude * DEG) * Math.cos(b.latitude * DEG) * sinLon * sinLon;
-  return 2 * EARTH_RADIUS * Math.asin(Math.sqrt(h));
+export function formatDistance(
+  meters: number,
+  options?: {
+    precision?: "standard" | "precise";
+    unitStyle?: "compact" | "spaced";
+  },
+): string {
+  const unitSeparator = options?.unitStyle === "spaced" ? " " : "";
+  if (meters < 1000) return `${Math.round(meters)}${unitSeparator}m`;
+  const kilometers = meters / 1000;
+  const fractionDigits = options?.precision === "precise" ? 2 : 1;
+  return `${kilometers.toFixed(fractionDigits)}${unitSeparator}km`;
 }
 
-export function formatDistance(meters: number): string {
-  if (meters < 1000) return `${Math.round(meters)}m`;
-  return `${(meters / 1000).toFixed(1)}km`;
+// slant range and ground distance format identically, so the readout names which one it is
+export function formatRangeReadout(groundDistanceM: number, slantDistanceM: number | null): string {
+  const distance = formatDistance(slantDistanceM ?? groundDistanceM, {
+    precision: "precise",
+    unitStyle: "spaced",
+  });
+  return `${distance} ${slantDistanceM === null ? "GD" : "SR"}`;
+}
+
+export function formatArea(squareMeters: number): string {
+  if (squareMeters < 100_000) {
+    return `${Math.round(squareMeters).toLocaleString("en-US")} m²`;
+  }
+  const squareKilometers = squareMeters / 1_000_000;
+  return `${squareKilometers.toFixed(2)} km²`;
+}
+
+export function roundBearing(degrees: number): number {
+  return Math.round(degrees) % 360;
+}
+
+export function formatTrueBearing(degrees: number): string {
+  return `${String(roundBearing(degrees)).padStart(3, "0")}°T`;
+}
+
+export function formatElevationAngle(degrees: number): string {
+  const rounded = Math.round(degrees);
+  const sign = rounded < 0 ? "-" : "+";
+  return `${sign}${Math.abs(rounded)}°`;
 }
 
 export function calculateGroundSpeed(velocityEnu?: KinematicsEnu): number | undefined {
   if (!velocityEnu) return undefined;
   const east = velocityEnu.east ?? 0;
   const north = velocityEnu.north ?? 0;
-  if (east === 0 && north === 0) return undefined;
   return Math.sqrt(east * east + north * north);
 }
 
@@ -39,10 +57,14 @@ export function calculateHeadingFromOrientation(
 ): number | undefined {
   const q = orientation?.orientation;
   if (!q) return undefined;
-  const yawRad = 2 * Math.atan2(q.z, q.w);
+  // the x and y terms only vanish for a rotation about a single axis, so the shorter
+  // 2 * atan2(z, w) skews once roll and pitch are both present
+  const yawRad = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
   return ((yawRad * 180) / Math.PI + 360) % 360;
 }
 
+// zero horizontal velocity has no direction of travel, but atan2(0, 0) would report it as due north.
+// a course of zero is valid for genuine due-north motion.
 export function calculateCourseFromVelocity(velocityEnu?: KinematicsEnu): number | undefined {
   if (!velocityEnu) return undefined;
   const east = velocityEnu.east ?? 0;
@@ -51,9 +73,8 @@ export function calculateCourseFromVelocity(velocityEnu?: KinematicsEnu): number
   return ((Math.atan2(east, north) * 180) / Math.PI + 360) % 360;
 }
 
-export function calculateVerticalRate(velocityEnu?: KinematicsEnu): number | undefined {
-  if (!velocityEnu?.up) return undefined;
-  return velocityEnu.up;
+export function calculateVerticalRate(velocityEnu?: Pick<KinematicsEnu, "up">): number | undefined {
+  return velocityEnu?.up;
 }
 
 export function formatSpeed(speedMs?: number): string {
@@ -78,7 +99,6 @@ export function formatAcceleration(accelerationEnu?: KinematicsEnu): string {
   const north = accelerationEnu.north ?? 0;
   const up = accelerationEnu.up ?? 0;
   const magnitude = Math.sqrt(east * east + north * north + up * up);
-  if (magnitude === 0) return "—";
   return `${magnitude.toFixed(2)} m/s²`;
 }
 

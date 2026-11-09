@@ -176,20 +176,23 @@ func (s *WorldServer) nodeCert() (*x509.Certificate, error) {
 }
 
 // verifiedCert is the cryptographically validated identity of an mTLS peer:
-// only populated once the presented chain checks out against this node's CA.
+// only populated once the presented chain checks out against a trust root.
 type verifiedCert struct {
 	cn          string // leaf subject CommonName
 	fingerprint string // leaf certificate SHA-256 (colon-hex)
 	ca          string // issuing CA CommonName
 	self        bool   // leaf IS this node's own cert (admin bootstrap)
+	anchor      string // anchor entity id that rooted the chain ("" = this node's CA)
+	serial      string // leaf subject serialNumber; the device identity under an anchor
 }
 
 // verifyMTLS validates the presented peer certificates (leaf first, optional
-// intermediates) against this node's certificate as the trust root. It returns
-// the verified leaf identity, or nil if no certificate was presented OR the
-// chain does not validate. A non-nil error means a certificate WAS presented but
-// failed validation, so the caller must deny the connection.
-func (s *WorldServer) verifyMTLS(certs []*x509.Certificate) (*verifiedCert, error) {
+// intermediates) against this node's certificate and then, failing that,
+// against the operator-configured trust anchors. It returns the verified leaf
+// identity, or nil if no certificate was presented OR no chain validates. A
+// non-nil error means a certificate WAS presented but failed validation, so the
+// caller must deny the connection.
+func (s *WorldServer) verifyMTLS(certs []*x509.Certificate, anchors *anchorSet) (*verifiedCert, error) {
 	if len(certs) == 0 {
 		return nil, nil
 	}
@@ -197,20 +200,39 @@ func (s *WorldServer) verifyMTLS(certs []*x509.Certificate) (*verifiedCert, erro
 	if err != nil || node == nil {
 		return nil, fmt.Errorf("node CA unavailable")
 	}
-	roots := x509.NewCertPool()
-	roots.AddCert(node)
+
+	leaf := certs[0]
 	intermediates := x509.NewCertPool()
 	for _, c := range certs[1:] {
 		intermediates.AddCert(c)
 	}
-	if _, err := certs[0].Verify(x509.VerifyOptions{
-		Roots:         roots,
-		Intermediates: intermediates,
-		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	}); err != nil {
-		return nil, fmt.Errorf("mTLS certificate not signed by this node: %w", err)
+
+	roots := x509.NewCertPool()
+	roots.AddCert(node)
+	nodeErr := verifyChain(leaf, roots, intermediates, x509.ExtKeyUsageAny)
+	if nodeErr == nil {
+		v := newVerifiedCert(leaf, node)
+		return v, nil
 	}
-	leaf := certs[0]
+
+	// An anchor-signed certificate is a device credential, so it must actually
+	// be usable as a client certificate — a vendor's server certs are not
+	// identities here.
+	if !anchors.empty() {
+		if chain := verifyAgainst(leaf, anchors.pool, intermediates, x509.ExtKeyUsageClientAuth); chain != nil {
+			v := newVerifiedCert(leaf, node)
+			v.anchor = anchors.lookup(chain[len(chain)-1])
+			if v.anchor == "" {
+				return nil, fmt.Errorf("mTLS chain root is not a configured trust anchor")
+			}
+			return v, nil
+		}
+	}
+
+	return nil, fmt.Errorf("mTLS certificate not signed by this node or a trust anchor: %w", nodeErr)
+}
+
+func newVerifiedCert(leaf, node *x509.Certificate) *verifiedCert {
 	sum := sha256.Sum256(leaf.Raw)
 	return &verifiedCert{
 		cn:          leaf.Subject.CommonName,
@@ -219,6 +241,29 @@ func (s *WorldServer) verifyMTLS(certs []*x509.Certificate) (*verifiedCert, erro
 		// Only the node's own cert is byte-identical to the trust root; holding
 		// that keypair is admin. Safe only because the handshake proved private-key
 		// possession (the cert is public) — see SECURITY note in engine/world.go.
-		self: bytes.Equal(leaf.Raw, node.Raw),
-	}, nil
+		self:   bytes.Equal(leaf.Raw, node.Raw),
+		serial: leaf.Subject.SerialNumber,
+	}
+}
+
+func verifyChain(leaf *x509.Certificate, roots, intermediates *x509.CertPool, usage x509.ExtKeyUsage) error {
+	_, err := leaf.Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{usage},
+	})
+	return err
+}
+
+// verifyAgainst returns the first valid chain (leaf first, root last), or nil.
+func verifyAgainst(leaf *x509.Certificate, roots, intermediates *x509.CertPool, usage x509.ExtKeyUsage) []*x509.Certificate {
+	chains, err := leaf.Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{usage},
+	})
+	if err != nil || len(chains) == 0 {
+		return nil
+	}
+	return chains[0]
 }

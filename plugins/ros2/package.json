@@ -1,0 +1,16 @@
+{
+  "name": "@hydris/ros2",
+  "version": "0.1.0",
+  "private": true,
+  "files": [
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "hydris": {
+    "compat": ">=1.1.0-rc4",
+    "native": {
+      "linux/amd64": "bin/ros2-linux-amd64",
+      "linux/arm64": "bin/ros2-linux-arm64"
+    }
+  }
+}

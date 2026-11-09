@@ -5,7 +5,7 @@ import { SegmentedControl } from "@hydris/ui/segmented-control";
 import { ClipboardPaste, X } from "lucide-react-native";
 import { forward, toPoint } from "mgrs";
 import { useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, Text, View } from "react-native";
 
 import type { CoordFormat } from "../store/map-store";
 import { useMapStore } from "../store/map-store";
@@ -139,6 +139,13 @@ export function CoordinateEntryModal({ initial, onApply, onClose }: CoordinateEn
     onApply({ latitude: point.lat, longitude: point.lng, altitude: altValue });
   };
 
+  const submitOnEnter = Platform.OS === "web";
+  const selectOnFocus = Platform.OS === "web";
+  const minusKeyOnNumberPad = Platform.OS === "web";
+
+  const submitFromField = submitOnEnter ? apply : undefined;
+  const numberKeyboard = minusKeyOnNumberPad ? "numeric" : "default";
+
   return (
     <PickerModalShell ariaLabel="Enter coordinates" onClose={onClose} maxWidth={440}>
       <View className="flex-row items-center gap-2.5 px-4 py-3">
@@ -149,87 +156,94 @@ export function CoordinateEntryModal({ initial, onApply, onClose }: CoordinateEn
       </View>
       <View className="bg-surface-overlay/6 h-px" />
 
-      <View className="gap-3 px-4 py-4">
-        <SegmentedControl tabs={MODES} activeTab={mode} onTabChange={switchMode} className="p-0" />
+      <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+        <View className="gap-3 px-4 py-4">
+          <SegmentedControl
+            tabs={MODES}
+            activeTab={mode}
+            onTabChange={switchMode}
+            className="p-0"
+          />
 
-        {mode === "latlng" ? (
-          <>
+          {mode === "latlng" ? (
+            <>
+              <View className="gap-1.5">
+                <Text className="text-foreground font-sans-medium text-sm">Latitude</Text>
+                <ControlInput
+                  value={lat}
+                  onChangeText={(v) => handleChange(v, "lat")}
+                  placeholder="-90 to 90"
+                  keyboardType={numberKeyboard}
+                  autoComplete="off"
+                  selectTextOnFocus={selectOnFocus}
+                  onSubmitEditing={submitFromField}
+                  accessibilityLabel="Latitude"
+                />
+              </View>
+              <View className="gap-1.5">
+                <Text className="text-foreground font-sans-medium text-sm">Longitude</Text>
+                <ControlInput
+                  value={lng}
+                  onChangeText={(v) => handleChange(v, "lng")}
+                  placeholder="-180 to 180"
+                  keyboardType={numberKeyboard}
+                  autoComplete="off"
+                  selectTextOnFocus={selectOnFocus}
+                  onSubmitEditing={submitFromField}
+                  accessibilityLabel="Longitude"
+                />
+              </View>
+            </>
+          ) : (
             <View className="gap-1.5">
-              <Text className="text-foreground font-sans-medium text-sm">Latitude</Text>
+              <Text className="text-foreground font-sans-medium text-sm">MGRS</Text>
               <ControlInput
-                value={lat}
-                onChangeText={(v) => handleChange(v, "lat")}
-                placeholder="-90 to 90"
-                keyboardType="numeric"
+                value={mgrs}
+                onChangeText={(v) => handleChange(v, "mgrs")}
+                placeholder="33U XP 04897 12345"
                 autoComplete="off"
-                selectTextOnFocus
-                onSubmitEditing={apply}
-                accessibilityLabel="Latitude"
+                autoCapitalize="characters"
+                selectTextOnFocus={selectOnFocus}
+                onSubmitEditing={submitFromField}
+                accessibilityLabel="MGRS grid reference"
               />
             </View>
-            <View className="gap-1.5">
-              <Text className="text-foreground font-sans-medium text-sm">Longitude</Text>
-              <ControlInput
-                value={lng}
-                onChangeText={(v) => handleChange(v, "lng")}
-                placeholder="-180 to 180"
-                keyboardType="numeric"
-                autoComplete="off"
-                selectTextOnFocus
-                onSubmitEditing={apply}
-                accessibilityLabel="Longitude"
-              />
-            </View>
-          </>
-        ) : (
+          )}
+
           <View className="gap-1.5">
-            <Text className="text-foreground font-sans-medium text-sm">MGRS</Text>
+            <Text className="text-foreground font-sans-medium text-sm">Altitude (m)</Text>
             <ControlInput
-              value={mgrs}
-              onChangeText={(v) => handleChange(v, "mgrs")}
-              placeholder="33U XP 04897 12345"
+              value={alt}
+              onChangeText={setAlt}
+              placeholder="Optional"
+              keyboardType={numberKeyboard}
               autoComplete="off"
-              autoCapitalize="characters"
-              selectTextOnFocus
-              onSubmitEditing={apply}
-              accessibilityLabel="MGRS grid reference"
+              selectTextOnFocus={selectOnFocus}
+              onSubmitEditing={submitFromField}
+              accessibilityLabel="Altitude in meters"
             />
           </View>
-        )}
 
-        <View className="gap-1.5">
-          <Text className="text-foreground font-sans-medium text-sm">Altitude (m)</Text>
-          <ControlInput
-            value={alt}
-            onChangeText={setAlt}
-            placeholder="Optional"
-            keyboardType="numeric"
-            autoComplete="off"
-            selectTextOnFocus
-            onSubmitEditing={apply}
-            accessibilityLabel="Altitude in meters"
+          <View className="flex-row items-center gap-1.5">
+            <ClipboardPaste size={15} strokeWidth={2} color={t.iconMuted} />
+            <Text className="text-muted-foreground font-mono text-xs" numberOfLines={1}>
+              Paste lat/long or MGRS to autofill
+            </Text>
+          </View>
+
+          <ControlButton
+            onPress={apply}
+            label="Apply"
+            variant={valid ? "success" : "default"}
+            disabled={!valid}
+            size="lg"
+            fullWidth
+            labelClassName="font-mono text-xs font-semibold uppercase"
+            className="mt-1"
+            accessibilityLabel="Apply coordinates"
           />
         </View>
-
-        <View className="flex-row items-center gap-1.5">
-          <ClipboardPaste size={15} strokeWidth={2} color={t.iconMuted} />
-          <Text className="text-muted-foreground font-mono text-xs" numberOfLines={1}>
-            Paste lat/long or MGRS to autofill
-          </Text>
-        </View>
-
-        <ControlButton
-          onPress={apply}
-          label="Apply"
-          variant={valid ? "success" : "default"}
-          disabled={!valid}
-          size="lg"
-          fullWidth
-          labelClassName="font-mono text-xs font-semibold uppercase"
-          className="mt-1"
-          accessibilityLabel="Apply coordinates"
-        />
-      </View>
+      </ScrollView>
     </PickerModalShell>
   );
 }

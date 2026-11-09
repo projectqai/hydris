@@ -2,14 +2,18 @@ import type { Category } from "@hydris/ui/command-palette/palette-reducer";
 import uFuzzy from "@leeoniya/ufuzzy";
 import type { Entity } from "@projectqai/proto/world";
 
-import { getEntityName } from "../../../../lib/api/use-track-utils";
+import {
+  getConfigurableLabel,
+  getDeviceName,
+  getEntityName,
+} from "../../../../lib/api/use-track-utils";
 import type { CategoryGroup, DeviceNode } from "../configuration-modal/use-config-tree";
 import type { Command } from "./command-registry";
 import { classifyEntity } from "./palette-helpers";
 
 const uf = new uFuzzy({ intraMode: 1 });
 
-export type SearchResult<T> = {
+type SearchResult<T> = {
   item: T;
   ranges: number[];
 };
@@ -38,7 +42,7 @@ function search<T>(haystack: string[], items: T[], query: string, max: number): 
 }
 
 export function searchEntities(
-  entities: Map<string, Entity>,
+  entities: Entity[],
   query: string,
   category: Category | null,
   max = 50,
@@ -46,7 +50,8 @@ export function searchEntities(
   const q = query.trim();
 
   const filtered: Entity[] = [];
-  for (const entity of entities.values()) {
+
+  for (const entity of entities) {
     const cat = classifyEntity(entity);
     if (!cat) continue;
     if (category && cat !== category) continue;
@@ -83,7 +88,7 @@ export function searchCommands(
   return search(haystack, commands, q, max);
 }
 
-export type ConfigTreeMatch = {
+type ConfigTreeMatch = {
   entityId: string;
   label: string;
   icon: DeviceNode["icon"];
@@ -211,7 +216,7 @@ export type ConfigurableHit = {
 };
 
 export function searchConfigurables(
-  entities: Map<string, Entity>,
+  entities: Entity[],
   query: string,
   max = 20,
 ): SearchOutput<ConfigurableHit> {
@@ -219,15 +224,16 @@ export function searchConfigurables(
   if (!q) return { results: [], total: 0 };
 
   const items: ConfigurableHit[] = [];
-  for (const entity of entities.values()) {
+
+  for (const entity of entities) {
     if (!entity.configurable?.schema) continue;
     items.push({
       entityId: entity.id,
-      entityName: getEntityName(entity),
-      label: entity.configurable.label ?? getEntityName(entity),
+      entityName: getDeviceName(entity),
+      label: getConfigurableLabel(entity),
     });
   }
 
-  const haystack = items.map((c) => `${c.label} ${c.entityId} ${c.entityName}`);
+  const haystack = items.map((c) => `${c.entityName} ${c.entityId} ${c.label}`);
   return search(haystack, items, q, max);
 }

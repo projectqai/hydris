@@ -1,7 +1,6 @@
 package mediaserver
 
 import (
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -110,5 +109,21 @@ func (h *ImageProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-cache")
 
-	_, _ = io.Copy(w, resp.Body)
+	// Flush every chunk: MJPEG is a live stream, and a buffered tail (often
+	// just the next part's boundary) would hold each frame back until its
+	// successor arrives.
+	rc := http.NewResponseController(w)
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+			_ = rc.Flush()
+		}
+		if err != nil {
+			return
+		}
+	}
 }

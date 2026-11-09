@@ -18,7 +18,7 @@ func runHTMLRewriterTest(t *testing.T, js string) goja.Value {
 	ch := make(chan goja.Value, 1)
 	loop.RunOnLoop(func(vm *goja.Runtime) {
 		setupGlobals(loop, vm)
-		setupFetch(loop, vm)
+		setupFetch(loop, vm, "", nil)
 		vm.Set("__done", func(call goja.FunctionCall) goja.Value {
 			if len(call.Arguments) > 0 {
 				ch <- call.Argument(0)

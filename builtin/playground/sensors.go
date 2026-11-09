@@ -195,12 +195,12 @@ func chemicalReadings(sensorIdx, tick int) []chemHazard {
 	}
 
 	switch sensorIdx {
-	case 12: // Vevey 375m (overlap): persistent GB+HD warning
+	case 12: // Vevey 375m (overlap): persistent dimethyl sulfide + ammonia warning
 		hazards[0].bars = 2 + uint64(rand.IntN(2))
 		hazards[0].alert = pb.AlertLevel_AlertLevelWarning
 		hazards[2].bars = 1 + uint64(rand.IntN(2))
 		hazards[2].alert = pb.AlertLevel_AlertLevelWarning
-	case 16: // Montreux 375m (overlap): cycling VX+HCN
+	case 16: // Montreux 375m (overlap): cycling hydrogen sulfide + methane
 		switch (tick / 25) % 3 {
 		case 1:
 			hazards[1].bars = 1 + uint64(rand.IntN(2))
@@ -211,21 +211,21 @@ func chemicalReadings(sensorIdx, tick int) []chemHazard {
 			hazards[3].bars = 2 + uint64(rand.IntN(2))
 			hazards[3].alert = pb.AlertLevel_AlertLevelWarning
 		}
-	case 20: // Evian 375m: persistent GB+VX+CG alarm
+	case 20: // Evian 375m: persistent dimethyl sulfide + hydrogen sulfide + sulfur dioxide alarm
 		hazards[0].bars = 3 + uint64(rand.IntN(3))
 		hazards[0].alert = pb.AlertLevel_AlertLevelAlarm
 		hazards[1].bars = 2 + uint64(rand.IntN(2))
 		hazards[1].alert = pb.AlertLevel_AlertLevelWarning
 		hazards[4].bars = 1 + uint64(rand.IntN(3))
 		hazards[4].alert = pb.AlertLevel_AlertLevelWarning
-	case 25: // Thonon 550m: persistent critical HD+HCN+CG
+	case 25: // Thonon 550m: persistent critical ammonia + methane + sulfur dioxide
 		hazards[2].bars = 6 + uint64(rand.IntN(3))
 		hazards[2].alert = pb.AlertLevel_AlertLevelCritical
 		hazards[3].bars = 4 + uint64(rand.IntN(3))
 		hazards[3].alert = pb.AlertLevel_AlertLevelAlarm
 		hazards[4].bars = 3 + uint64(rand.IntN(3))
 		hazards[4].alert = pb.AlertLevel_AlertLevelAlarm
-	case 21: // Evian 550m: cycling GB alarm
+	case 21: // Evian 550m: cycling dimethyl sulfide alarm
 		if (tick/15)%2 == 1 {
 			hazards[0].bars = 3 + uint64(rand.IntN(3))
 			hazards[0].alert = pb.AlertLevel_AlertLevelAlarm

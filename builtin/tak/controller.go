@@ -915,15 +915,33 @@ func runMulticastBroadcaster(ctx context.Context, logger *slog.Logger, entityID 
 
 func entityToCoTBytes(event *pb.EntityChangeEvent) ([]byte, error) {
 	if event.T == pb.EntityChange_EntityChangeExpired {
-		return cot.EntityDeleteCoT(event.Entity)
+		del, err := cot.EntityDeleteCoT(event.Entity)
+		if err != nil {
+			return nil, err
+		}
+		shapeDel, err := cot.EntityShapeDeleteCoT(event.Entity)
+		if err != nil {
+			return nil, err
+		}
+		return append(del, shapeDel...), nil
 	}
 	if event.Entity.Chat != nil {
 		return cot.EntityToChatCoT(event.Entity)
 	}
-	if event.Entity.Shape != nil {
-		return cot.EntityToShapeCoT(event.Entity)
+
+	// Marker and shape are separate CoT events; an entity can have both.
+	marker, err := cot.EntityToCoT(event.Entity)
+	if err != nil {
+		return nil, err
 	}
-	return cot.EntityToCoT(event.Entity)
+	shape, err := cot.EntityToShapeCoT(event.Entity)
+	if err != nil {
+		return nil, err
+	}
+	if marker == nil && shape == nil {
+		return nil, nil
+	}
+	return append(marker, shape...), nil
 }
 
 // isOldChat returns true if the entity is a chat message created before the

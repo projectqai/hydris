@@ -16,7 +16,7 @@ const CHAT_STREAM_FILTER = {
 
 const BATCH_INTERVAL_MS = 250;
 
-export type InputSlot = { pageX: number; pageY: number; width: number; height: number } | null;
+type InputSlot = { pageX: number; pageY: number; width: number; height: number } | null;
 
 type ChatState = {
   messages: Map<string, ChatMessage>;

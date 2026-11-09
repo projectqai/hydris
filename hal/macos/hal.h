@@ -39,4 +39,14 @@ void    HalBleOnDisconnect(int64_t handle, void (*cb)(void));
 // BLE service discovery: copies JSON []GATTService into buf, returns length (-1 = error).
 int32_t HalBleServices(int64_t handle, uint8_t *buf, int32_t n);
 
+// Joystick. List writes a JSON array of devices to buf and returns its length,
+// or -1 if it doesn't fit. Read fills 8 axes and 8 buttons, and returns -1 once
+// the device is gone.
+int32_t HalJoystickList(char *buf, int32_t n);
+int32_t HalJoystickRead(const char *jid, float *axes, uint8_t *buttons);
+
+// Services the main run loop forever. Must be called on the main thread, as
+// GameController finds no devices without it.
+void HalJoystickMainThread(void);
+
 #endif

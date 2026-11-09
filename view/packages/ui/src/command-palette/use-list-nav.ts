@@ -14,6 +14,22 @@ export function clearSavedHighlights() {
   savedStates.clear();
 }
 
+export function focusedControlOwnsEnter(): boolean {
+  if (typeof document === "undefined") return false;
+
+  const element = document.activeElement;
+
+  if (!(element instanceof HTMLElement)) return false;
+
+  const role = element.getAttribute("role") ?? element.tagName.toLowerCase();
+
+  if (role === "switch" || role === "checkbox" || role === "slider") return true;
+
+  const inTabOrder = element.tabIndex >= 0;
+
+  return role === "button" && inTabOrder;
+}
+
 export function useListNav<T>({
   items,
   isSelectable,
@@ -21,6 +37,7 @@ export function useListNav<T>({
   resetKey,
   stateKey,
   initialIndex,
+  enabled = true,
 }: {
   items: readonly T[];
   isSelectable?: (item: T) => boolean;
@@ -28,6 +45,7 @@ export function useListNav<T>({
   resetKey: string;
   stateKey?: string;
   initialIndex?: number;
+  enabled?: boolean;
 }) {
   const checkSelectable = isSelectable ?? alwaysTrue;
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
@@ -97,42 +115,43 @@ export function useListNav<T>({
   useKeyboardShortcut(
     "ArrowDown",
     useCallback(() => {
+      if (!enabled) return false;
+
       setHighlightedIndex((prev) => {
         const pos = selectableIndices.indexOf(prev);
         const next = pos + 1;
         return next < selectableIndices.length ? selectableIndices[next]! : prev;
       });
       return true;
-    }, [selectableIndices]),
+    }, [selectableIndices, enabled]),
     { priority: 200 },
   );
 
   useKeyboardShortcut(
     "ArrowUp",
     useCallback(() => {
+      if (!enabled) return false;
+
       setHighlightedIndex((prev) => {
         const pos = selectableIndices.indexOf(prev);
         const next = pos - 1;
         return next >= 0 ? selectableIndices[next]! : prev;
       });
       return true;
-    }, [selectableIndices]),
+    }, [selectableIndices, enabled]),
     { priority: 200 },
   );
 
   useKeyboardShortcut(
     "Enter",
     useCallback(() => {
-      if (typeof document !== "undefined") {
-        const role = document.activeElement?.getAttribute("role");
-        if (role === "switch" || role === "checkbox" || role === "slider") return false;
-      }
+      if (!enabled || focusedControlOwnsEnter()) return false;
       if (highlightedIndex >= 0 && highlightedIndex < items.length) {
         onActivate(items[highlightedIndex]!);
         return true;
       }
       return false;
-    }, [highlightedIndex, items, onActivate]),
+    }, [highlightedIndex, items, onActivate, enabled]),
     { priority: 200 },
   );
 

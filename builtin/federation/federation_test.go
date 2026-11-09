@@ -602,3 +602,49 @@ func TestKeepalive_OriginRefreshes(t *testing.T) {
 		t.Errorf("keepalive should bump fresh: first=%v, second=%v", fresh1, fresh2)
 	}
 }
+
+func TestRewriteCameraURLs(t *testing.T) {
+	const origin = "http://up.example:50051"
+	entity := &pb.Entity{
+		Id: "axis.cam.1",
+		Camera: &pb.CameraComponent{
+			Streams: []*pb.MediaStream{
+				// credentialed video → rewritten
+				{Protocol: pb.MediaStreamProtocol_MediaStreamProtocolRtsp, Url: "rtsp://user:pass@192.168.1.50/axis-media/media.amp"},
+				// plain routable IP, no credentials — the gap: must still be rewritten
+				{Protocol: pb.MediaStreamProtocol_MediaStreamProtocolRtsp, Url: "rtsp://10.20.30.40/stream"},
+				// image → HTTP image proxy
+				{Protocol: pb.MediaStreamProtocol_MediaStreamProtocolImage, Url: "http://192.168.1.50/axis-cgi/jpg/image.cgi"},
+				// HLS → left unchanged
+				{Protocol: pb.MediaStreamProtocol_MediaStreamProtocolHls, Url: "https://cdn.example/live.m3u8"},
+				// already proxied by a previous hop → re-pointed to this upstream
+				{Protocol: pb.MediaStreamProtocol_MediaStreamProtocolRtsp, Url: "rtsp://other:50051/media/rtsp/axis.cam.1?stream=0"},
+				// empty → left unchanged
+				{Protocol: pb.MediaStreamProtocol_MediaStreamProtocolWebrtc, Url: ""},
+			},
+		},
+	}
+
+	rewriteCameraURLs(entity, origin)
+
+	want := []struct {
+		url      string
+		protocol pb.MediaStreamProtocol
+	}{
+		{"rtsp://up.example:50051/media/rtsp/axis.cam.1?stream=0", pb.MediaStreamProtocol_MediaStreamProtocolRtsp},
+		{"rtsp://up.example:50051/media/rtsp/axis.cam.1?stream=1", pb.MediaStreamProtocol_MediaStreamProtocolRtsp},
+		{"http://up.example:50051/media/image/axis.cam.1?stream=2", pb.MediaStreamProtocol_MediaStreamProtocolImage},
+		{"https://cdn.example/live.m3u8", pb.MediaStreamProtocol_MediaStreamProtocolHls},
+		{"rtsp://up.example:50051/media/rtsp/axis.cam.1?stream=4", pb.MediaStreamProtocol_MediaStreamProtocolRtsp},
+		{"", pb.MediaStreamProtocol_MediaStreamProtocolWebrtc},
+	}
+	for i, w := range want {
+		got := entity.Camera.Streams[i]
+		if got.Url != w.url {
+			t.Errorf("stream %d url = %q, want %q", i, got.Url, w.url)
+		}
+		if got.Protocol != w.protocol {
+			t.Errorf("stream %d protocol = %v, want %v", i, got.Protocol, w.protocol)
+		}
+	}
+}

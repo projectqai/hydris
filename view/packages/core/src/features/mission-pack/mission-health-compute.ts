@@ -1,32 +1,35 @@
 import type { Entity, MissionPack } from "@projectqai/proto/world";
-import { ConfigurableState } from "@projectqai/proto/world";
 
-export type RowStatus = "ok" | "warn" | "fail";
-
-export type ControllersRow = {
-  status: RowStatus;
-  running: number;
-  expected: number;
-  runningIds: string[];
-  pending: string[];
-  failed: { id: string; error: string }[];
-};
+import { getDeviceName } from "../../lib/api/use-track-utils";
+import type { CategoryState, TileVariant } from "../mission/provider-state";
+import {
+  byRowSeverity,
+  getOtherServicesState,
+  getOwnState,
+  getSourceRowState,
+  getSourceState,
+  getWithoutServiceState,
+} from "../mission/provider-state";
+import { getSourceTexts, OTHER_SERVICES, WITHOUT_SERVICE } from "../mission/source-texts";
+import type { DeviceGroups, ServiceGroup, SourceKind } from "../mission/sources";
+import {
+  countsInRollup,
+  getOtherServices,
+  getSourceServices,
+  ownStateCounts,
+} from "../mission/sources";
 
 type VersionRow = {
-  status: RowStatus;
+  status: "ok" | "warn";
   pack: string;
   engine: string;
 };
 
-export type StaticHealth = {
+type StaticHealth = {
   entityCount: number;
   layoutNames: string[];
   version: VersionRow;
   artifacts: { count: number; size: string };
-};
-
-export type HealthState = StaticHealth & {
-  controllers: ControllersRow;
 };
 
 // decimal SI (base 1000): units are kB/MB, not 1024-based KiB/MiB
@@ -42,12 +45,6 @@ export function formatBytes(bytes: number): string {
   return `${size.toFixed(1)} ${units[i]}`;
 }
 
-export type ComputeInput = {
-  mission: MissionPack;
-  entities: Map<string, Entity>;
-  currentVersion: string;
-};
-
 export function computeStatic(mission: MissionPack, currentVersion: string): StaticHealth {
   return {
     entityCount: mission.entityCount ?? 0,
@@ -60,49 +57,84 @@ export function computeStatic(mission: MissionPack, currentVersion: string): Sta
   };
 }
 
-export function computeHealth(input: ComputeInput): HealthState {
-  return {
-    ...computeStatic(input.mission, input.currentVersion),
-    controllers: computeControllers(input.entities),
-  };
-}
-
-export function computeControllers(entities: Map<string, Entity>): ControllersRow {
-  const failed: { id: string; error: string }[] = [];
-  const runningIds: string[] = [];
-  const pending: string[] = [];
-
-  for (const e of entities.values()) {
-    if (!e.device || !e.configurable) continue;
-    const state = e.configurable.state;
-    if (
-      state === ConfigurableState.ConfigurableStateActive ||
-      state === ConfigurableState.ConfigurableStateScheduled
-    ) {
-      runningIds.push(e.id);
-    } else if (
-      state === ConfigurableState.ConfigurableStateFailed ||
-      state === ConfigurableState.ConfigurableStateConflict
-    ) {
-      failed.push({ id: e.id, error: e.configurable.error ?? "" });
-    } else if (e.config) {
-      pending.push(e.id);
-    }
-  }
-
-  const expected = runningIds.length + pending.length + failed.length;
-  const running = runningIds.length;
-  let status: RowStatus;
-  if (failed.length > 0) status = "fail";
-  else if (running < expected) status = "warn";
-  else status = "ok";
-
-  return { status, running, expected, runningIds, pending, failed };
-}
-
 function computeVersion(mission: MissionPack, currentVersion: string): VersionRow {
   const pack = mission.packVersion ?? "";
   const engine = currentVersion;
+
   if (!pack) return { status: "warn", pack, engine };
+
   return { status: pack === engine ? "ok" : "warn", pack, engine };
+}
+
+export function getSourceRow(
+  entity: Entity,
+  groups: DeviceGroups,
+  entities: Map<string, Entity>,
+  isConnected: boolean,
+) {
+  return {
+    name: getDeviceName(entity),
+    ...getSourceRowState(entity, groups, entities, isConnected),
+    // a failure below raises the row, but its reason stays on the entity that reported it
+    error: getOwnState(entity, false).error,
+  };
+}
+
+type GetState = (groups: DeviceGroups, isConnected: boolean) => CategoryState | undefined;
+
+export type SourcesSection = {
+  title: string;
+  getState: GetState;
+  getEntities: (
+    groups: DeviceGroups,
+    entities: Map<string, Entity>,
+    isConnected: boolean,
+  ) => Entity[];
+};
+
+function counted(services: ServiceGroup[]): Entity[] {
+  return services.flatMap(({ service, devices }) => [
+    ...(service && ownStateCounts(service) ? [service] : []),
+    ...devices.filter(countsInRollup),
+  ]);
+}
+
+function section(
+  title: string,
+  getState: GetState,
+  getServices: (groups: DeviceGroups) => ServiceGroup[],
+): SourcesSection {
+  return {
+    title,
+    getState,
+    getEntities: (groups, entities, isConnected) =>
+      counted(getServices(groups)).sort(byRowSeverity(groups, entities, isConnected)),
+  };
+}
+
+export function getSourcesSections(kinds: SourceKind[]): SourcesSection[] {
+  return [
+    ...kinds.map((kind) =>
+      section(
+        getSourceTexts(kind).title,
+        (groups, isConnected) => getSourceState(kind, groups, isConnected),
+        (groups) => getSourceServices(kind, groups),
+      ),
+    ),
+    section(OTHER_SERVICES, getOtherServicesState, getOtherServices),
+    section(WITHOUT_SERVICE, getWithoutServiceState, (groups) => groups.withoutService),
+  ];
+}
+
+type DoneAction = { label: string; variant: "default" | "success" };
+
+const DONE_ACTIONS: Record<TileVariant, DoneAction> = {
+  success: { label: "Done", variant: "success" },
+  default: { label: "Done", variant: "default" },
+  pending: { label: "Proceed anyway", variant: "default" },
+  alert: { label: "Proceed anyway", variant: "default" },
+};
+
+export function getDoneAction(sources: CategoryState | undefined): DoneAction {
+  return DONE_ACTIONS[sources?.variant ?? "default"];
 }

@@ -25,7 +25,7 @@ import {
 } from "lucide-react-native";
 
 import { toast } from "../../../../lib/sonner";
-import { PRESET_KEYBINDS, PRESETS } from "../../layouts";
+import { PRESET_KEYBINDS, PRESETS } from "../../presets";
 import { mapEngineActions } from "../../store/map-engine-store";
 import { useMapStore } from "../../store/map-store";
 import { useMissionKitStore } from "../../store/mission-kit-store";
@@ -72,9 +72,11 @@ export type MissionPackActions = {
   importMbtilesFromPicker: () => Promise<void>;
 };
 
+export const MISSION_IMPORT_COMMAND_ID = "world-mission-import";
+
 // shown at the top of the commands list, in this order
 export const PINNED_COMMAND_IDS = [
-  "world-mission-import",
+  MISSION_IMPORT_COMMAND_ID,
   "manage-plugins",
   "configuration",
   "world-reset",
@@ -354,7 +356,7 @@ export function buildCommands(layout: LayoutActions, missionPack: MissionPackAct
 
     // World
     {
-      id: "world-mission-import",
+      id: MISSION_IMPORT_COMMAND_ID,
       label: "Load mission pack",
       description: "Load a mission pack from a file",
       icon: Upload,
@@ -387,7 +389,7 @@ export function buildCommands(layout: LayoutActions, missionPack: MissionPackAct
   commands.push({
     id: "world-mission-health",
     label: "Mission health",
-    description: "Controller status overview",
+    description: "Mission state overview",
     icon: Activity,
     category: "world",
     action: () => {},

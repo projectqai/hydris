@@ -24,10 +24,25 @@ export type GeoPosition = {
   alt?: number;
 };
 
+export type PathPoint =
+  | { type: "coordinate"; position: GeoPosition }
+  | { type: "entity"; entityId: string; lastKnownPosition?: GeoPosition };
+
+export type DrawingKind = "circle" | "rectangle" | "freeform" | "rb-circle";
+
+export type EditKind = DrawingKind | "range";
+
 export type ShapeLineStyle = "solid" | "dashed" | "dotted";
 
 export type ShapeGeometry =
-  | { type: "polygon"; outer: GeoPosition[]; holes?: GeoPosition[][]; lineStyle?: ShapeLineStyle }
+  | {
+      type: "polygon";
+      outer: GeoPosition[];
+      holes?: GeoPosition[][];
+      lineStyle?: ShapeLineStyle;
+      // A rim alone cannot distinguish a polar cap from its complementary region.
+      enclosedPoles?: "north" | "south" | "both";
+    }
   | { type: "polyline"; points: GeoPosition[]; lineStyle?: ShapeLineStyle }
   | { type: "point"; position: GeoPosition }
   | { type: "collection"; geometries: ShapeGeometry[] };
@@ -39,6 +54,9 @@ export type ShapeProperties = {
   color: [number, number, number];
   affiliation: Affiliation;
   lineStyle?: ShapeLineStyle;
+  drawn?: boolean;
+  collectionMember?: boolean;
+  fillOnly?: boolean;
 };
 
 export type Affiliation = "blue" | "red" | "neutral" | "unknown" | "unclassified";
@@ -62,6 +80,7 @@ export type MapLayer = {
 export type EntityData = {
   id: string;
   position?: GeoPosition;
+  velocityEnu?: { up: number };
   symbol?: string;
   label?: string;
   affiliation?: Affiliation;
@@ -75,8 +94,13 @@ export type EntityData = {
   assemblyParentId?: string;
   assemblyOutlineIds?: string[];
   isDetection?: boolean;
+  isDrawn?: boolean;
   mapLayer?: MapLayer;
   health?: ConnectorHealth;
+  pathPoints?: PathPoint[];
+  pathKind?: EditKind;
+  pathRings?: number;
+  pathRadiusM?: number;
 };
 
 export type BaseLayer = "dark" | "satellite" | "street";
@@ -92,20 +116,4 @@ export type EntityFilter = {
     unclassified: boolean;
   };
   sensors: Record<string, boolean>;
-};
-
-export type MeasurementType =
-  | "distance"
-  | "polyline"
-  | "horizontal"
-  | "vertical"
-  | "height"
-  | "area"
-  | "point";
-
-export type EntityDelta<T = EntityData> = {
-  version: number;
-  geoChanged: boolean;
-  entities: T[];
-  removed: string[];
 };

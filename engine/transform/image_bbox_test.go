@@ -448,3 +448,100 @@ func TestImageBbox_WideFOV(t *testing.T) {
 		t.Errorf("full-frame extent should match FOV (120°), got %.3f°", azExt)
 	}
 }
+
+// A tilted camera: project known directions into the image and check the
+// transformer recovers them. Adding pixel angles to pan/tilt (the old
+// approach) is off by ~1/cos(tilt) in azimuth for off-centre targets.
+func TestImageBbox_TiltedCameraRecoversDirection(t *testing.T) {
+	const (
+		fov      = 21.0
+		fw, fh   = 640.0, 360.0
+		panDeg   = 40.0
+		tiltDeg  = -22.0
+		toleranc = 0.05 // degrees; the bbox is snapped to whole pixels
+	)
+	focal := fw / 2 / math.Tan(fov/2*math.Pi/180)
+	sinT, cosT := math.Sincos(tiltDeg * math.Pi / 180)
+
+	for _, c := range []struct{ az, el float64 }{
+		{panDeg + 8, tiltDeg + 3},
+		{panDeg - 9, tiltDeg - 4},
+		{panDeg + 2, tiltDeg + 4},
+	} {
+		// direction relative to the pan, in a frame with x right, y along
+		// the pan, z up; then into camera coordinates
+		sa, ca := math.Sincos((c.az - panDeg) * math.Pi / 180)
+		se, ce := math.Sincos(c.el * math.Pi / 180)
+		dx, dy, dz := sa*ce, ca*ce, se
+		right := dx
+		up := -dy*sinT + dz*cosT
+		fwd := dy*cosT + dz*sinT
+		px := fw/2 + focal*right/fwd
+		py := fh/2 - focal*up/fwd
+
+		fovV, camID, fpID, pan, tilt := fov, "cam", "cam~fp", panDeg, tiltDeg
+		head := map[string]*pb.Entity{
+			camID: {Id: camID, Camera: &pb.CameraComponent{Fov: &fovV, FocalPoint: &fpID}},
+			fpID: {Id: fpID, Pose: &pb.PoseComponent{Parent: camID, Offset: &pb.PoseComponent_Polar{
+				Polar: &pb.PolarOffset{Azimuth: pan, Elevation: &tilt},
+			}}},
+			"ev": {Id: "ev", Detection: &pb.DetectionComponent{
+				DetectorEntityId: &camID,
+				ImageBbox: &pb.ImageBoundingBox{
+					X: uint32(math.Round(px)) - 5, Y: uint32(math.Round(py)) - 5, Width: 10, Height: 10,
+					FrameWidth: uint32(fw), FrameHeight: uint32(fh),
+				},
+			}},
+		}
+		NewImageBboxTransformer().Resolve(head, "ev", nil)
+		polar := head["ev"].Pose.GetPolar()
+		// the box centre is snapped to whole pixels: allow for that
+		pxErr := 0.5 * 180 / math.Pi / focal / cosT
+		if d := math.Abs(polar.Azimuth - c.az); d > toleranc+pxErr {
+			t.Errorf("az %.2f el %.2f: got azimuth %.3f", c.az, c.el, polar.Azimuth)
+		}
+		if d := math.Abs(polar.GetElevation() - c.el); d > toleranc+pxErr {
+			t.Errorf("az %.2f el %.2f: got elevation %.3f", c.az, c.el, polar.GetElevation())
+		}
+	}
+}
+
+func TestImageBbox_GroundRangeFromAltitude(t *testing.T) {
+	tr := NewImageBboxTransformer()
+	fov, alt := 60.0, 100.0
+	tilt := -45.0
+	camID := "cam-1"
+	head := map[string]*pb.Entity{
+		"cam-1": {
+			Id:     "cam-1",
+			Geo:    &pb.GeoSpatialComponent{Latitude: 52, Longitude: 5, Altitude: &alt},
+			Camera: &pb.CameraComponent{Fov: &fov, FocalPoint: strPtr("fp")},
+		},
+		"fp": {Id: "fp", Pose: &pb.PoseComponent{Offset: &pb.PoseComponent_Polar{Polar: &pb.PolarOffset{Azimuth: 90, Elevation: &tilt}}}},
+		"ev": {Id: "ev", Detection: &pb.DetectionComponent{
+			DetectorEntityId: &camID,
+			ImageBbox:        &pb.ImageBoundingBox{X: 910, Y: 500, Width: 100, Height: 80, FrameWidth: 1920, FrameHeight: 1080},
+		}},
+	}
+	tr.Resolve(head, "ev", nil)
+	p := head["ev"].Pose.Offset.(*pb.PoseComponent_Polar).Polar
+	if p.Range == nil || p.RangeErrorM == nil {
+		t.Fatal("expected range and range error from the ground intersection")
+	}
+	// 45° down from 100 m: slant range ≈ 141 m.
+	if math.Abs(*p.Range-141.4) > 5 {
+		t.Errorf("range = %.1f m, want ~141 m", *p.Range)
+	}
+	if *p.RangeErrorM <= 0 || *p.RangeErrorM > *p.Range/2 {
+		t.Errorf("range error = %.1f m, want small but positive", *p.RangeErrorM)
+	}
+
+	// Looking above the horizon never reaches the ground: bearing only.
+	up := 10.0
+	head["fp"].Pose.Offset.(*pb.PoseComponent_Polar).Polar.Elevation = &up
+	head["ev"].Pose = nil
+	tr.Resolve(head, "ev", nil)
+	if head["ev"].Pose.Offset.(*pb.PoseComponent_Polar).Polar.Range != nil {
+		t.Error("expected no range when looking up")
+	}
+}

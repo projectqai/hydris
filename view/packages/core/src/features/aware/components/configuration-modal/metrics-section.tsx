@@ -2,6 +2,7 @@
 
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
+import { Progress, ProgressIndicator, ProgressTrack } from "@hydris/ui/progress";
 import type { Metric } from "@projectqai/proto/metrics";
 import { MetricUnit } from "@projectqai/proto/metrics";
 import type { Entity } from "@projectqai/proto/world";
@@ -181,14 +182,11 @@ function ValueRow({ metric, showTimestamp }: { metric: Metric; showTimestamp: bo
 function GaugeRow({ metric, showTimestamp }: { metric: Metric; showTimestamp: boolean }) {
   let value = getMetricValue(metric);
   if (metric.unit === MetricUnit.MetricUnitRatio) value *= 100;
-  const pct = Math.max(0, Math.min(100, value));
 
   return (
-    <View
-      accessible
-      accessibilityRole="progressbar"
+    <Progress
+      value={value}
       accessibilityLabel={metricA11yLabel(metric)}
-      accessibilityValue={{ min: 0, max: 100, now: pct }}
       className="gap-1.5 px-5 py-2"
     >
       <View className="flex-row items-baseline justify-between">
@@ -200,9 +198,9 @@ function GaugeRow({ metric, showTimestamp }: { metric: Metric; showTimestamp: bo
           {showTimestamp && <MetricTimestamp metric={metric} />}
         </View>
       </View>
-      <View className="bg-foreground/20 h-1 overflow-hidden rounded-full">
-        <View className="bg-foreground/70 h-1 rounded-full" style={{ width: `${pct}%` }} />
-      </View>
-    </View>
+      <ProgressTrack>
+        <ProgressIndicator />
+      </ProgressTrack>
+    </Progress>
   );
 }

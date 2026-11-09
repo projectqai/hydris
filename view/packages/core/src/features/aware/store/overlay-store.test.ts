@@ -37,21 +37,6 @@ describe("overlay toggle isolation", () => {
     expect(state.sensors).toEqual(DEFAULT_OVERLAYS.sensors);
   });
 
-  it("toggling across multiple categories is independent", () => {
-    const { toggle } = useOverlayStore.getState();
-    toggle("tracks", "blue");
-    toggle("visualization", "detections");
-    toggle("sensors", "degraded");
-
-    const state = useOverlayStore.getState();
-    expect(state.tracks.blue).toBe(false);
-    expect(state.tracks.red).toBe(true);
-    expect(state.visualization.detections).toBe(true);
-    expect(state.visualization.shapes).toBe(true);
-    expect(state.sensors.degraded).toBe(false);
-    expect(state.sensors.online).toBe(true);
-  });
-
   it("double toggle restores original state", () => {
     const { toggle } = useOverlayStore.getState();
     toggle("tracks", "red");

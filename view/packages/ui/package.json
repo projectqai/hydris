@@ -8,27 +8,49 @@
     "src"
   ],
   "exports": {
-    "./assets/logo.png": "./assets/logo.png",
-    "./card": "./src/card.tsx",
-    "./collapsible-section": "./src/collapsible-section.tsx",
+    "./accordion": "./src/accordion/accordion.tsx",
     "./keyboard": "./src/keyboard/index.ts",
+    "./keyboard/keyboard-layer": "./src/keyboard/keyboard-layer.tsx",
+    "./hooks/use-confirm-press": "./src/hooks/use-confirm-press.ts",
+    "./hooks/hold-to-confirm-flag": "./src/hooks/hold-to-confirm-flag.ts",
+    "./hooks/use-hold-to-confirm": "./src/hooks/use-hold-to-confirm.ts",
+    "./hooks/use-phone-modal-frame": "./src/hooks/use-phone-modal-frame.ts",
+    "./media/audio-player": "./src/media/audio-player.tsx",
+    "./media/media-frame": "./src/media/media-frame.tsx",
+    "./media/video-player": {
+      "react-native": "./src/media/video-player.native.tsx",
+      "browser": "./src/media/video-player.web.tsx"
+    },
     "./panels": "./src/panels/resizable-panel.tsx",
-    "./widgets/time-widget": "./src/widgets/time-widget.tsx",
-    "./sheets/floating-sheet": "./src/sheets/floating-sheet.tsx",
     "./dialogs/confirm-dialog": "./src/dialogs/confirm-dialog.tsx",
     "./controls": "./src/controls/index.ts",
+    "./controls/expanding-icon-group": "./src/controls/expanding-icon-group.tsx",
     "./lib/utils": "./src/lib/utils.ts",
-    "./lib/platform": "./src/lib/platform.ts",
     "./lib/theme": "./src/lib/theme.tsx",
     "./lib/widget-scale": "./src/lib/widget-scale.ts",
     "./lib/tile-layout": "./src/lib/tile-layout.ts",
-    "./lib/metric-tokens": "./src/lib/metric-tokens.ts",
+    "./lib/severity": "./src/lib/severity.ts",
     "./badge": "./src/badge.tsx",
+    "./card": "./src/card.tsx",
     "./tag": "./src/tag.tsx",
+    "./status-label": "./src/status-label.tsx",
     "./empty-state": "./src/empty-state.tsx",
     "./tile-frame": "./src/tile-frame.tsx",
     "./tile-header": "./src/tile-header.tsx",
     "./info-row": "./src/info-row.tsx",
+    "./field": "./src/field.tsx",
+    "./hold-fill": {
+      "react-native": "./src/hold-fill.native.tsx",
+      "browser": "./src/hold-fill.web.tsx"
+    },
+    "./hold-button": "./src/hold-button.tsx",
+    "./press-outside": {
+      "react-native": "./src/press-outside.native.tsx",
+      "browser": "./src/press-outside.web.tsx"
+    },
+    "./progress": "./src/progress.tsx",
+    "./picker": "./src/picker/picker.tsx",
+    "./radio-group": "./src/radio-group.tsx",
     "./tabs": "./src/tabs/tabs.tsx",
     "./segmented-control": "./src/segmented-control/segmented-control.tsx",
     "./floating-window": "./src/floating-window/floating-window.tsx",
@@ -36,22 +58,25 @@
     "./command-palette/use-list-nav": "./src/command-palette/use-list-nav.ts",
     "./command-palette/use-keyed-list-nav": "./src/command-palette/use-keyed-list-nav.ts",
     "./command-palette/list-detail-drawer": "./src/command-palette/list-detail-drawer.tsx",
-    "./command-palette/hold-to-confirm-pressable": "./src/command-palette/hold-to-confirm-pressable.tsx",
     "./command-palette/highlight-text": "./src/command-palette/highlight-text.tsx",
+    "./command-palette/palette-row": "./src/command-palette/palette-row.tsx",
     "./layout/types": "./src/layout/types.ts",
     "./layout/tree-utils": "./src/layout/tree-utils.ts",
     "./layout/contexts": "./src/layout/contexts.ts",
-    "./layout/constants": "./src/layout/constants.ts",
-    "./layout/animated-split": "./src/layout/animated-split.tsx",
     "./layout/layout-renderer": "./src/layout/layout-renderer.tsx",
     "./top-bar/command-trigger": "./src/top-bar/command-trigger.tsx",
     "./top-bar/customize-help-icon": "./src/top-bar/customize-help-icon.tsx",
     "./top-bar/placement-help-icon": "./src/top-bar/placement-help-icon.tsx",
+    "./top-bar/drawing-help-icon": "./src/top-bar/drawing-help-icon.tsx",
+    "./top-bar/range-help-icon": "./src/top-bar/range-help-icon.tsx",
+    "./top-bar/edit-help-icon": "./src/top-bar/edit-help-icon.tsx",
     "./action-button": "./src/action-button.tsx",
     "./screen-lock": "./src/screen-lock.ts",
     "./middle-truncate-text": "./src/middle-truncate-text.tsx",
+    "./scroll-shadow": "./src/scroll-shadow.tsx",
     "./radial-menu": "./src/radial-menu/radial-menu.tsx",
-    "./radial-menu/types": "./src/radial-menu/types.ts"
+    "./radial-menu/types": "./src/radial-menu/types.ts",
+    "./storybook/*": "./src/storybook/*.ts"
   },
   "scripts": {
     "lint": "eslint .",
@@ -72,8 +97,8 @@
   "devDependencies": {
     "@hydris/eslint-config": "workspace:*",
     "@hydris/typescript-config": "workspace:*",
+    "@storybook/react-native-web-vite": "^10.6.1",
     "@testing-library/react-native": "^14.0.0",
-    "@tsconfig/recommended": "^1.0.13",
     "@types/jest": "^30.0.0",
     "@types/react": "catalog:",
     "babel-preset-expo": "catalog:",
@@ -86,10 +111,11 @@
     "react-dom": "catalog:",
     "react-native": "catalog:",
     "react-native-web": "catalog:",
-    "vitest": "^3.2.4",
-    "zustand": "^5.0.14"
+    "storybook": "^10.6.1",
+    "vitest": "^3.2.4"
   },
   "peerDependencies": {
+    "expo-audio": "*",
     "expo-image": "*",
     "expo-linear-gradient": "*",
     "lucide-react-native": "*",
@@ -98,9 +124,9 @@
     "react-native-gesture-handler": "*",
     "react-native-reanimated": "*",
     "react-native-svg": "*",
+    "react-native-video": "*",
     "react-native-worklets": "*",
-    "react-native-web": "*",
-    "zustand": "*"
+    "react-native-web": "*"
   },
   "peerDependenciesMeta": {
     "react-native": {

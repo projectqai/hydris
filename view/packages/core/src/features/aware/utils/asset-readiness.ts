@@ -1,7 +1,8 @@
 import type { Entity } from "@projectqai/proto/world";
-import { DeviceState, LinkStatus } from "@projectqai/proto/world";
+import { ConfigurableState, DeviceState, LinkStatus } from "@projectqai/proto/world";
 
-import { formatDeviceState, formatLinkStatus } from "./format-entity";
+import { getNamingConfigurable } from "../../mission/sources";
+import { formatConfigurableState, formatDeviceState, formatLinkStatus } from "./format-entity";
 
 export type ReadinessGateKey = "position" | "device" | "link";
 
@@ -18,7 +19,20 @@ export interface AssetReadiness {
   failed: boolean;
 }
 
+const CONFIGURABLE_GATE_STATUS: Record<ConfigurableState, ReadinessGateStatus> = {
+  [ConfigurableState.ConfigurableStateActive]: "met",
+  [ConfigurableState.ConfigurableStateScheduled]: "met",
+  [ConfigurableState.ConfigurableStateStarting]: "pending",
+  [ConfigurableState.ConfigurableStateFailed]: "failed",
+  [ConfigurableState.ConfigurableStateConflict]: "failed",
+  [ConfigurableState.ConfigurableStateInactive]: "unmet",
+};
+
 function deviceGateStatus(entity: Entity): ReadinessGateStatus {
+  const configurable = getNamingConfigurable(entity);
+
+  if (configurable) return CONFIGURABLE_GATE_STATUS[configurable.state] ?? "unmet";
+
   switch (entity.device?.state) {
     case DeviceState.DeviceStateActive:
       return "met";
@@ -72,12 +86,20 @@ export function deriveAssetReadiness(entity: Entity): AssetReadiness {
   };
 }
 
+function deviceLabel(entity: Entity): string {
+  const configurable = getNamingConfigurable(entity);
+
+  if (configurable) return formatConfigurableState(configurable.state).label;
+
+  return entity.device ? formatDeviceState(entity.device.state).label : "Unknown";
+}
+
 export function gateValue(entity: Entity, gate: ReadinessGate): string {
   switch (gate.key) {
     case "position":
       return gate.status === "met" ? "Positioned" : "No position";
     case "device":
-      return entity.device ? formatDeviceState(entity.device.state).label : "Unknown";
+      return deviceLabel(entity);
     case "link":
       return gate.status === "blocked"
         ? "Waiting for device"

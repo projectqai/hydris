@@ -4,13 +4,50 @@ id: self
 id: authz.policy
 label: Authorization Policy
 lifetime:
-  fresh: '1970-01-01T00:00:01Z'
+  fresh: '1970-01-01T00:00:05Z'
 # Every request is authorized by deferring to the acting identity's own policy.
 # admin.actor (the identity authn.policy assigns to trusted connections) carries
 # an allow-all policy; any other identity gets whatever policy an operator
 # attaches to its entity, and is otherwise denied.
+#
+# A plugin pushes through the plugins builtin as an actor of its own (the host
+# itself pushes as admin.actor). Whatever a plugin's policy allows, it may never
+# grant authority, touch an entity that carries policy, or reset the node.
+#
+# The one exception is the identities a plugin claims in its package.json
+# (hydris.actors), which the plugin carries as actor.plugin.actors: it may write
+# their entities, policy included, which is how its defaults.yaml ships them.
+# An identity the plugin pushes as carries no such claim.
+#
+# Installing a plugin runs its code on this host, unsandboxed for a native
+# plugin, so only admin may write plugin entities and the artifacts they run
+# from. The rule comes before the claim rule, so a plugin cannot claim its way
+# past it.
 policy:
   rules:
+    - action: PolicyActionDeny
+      cel: 'is.write && actor.id != "admin.actor" && (change.device.parent == "authn.service" || head(change.id).device.parent == "authn.service")'
+      label: only admin may configure trust anchors
+    - action: PolicyActionDeny
+      cel: |
+        is.write && actor.id != "admin.actor" && (
+          change.device.parent in ["plugins.service", "plugins.custom"] ||
+          head(change.id).device.parent in ["plugins.service", "plugins.custom"] ||
+          head(change.device.parent).device.parent == "plugins.custom" ||
+          head(head(change.id).device.parent).device.parent == "plugins.custom")
+      label: only admin may install or change plugins
+    - action: PolicyActionAllow
+      cel: 'is.push && change.id in actor.plugin.actors'
+      label: a plugin may write the identities its package.json claims
+    - action: PolicyActionDeny
+      cel: 'is.write && source.builtin == "plugins" && actor.id != "admin.actor" && (has(change.policy) || has(change.authorization))'
+      label: a plugin may never grant authority
+    - action: PolicyActionDeny
+      cel: 'is.write && source.builtin == "plugins" && actor.id != "admin.actor" && has(head(change.id).policy)'
+      label: a plugin may not touch policy-bearing entities
+    - action: PolicyActionDeny
+      cel: 'is.reset && source.builtin == "plugins" && actor.id != "admin.actor"'
+      label: a plugin may not reset the node
     - action: PolicyActionDefer
       cel: 'actor.id'
       label: defer to the actor's policy
@@ -20,7 +57,7 @@ policy:
 id: authn.policy
 label: Connection Identity
 lifetime:
-  fresh: '1970-01-01T00:00:01Z'
+  fresh: '1970-01-01T00:00:02Z'
 # Resolves *who* a connection is: each rule's CEL returns an entity id, first
 # non-empty wins, empty denies the connection. Trusted (loopback / in-process)
 # connections are admin.actor, as is a connection presenting this node's own TLS
@@ -28,12 +65,24 @@ lifetime:
 # Operators can map remote peers by source.mtls.verified.fingerprint /
 # source.mtls.verified.cn / source.mtls.verified.ca / source.address before the
 # anonymous fallback. Note source.mtls.verified is only populated for a chain
-# that validated against this node's CA; for peer certs the node signed cn != ca,
-# whereas the node's own cert has cn == ca (and source.mtls.verified.self == true).
+# that validated against this node's CA or a trust anchor under authn.service.
+# For peer certs the node signed cn != ca, whereas the node's own cert has
+# cn == ca (and source.mtls.verified.self == true).
+#
+# A device presenting an IEEE 802.1AR IDevID is recognized only if an identity
+# entity was created for it beforehand, named "<anchor entity id>.<serial>".
+# Recognition is namespaced by anchor so two vendors reusing a serial cannot
+# impersonate each other. Nothing is enrolled automatically: an unknown device
+# falls through to anonymous. Edit the rule if you prefer shorter identity ids.
 policy:
   rules:
     - cel: 'source.mtls.verified.self ? "admin.actor" : ""'
       label: presenting this node's TLS cert authenticates as admin
+    - cel: |
+        source.mtls.verified.anchor != "" && source.mtls.verified.serial != ""
+          && head(source.mtls.verified.anchor + "." + source.mtls.verified.serial).id != ""
+          ? source.mtls.verified.anchor + "." + source.mtls.verified.serial : ""
+      label: an IDevID with a pre-created identity entity authenticates as it
     - cel: '(is.local || is.builtin) ? "admin.actor" : ""'
       label: trusted connections are admin.actor
     - cel: '"auth:anonymous"'
@@ -55,6 +104,44 @@ lifetime:
 # No policy: authz.policy's defer reaches no verdict and falls through to the
 # current insecure default-allow. Attach rules here (or tighten authz.policy's
 # tail to deny) to scope what anonymous (untrusted) connections may do.
+---
+id: policy.idevid.device
+label: IDevID Device Policy
+lifetime:
+  fresh: '1970-01-01T00:00:01Z'
+policy:
+  rules:
+    - action: PolicyActionDeny
+      cel: 'is.write && (has(change.policy) || has(change.authorization))'
+      label: a device may never rewrite its own authority
+    - action: PolicyActionAllow
+      cel: 'is.write && (change.id == actor.id)'
+      label: own entity
+    - action: PolicyActionAllow
+      cel: 'is.read'
+    - action: PolicyActionDeny
+      label: fail closed
+---
+id: authn.service
+label: Authentication
+lifetime:
+  fresh: '1970-01-01T00:00:01Z'
+# Parent of the trust anchors whose device certificates (IEEE 802.1AR IDevIDs)
+# this node accepts. The engine scans ONLY this subtree for anchors, so minting
+# a trust root means creating a child device here — guard that with a policy
+# rule on device.parent rather than trusting an id naming convention.
+device:
+  category: Network
+  state: DeviceStateActive
+configurable:
+  supported_device_classes:
+    - class: trust_anchor
+      label: Trust Anchor
+      description: A manufacturer CA certificate. Devices presenting an IDevID
+        issued under it can be recognized by authn.policy, which still has to
+        map them to a pre-created identity entity before they are trusted.
+interactivity:
+  icon: shield
 ---
 id: meshtastic.service
 config:
@@ -103,6 +190,11 @@ config:
     share_remote: false
 ---
 id: tailscale.service
+config:
+  value:
+    enabled: true
+---
+id: mdns.service
 config:
   value:
     enabled: true

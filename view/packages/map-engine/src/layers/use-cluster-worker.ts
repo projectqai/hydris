@@ -12,6 +12,8 @@ export type ClusterWorkerResult = {
   version: number;
 };
 
+const EMPTY_UNCLUSTERED: readonly string[] = [];
+
 type UseClusterWorkerOptions = {
   entityMap: Map<string, EntityData>;
   filter: EntityFilter;
@@ -21,6 +23,7 @@ type UseClusterWorkerOptions = {
   zoom: number;
   version: number;
   geoChanged: boolean;
+  unclusteredIds?: readonly string[];
 };
 
 export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorkerResult | null {
@@ -33,6 +36,7 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
     zoom,
     version,
     geoChanged,
+    unclusteredIds = EMPTY_UNCLUSTERED,
   } = options;
   const [result, setResult] = useState<ClusterWorkerResult | null>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -53,6 +57,7 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
     shapesVisible,
     detectionsVisible,
     clusteringEnabled,
+    unclusteredIds,
   });
   latestRef.current = {
     entityMap,
@@ -63,6 +68,7 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
     shapesVisible,
     detectionsVisible,
     clusteringEnabled,
+    unclusteredIds,
   };
 
   useEffect(() => {
@@ -98,6 +104,7 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
       shapesVisible,
       detectionsVisible,
       clusteringEnabled,
+      unclusteredIds: [...unclusteredIds].sort(),
     });
     const filterChanged = filterJson !== lastFilterRef.current;
     if (!versionChanged && !zoomChanged && !filterChanged) return;
@@ -117,6 +124,7 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
         shapesVisible: sv,
         detectionsVisible: dv,
         clusteringEnabled: ce,
+        unclusteredIds: uc,
       } = latestRef.current;
 
       const dataUnchanged =
@@ -131,12 +139,14 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
         shapesVisible: sv,
         detectionsVisible: dv,
         clustering: ce,
+        unclusteredIds: [...uc],
       };
       const currentFilterJson = JSON.stringify({
         ...f.tracks,
         shapesVisible: sv,
         detectionsVisible: dv,
         clusteringEnabled: ce,
+        unclusteredIds: [...uc].sort(),
       });
       const filterOnly = dataUnchanged && currentFilterJson !== lastFilterRef.current;
 
@@ -229,6 +239,7 @@ export function useClusterWorker(options: UseClusterWorkerOptions): ClusterWorke
     zoom,
     version,
     geoChanged,
+    unclusteredIds,
   ]);
 
   return result;

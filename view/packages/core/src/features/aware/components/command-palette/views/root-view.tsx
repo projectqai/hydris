@@ -1,33 +1,29 @@
-import { Badge } from "@hydris/ui/badge";
 import { HighlightText } from "@hydris/ui/command-palette/highlight-text";
-import { HoldToConfirmPressable } from "@hydris/ui/command-palette/hold-to-confirm-pressable";
 import type { Category, PaletteAction } from "@hydris/ui/command-palette/palette-reducer";
+import { PaletteRow } from "@hydris/ui/command-palette/palette-row";
 import { useListNav } from "@hydris/ui/command-palette/use-list-nav";
-import { EmptyState } from "@hydris/ui/empty-state";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "@hydris/ui/empty-state";
+import { HoldFill } from "@hydris/ui/hold-fill";
+import { useHoldToConfirm } from "@hydris/ui/hooks/use-hold-to-confirm";
 import { useThemeColors } from "@hydris/ui/lib/theme";
 import { cn } from "@hydris/ui/lib/utils";
+import { ScrollShadow } from "@hydris/ui/scroll-shadow";
 import { Tag } from "@hydris/ui/tag";
 import type { Entity } from "@projectqai/proto/world";
 import { FlashList } from "@shopify/flash-list";
-import { ChevronRight, Eye, FileQuestion, LayoutGrid, Search, Settings } from "lucide-react-native";
+import { ChevronRight, Eye, LayoutGrid, Search, Settings } from "lucide-react-native";
 import { Platform, Pressable, Text, View } from "react-native";
+import { useShallow } from "zustand/react/shallow";
 
 const DRILLDOWN_SUBCATEGORIES = new Set(["overlay"]);
 const DRILLDOWN_LABELS: Record<string, string> = {
   overlay: "Toggle overlays",
 };
 
-import { getEntityName } from "../../../../../lib/api/use-track-utils";
-import { ENTITY_NAV_PARAMS, useUrlParams } from "../../../../../lib/use-url-params";
 import { useEntityStore } from "../../../store/entity-store";
-import { useMapEngine } from "../../../store/map-engine-store";
-import { useSelectionStore } from "../../../store/selection-store";
-import {
-  getConfigStateBadge,
-  getEntityIcon,
-  getEntityTypeLabel,
-} from "../../../utils/entity-helpers";
-import { type Command, PINNED_COMMAND_IDS } from "../command-registry";
+import { UNKNOWN_ICON } from "../../../utils/entity-helpers";
+import { type Command, MISSION_IMPORT_COMMAND_ID, PINNED_COMMAND_IDS } from "../command-registry";
+import { EntityRow, TruncationHint, useSelectEntity } from "../entity-list";
 import {
   CATEGORIES,
   CATEGORY_LABEL,
@@ -43,6 +39,8 @@ import {
   searchConfigurables,
   searchEntities,
 } from "../palette-search";
+import { MissionView } from "./mission-view";
+import { TracksView } from "./tracks-view";
 
 function DimensionGroupRow({
   group,
@@ -56,20 +54,9 @@ function DimensionGroupRow({
   ref?: React.Ref<View>;
 }) {
   const t = useThemeColors();
-  const Icon = DIMENSION_ICON[group.battleDimension ?? group.dimension] ?? FileQuestion;
+  const Icon = DIMENSION_ICON[group.battleDimension ?? group.dimension] ?? UNKNOWN_ICON;
   return (
-    <Pressable
-      ref={ref}
-      onPress={onPress}
-      tabIndex={-1}
-      className={cn(
-        "active:bg-surface-overlay/8 flex-row items-center gap-3 px-4 py-3",
-        isHighlighted ? "bg-surface-overlay/8" : "hover:bg-surface-overlay/5",
-      )}
-    >
-      <View className="bg-surface-overlay/6 size-8 items-center justify-center rounded">
-        <Icon size={16} strokeWidth={2} color={t.iconMuted} />
-      </View>
+    <PaletteRow ref={ref} icon={Icon} highlighted={isHighlighted} onPress={onPress}>
       <View className="flex-1">
         <Text className="font-sans-medium text-foreground text-sm">{group.label}</Text>
       </View>
@@ -77,64 +64,11 @@ function DimensionGroupRow({
         <Text className="text-muted-foreground font-mono text-xs tabular-nums">{group.count}</Text>
         <ChevronRight size={14} strokeWidth={2} color={t.iconMuted} />
       </View>
-    </Pressable>
+    </PaletteRow>
   );
 }
 
-function EntityRow({
-  entity,
-  ranges,
-  isHighlighted,
-  onPress,
-  ref,
-}: {
-  entity: Entity;
-  ranges: number[];
-  isHighlighted: boolean;
-  onPress: () => void;
-  ref?: React.Ref<View>;
-}) {
-  const t = useThemeColors();
-  const configBadge = getConfigStateBadge(entity);
-  const typeLabel = getEntityTypeLabel(entity);
-  const Icon = getEntityIcon(entity);
-  return (
-    <Pressable
-      ref={ref}
-      onPress={onPress}
-      tabIndex={-1}
-      className={cn(
-        "active:bg-surface-overlay/8 flex-row items-center gap-3 px-4 py-3",
-        isHighlighted ? "bg-surface-overlay/8" : "hover:bg-surface-overlay/5",
-      )}
-    >
-      <View className="bg-surface-overlay/6 size-8 items-center justify-center rounded">
-        <Icon size={16} strokeWidth={2} color={t.iconMuted} />
-      </View>
-      <View className="flex-1 gap-1">
-        <HighlightText
-          text={getEntityName(entity)}
-          ranges={ranges}
-          className="font-sans-medium text-foreground text-sm"
-          highlightClassName="text-blue-foreground"
-        />
-        <View className="flex-row items-center gap-2">
-          <Text className="text-muted-foreground font-mono text-xs">{typeLabel}</Text>
-          {entity.controller?.id && (
-            <Text className="text-muted-foreground font-mono text-xs">{entity.controller.id}</Text>
-          )}
-        </View>
-      </View>
-      {configBadge && (
-        <Badge variant={configBadge.variant} size="sm">
-          {configBadge.label}
-        </Badge>
-      )}
-    </Pressable>
-  );
-}
-
-const HOLD_DURATION_S = 2;
+const HOLD_DURATION_MS = 2000;
 
 function HoldToConfirmRow({
   command,
@@ -152,40 +86,48 @@ function HoldToConfirmRow({
   const t = useThemeColors();
   const Icon = command.icon;
 
+  const { progress, remaining, onPressIn, onPressOut } = useHoldToConfirm({
+    onConfirm: () => onExecute(command),
+    duration: HOLD_DURATION_MS,
+    active: isHighlighted,
+  });
+
   return (
-    <HoldToConfirmPressable
+    <Pressable
       ref={ref}
-      isActive={isHighlighted}
-      onConfirm={() => onExecute(command)}
-      duration={HOLD_DURATION_S * 1000}
+      onPressIn={onPressIn}
+      onPressOut={onPressOut}
+      tabIndex={-1}
       testID={`command-${command.id}`}
-      fillColor={t.destructiveRed}
-      fillOpacity={0.45}
+      accessible
+      accessibilityRole="button"
       className={cn(
-        "flex-row items-center gap-3 px-4 py-3",
+        "relative cursor-pointer flex-row items-center gap-3 overflow-hidden px-4 py-3 select-none",
         isHighlighted ? "bg-surface-overlay/8" : "hover:bg-surface-overlay/5",
       )}
     >
-      {({ remaining }) => (
-        <>
-          <View className="bg-surface-overlay/6 size-8 items-center justify-center rounded">
-            <Icon size={16} strokeWidth={2} color={t.iconMuted} />
-          </View>
-          <View className="flex-1">
-            <HighlightText
-              text={command.label}
-              ranges={ranges}
-              className="font-sans-medium text-foreground text-sm"
-              highlightClassName="text-blue-foreground"
-            />
-            {command.description && (
-              <Text className="text-muted-foreground text-11 font-mono">{command.description}</Text>
-            )}
-          </View>
-          <Tag>{remaining !== null ? `${(remaining / 1000).toFixed(1)}s` : "hold"}</Tag>
-        </>
-      )}
-    </HoldToConfirmPressable>
+      <HoldFill
+        progress={progress}
+        holding={remaining !== null}
+        duration={HOLD_DURATION_MS}
+        className="bg-destructive/45"
+      />
+      <View className="bg-surface-overlay/6 size-8 items-center justify-center rounded">
+        <Icon size={16} strokeWidth={2} color={t.iconMuted} />
+      </View>
+      <View className="flex-1">
+        <HighlightText
+          text={command.label}
+          ranges={ranges}
+          className="font-sans-medium text-foreground text-sm"
+          highlightClassName="text-blue-foreground"
+        />
+        {command.description && (
+          <Text className="text-muted-foreground text-11 font-mono">{command.description}</Text>
+        )}
+      </View>
+      <Tag>{remaining !== null ? `${(remaining / 1000).toFixed(1)}s` : "hold"}</Tag>
+    </Pressable>
   );
 }
 
@@ -263,29 +205,20 @@ function ConfigurableRow({
 }) {
   const t = useThemeColors();
   return (
-    <Pressable
-      ref={ref}
-      onPress={onPress}
-      tabIndex={-1}
-      className={cn(
-        "active:bg-surface-overlay/8 flex-row items-center gap-3 px-4 py-3",
-        isHighlighted ? "bg-surface-overlay/8" : "hover:bg-surface-overlay/5",
-      )}
-    >
-      <View className="bg-surface-overlay/6 size-8 items-center justify-center rounded">
-        <Settings size={16} strokeWidth={2} color={t.iconMuted} />
-      </View>
+    <PaletteRow ref={ref} icon={Settings} highlighted={isHighlighted} onPress={onPress}>
       <View className="flex-1 gap-1">
         <HighlightText
-          text={hit.label}
+          text={hit.entityName}
           ranges={ranges}
           className="font-sans-medium text-foreground text-sm"
           highlightClassName="text-blue-foreground"
         />
-        <Text className="text-muted-foreground font-mono text-xs">{hit.entityName}</Text>
+        <Text className="text-muted-foreground font-mono text-xs">
+          {hit.label !== hit.entityName ? hit.label : hit.entityId}
+        </Text>
       </View>
       <ChevronRight size={14} strokeWidth={2} color={t.iconMuted} />
-    </Pressable>
+    </PaletteRow>
   );
 }
 
@@ -304,18 +237,7 @@ function CommandGroupDrilldownRow({
 }) {
   const t = useThemeColors();
   return (
-    <Pressable
-      ref={ref}
-      onPress={onPress}
-      tabIndex={-1}
-      className={cn(
-        "active:bg-surface-overlay/8 flex-row items-center gap-3 px-4 py-3",
-        isHighlighted ? "bg-surface-overlay/8" : "hover:bg-surface-overlay/5",
-      )}
-    >
-      <View className="bg-surface-overlay/6 size-8 items-center justify-center rounded">
-        <Eye size={16} strokeWidth={2} color={t.iconMuted} />
-      </View>
+    <PaletteRow ref={ref} icon={Eye} highlighted={isHighlighted} onPress={onPress}>
       <View className="flex-1">
         <Text className="font-sans-medium text-foreground text-sm">{label}</Text>
       </View>
@@ -323,7 +245,7 @@ function CommandGroupDrilldownRow({
         <Text className="text-muted-foreground font-mono text-xs tabular-nums">{count}</Text>
         <ChevronRight size={14} strokeWidth={2} color={t.iconMuted} />
       </View>
-    </Pressable>
+    </PaletteRow>
   );
 }
 
@@ -359,10 +281,8 @@ export function RootView({
   dispatch: React.Dispatch<PaletteAction>;
   onClose: () => void;
 }) {
-  const entities = useEntityStore((s) => s.entities);
-  const select = useSelectionStore((s) => s.select);
-  const mapEngine = useMapEngine();
-  const { clearParams } = useUrlParams();
+  const entities = useEntityStore(useShallow((s) => Array.from(s.entities.values())));
+  const handleEntitySelect = useSelectEntity(onClose);
   const isSearching = query.trim().length > 0;
 
   const { results: commandResults, total: commandTotal } = searchCommands(commands, query);
@@ -383,6 +303,8 @@ export function RootView({
   };
 
   const showCommands = !isSearching && activeCategory === "commands";
+  const showMission = !isSearching && activeCategory === "mission";
+  const importCommand = commands.find((c) => c.id === MISSION_IMPORT_COMMAND_ID);
   const showAssetGroups = !isSearching && activeCategory === "assets";
   const showTracksList = !isSearching && activeCategory === "tracks";
 
@@ -419,7 +341,7 @@ export function RootView({
         items.push({ type: "command", command: cmd, ranges: [], key: cmd.id });
       }
     }
-  } else {
+  } else if (!showMission && !showTracksList) {
     if (commandResults.length > 0) {
       items.push({ type: "section-header", title: "Commands", key: "hdr-commands" });
       for (const r of commandResults) {
@@ -448,18 +370,6 @@ export function RootView({
           key: `dim-${group.dimension}`,
         });
       }
-    } else if (showTracksList) {
-      for (const r of entityResults) {
-        items.push({ type: "entity", entity: r.item, ranges: r.ranges, key: r.item.id });
-      }
-      if (entityResults.length < entityTotal) {
-        items.push({
-          type: "truncation-hint",
-          shown: entityResults.length,
-          total: entityTotal,
-          key: "truncation-hint",
-        });
-      }
     } else {
       const byType = new Map<string, { entity: Entity; ranges: number[] }[]>();
       for (const r of entityResults) {
@@ -485,22 +395,6 @@ export function RootView({
       }
     }
   }
-
-  const handleEntitySelect = (entity: Entity) => {
-    clearParams(ENTITY_NAV_PARAMS);
-    select(entity.id);
-    if (entity.geo) {
-      const currentZoom = mapEngine.getView()?.zoom ?? 10;
-      mapEngine.flyTo(
-        entity.geo.latitude,
-        entity.geo.longitude,
-        entity.geo.altitude ?? 0,
-        1.5,
-        Math.max(currentZoom, 16),
-      );
-    }
-    onClose();
-  };
 
   const handleActivate = (item: RootItem) => {
     if (item.type === "command") {
@@ -536,9 +430,144 @@ export function RootView({
     onActivate: handleActivate,
     resetKey: `${activeCategory}:${query}`,
     stateKey: "root",
+    enabled: !showMission && !showTracksList,
   });
 
   const selectableCount = items.filter(isItemSelectable).length;
+
+  const renderContent = () => {
+    if (showMission) {
+      return (
+        <MissionView
+          dispatch={dispatch}
+          onImport={importCommand && (() => handleCommandExecute(importCommand))}
+        />
+      );
+    }
+
+    if (showTracksList) return <TracksView query="" onClose={onClose} />;
+
+    if (items.length === 0) {
+      return (
+        <Empty>
+          <EmptyMedia icon={query ? Search : LayoutGrid} />
+          <EmptyTitle>{query ? "No results found" : "No entities found"}</EmptyTitle>
+          {!query && <EmptyDescription>Connect a data source to get started</EmptyDescription>}
+        </Empty>
+      );
+    }
+
+    return (
+      <ScrollShadow size="lg" className="flex-1">
+        <FlashList
+          ref={listRef}
+          data={items}
+          onScroll={handleScroll}
+          keyExtractor={(item: RootItem) => item.key}
+          getItemType={(item: RootItem) => item.type}
+          renderItem={({ item, index }: { item: RootItem; index: number }) => {
+            if (item.type === "truncation-hint") {
+              return <TruncationHint shown={item.shown} total={item.total} />;
+            }
+
+            if (item.type === "section-header") {
+              return (
+                <View className="px-4 pt-4 pb-1.5">
+                  <Text className="text-11 text-on-surface/70 font-mono tracking-widest uppercase">
+                    {item.title}
+                  </Text>
+                </View>
+              );
+            }
+
+            if (item.type === "command") {
+              return (
+                <CommandRow
+                  ref={index === highlightedIndex ? setHighlightedEl : undefined}
+                  command={item.command}
+                  ranges={item.ranges}
+                  isHighlighted={index === highlightedIndex}
+                  onExecute={handleCommandExecute}
+                />
+              );
+            }
+
+            if (item.type === "command-group") {
+              return (
+                <CommandGroupDrilldownRow
+                  ref={index === highlightedIndex ? setHighlightedEl : undefined}
+                  label={item.rowLabel}
+                  count={item.count}
+                  isHighlighted={index === highlightedIndex}
+                  onPress={() =>
+                    dispatch({
+                      type: "push",
+                      mode: {
+                        kind: "command-group",
+                        groupId: item.groupId,
+                        groupLabel: item.groupLabel,
+                      },
+                    })
+                  }
+                />
+              );
+            }
+
+            if (item.type === "configurable") {
+              return (
+                <ConfigurableRow
+                  ref={index === highlightedIndex ? setHighlightedEl : undefined}
+                  hit={item.hit}
+                  ranges={item.ranges}
+                  isHighlighted={index === highlightedIndex}
+                  onPress={() =>
+                    dispatch({
+                      type: "push",
+                      mode: {
+                        kind: "config",
+                        entityId: item.hit.entityId,
+                      },
+                    })
+                  }
+                />
+              );
+            }
+
+            if (item.type === "dimension-group") {
+              return (
+                <DimensionGroupRow
+                  ref={index === highlightedIndex ? setHighlightedEl : undefined}
+                  group={item.group}
+                  isHighlighted={index === highlightedIndex}
+                  onPress={() =>
+                    dispatch({
+                      type: "push",
+                      mode: {
+                        kind: "dimension",
+                        dimension: item.group.dimension,
+                        dimensionLabel: item.group.label,
+                        category: item.category,
+                      },
+                    })
+                  }
+                />
+              );
+            }
+
+            return (
+              <EntityRow
+                ref={index === highlightedIndex ? setHighlightedEl : undefined}
+                entity={item.entity}
+                ranges={item.ranges}
+                isHighlighted={index === highlightedIndex}
+                onPress={() => handleEntitySelect(item.entity)}
+              />
+            );
+          }}
+        />
+      </ScrollShadow>
+    );
+  };
 
   return (
     <>
@@ -548,121 +577,7 @@ export function RootView({
         </Text>
       </View>
 
-      <View className="flex-1">
-        {items.length === 0 ? (
-          <EmptyState
-            icon={query ? Search : LayoutGrid}
-            title={query ? "No results found" : "No entities found"}
-            subtitle={query ? undefined : "Connect a data source to get started"}
-          />
-        ) : (
-          <FlashList
-            ref={listRef}
-            data={items}
-            onScroll={handleScroll}
-            keyExtractor={(item: RootItem) => item.key}
-            renderItem={({ item, index }: { item: RootItem; index: number }) => {
-              if (item.type === "truncation-hint") {
-                return (
-                  <View className="px-4 py-3">
-                    <Text className="text-muted-foreground text-center font-mono text-xs tabular-nums">
-                      Showing {item.shown} of {item.total}
-                    </Text>
-                  </View>
-                );
-              }
-              if (item.type === "section-header") {
-                return (
-                  <View className="px-4 pt-4 pb-1.5">
-                    <Text className="text-11 text-on-surface/70 font-mono tracking-widest uppercase">
-                      {item.title}
-                    </Text>
-                  </View>
-                );
-              }
-              if (item.type === "command") {
-                return (
-                  <CommandRow
-                    ref={index === highlightedIndex ? setHighlightedEl : undefined}
-                    command={item.command}
-                    ranges={item.ranges}
-                    isHighlighted={index === highlightedIndex}
-                    onExecute={handleCommandExecute}
-                  />
-                );
-              }
-              if (item.type === "command-group") {
-                return (
-                  <CommandGroupDrilldownRow
-                    ref={index === highlightedIndex ? setHighlightedEl : undefined}
-                    label={item.rowLabel}
-                    count={item.count}
-                    isHighlighted={index === highlightedIndex}
-                    onPress={() =>
-                      dispatch({
-                        type: "push",
-                        mode: {
-                          kind: "command-group",
-                          groupId: item.groupId,
-                          groupLabel: item.groupLabel,
-                        },
-                      })
-                    }
-                  />
-                );
-              }
-              if (item.type === "configurable") {
-                return (
-                  <ConfigurableRow
-                    ref={index === highlightedIndex ? setHighlightedEl : undefined}
-                    hit={item.hit}
-                    ranges={item.ranges}
-                    isHighlighted={index === highlightedIndex}
-                    onPress={() =>
-                      dispatch({
-                        type: "push",
-                        mode: {
-                          kind: "config",
-                          entityId: item.hit.entityId,
-                        },
-                      })
-                    }
-                  />
-                );
-              }
-              if (item.type === "dimension-group") {
-                return (
-                  <DimensionGroupRow
-                    ref={index === highlightedIndex ? setHighlightedEl : undefined}
-                    group={item.group}
-                    isHighlighted={index === highlightedIndex}
-                    onPress={() =>
-                      dispatch({
-                        type: "push",
-                        mode: {
-                          kind: "dimension",
-                          dimension: item.group.dimension,
-                          dimensionLabel: item.group.label,
-                          category: item.category,
-                        },
-                      })
-                    }
-                  />
-                );
-              }
-              return (
-                <EntityRow
-                  ref={index === highlightedIndex ? setHighlightedEl : undefined}
-                  entity={item.entity}
-                  ranges={item.ranges}
-                  isHighlighted={index === highlightedIndex}
-                  onPress={() => handleEntitySelect(item.entity)}
-                />
-              );
-            }}
-          />
-        )}
-      </View>
+      <View className="flex-1">{renderContent()}</View>
     </>
   );
 }
