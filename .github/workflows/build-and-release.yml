@@ -21,6 +21,8 @@ env:
 
 jobs:
   deeptest:
+    # Internal only: skipped on the public GitHub mirror.
+    if: github.repository != 'projectqai/hydris'
     runs-on: ubuntu-latest
     permissions:
       contents: read
